@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
-    "migrate": "prisma migrate dev"
+    "migrate": "prisma migrate dev",
+    "build": "prisma generate"
   },
   "keywords": [],
   "author": "",
@@ -18,11 +19,11 @@
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "prisma": "^5.22.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14",
-    "prisma": "^5.22.0"
+    "nodemon": "^3.1.14"
   },
   "allowScripts": {
     "prisma@5.22.0": true,
