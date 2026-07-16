@@ -4,11 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "npx prisma db push && node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
     "migrate": "prisma migrate dev",
-    "build": "prisma generate && prisma db push"
+    "build": "prisma generate"
   },
   "keywords": [],
   "author": "",
