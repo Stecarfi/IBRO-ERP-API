@@ -246,6 +246,14 @@ model Chat {
   isSticker   Boolean  @default(false)
   stickerId   String?
   stickerData String?  @db.Text
+  isAudio     Boolean  @default(false)
+  audioData   String?  @db.Text
+  isFile      Boolean  @default(false)
+  fileData    String?  @db.Text
+  fileName    String?
+  fileType    String?
+  isMeeting   Boolean  @default(false)
+  meetingId   String?
 }
 
 // 14. Auditoría Interna

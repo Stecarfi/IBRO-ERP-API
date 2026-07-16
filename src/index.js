@@ -208,11 +208,24 @@ app.post('/api/db/sync', async (req, res) => {
           const existing = await prisma.user.findUnique({ where: { user: item.user } });
           if (existing) {
             delete data.id;
+            if (data.pass) {
+              const isBcrypt = data.pass.startsWith('$2a$') || data.pass.startsWith('$2b$') || data.pass.startsWith('$2y$');
+              if (!isBcrypt) {
+                data.pass = bcrypt.hashSync(data.pass, 10);
+              }
+            }
             await prisma.user.update({
               where: { id: existing.id },
               data
             });
             continue;
+          }
+        }
+
+        if (table === 'user' && data.pass) {
+          const isBcrypt = data.pass.startsWith('$2a$') || data.pass.startsWith('$2b$') || data.pass.startsWith('$2y$');
+          if (!isBcrypt) {
+            data.pass = bcrypt.hashSync(data.pass, 10);
           }
         }
 
