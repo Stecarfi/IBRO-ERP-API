@@ -1,0 +1,301 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. Roles (Se mantiene plano como está actualmente)
+model Role {
+  id                 String   @id
+  name               String
+  modules            String[] // Módulos habilitados
+  canAssignSales     Boolean  @default(false)
+  clientLevel        Int      @default(3)
+  canManageEvals     Boolean  @default(false)
+  viewTechPrice      Boolean  @default(false)
+  viewWholesalePrice Boolean  @default(false)
+  viewCostPrice      Boolean  @default(false)
+}
+
+// 2. Usuarios
+model User {
+  id            String   @id
+  nombre        String
+  apellido      String
+  cedula        String
+  correo        String
+  cargo         String
+  observaciones String?
+  user          String   @unique
+  pass          String
+  roleId        String
+  meta_u        Float    @default(0)
+  ejec_u        Float    @default(0)
+  meta_p        Float    @default(0)
+  ejec_p        Float    @default(0)
+  soundsEnabled Boolean? @default(true)
+  cumpleanos    String?
+  habeasDataAccepted Boolean? @default(false)
+}
+
+// 3. Clientes
+model Cliente {
+  id                 String   @id
+  doc_tipo           String
+  doc                String   @unique
+  nom                String
+  tipo_cliente       String
+  tel                String
+  correo             String
+  direccion          String?
+  owner              String?
+  lockedBy           String?
+  habeasDataAccepted Boolean  @default(false)
+
+  // Relaciones inversas
+  ventas             Venta[]
+  cotizaciones       Cotizacion[]
+  pqrs               PQR[]
+  servicios          Servicio[]
+}
+
+// 4. Inventario (Productos)
+model Inventario {
+  id              String  @id
+  cod             String
+  ref             String
+  nom             String
+  marca           String
+  clasif          String
+  subclasif       String
+  tech            String
+  btu             String
+  volt            String
+  cant            Int
+  pedido          Int
+  precio          Float
+  precio_publico  Float?
+  precio_tecnico  Float?
+  precio_mayorista Float?
+  precio_costo    Float?
+  vendidas        Int     @default(0)
+  lockedBy        String?
+
+  // Relaciones inversas
+  ventas          Venta[]
+  cotizaciones    Cotizacion[]
+}
+
+// 5. Ventas / Facturación
+model Venta {
+  id                String     @id
+  fecha             String
+  fechaIso          String
+  venceGarantiaIso  String
+  mesesGarantia     Int
+  vendedor          String
+  
+  // Relación con Cliente (Normalizado)
+  clienteId         String
+  cliente           Cliente    @relation(fields: [clienteId], references: [id])
+  
+  // Relación con Producto/Inventario (Normalizado)
+  productoId        String
+  producto          Inventario @relation(fields: [productoId], references: [id])
+  
+  cant              Int
+  desc              Float
+  metodoPago        String
+  total             Float
+  comisionistaId    String?
+  comisionistaNombre String?
+  comisionistaPct   Float?
+  comisionistaValor Float?
+  tipo_precio       String?
+  precioUnitario    Float?
+  lockedBy          String?
+  serialEquipo      String?
+}
+
+// 6. PQRS
+model PQR {
+  id         String  @id
+  fecha      String
+  limiteIso  String
+  
+  // Relación con Cliente (Normalizado)
+  clienteId  String
+  cliente    Cliente @relation(fields: [clienteId], references: [id])
+  
+  tipo       String
+  detalle    String
+  evidencia  String?
+  fileData   String? @db.Text
+  estado     String
+  satisfecho String
+  lockedBy   String?
+}
+
+// 7. Servicios Técnicos
+model Servicio {
+  id        String  @id
+  
+  // Relación con Cliente (Normalizado)
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+  
+  fechaProg String
+  tipo      String
+  obs       String
+  estado    String
+  obsAdmin  String?
+  lockedBy  String?
+}
+
+// 8. Solicitudes Laborales (Empleados)
+model Solicitud {
+  id           String  @id
+  fecha        String
+  asesor       String
+  nombreAsesor String
+  tipo         String
+  detalle      String
+  evidencia    String?
+  fileData     String? @db.Text
+  estado       String
+  lockedBy     String?
+}
+
+// 9. Procesos Disciplinarios
+model ProcesoDisciplinario {
+  id               String  @id
+  fecha            String
+  asesor           String
+  jefe             String
+  falta            String
+  obs              String
+  etapa            Int
+  descargo         String?
+  sancion          String?
+  diasSuspension   Int     @default(0)
+  renunciaTerminos Boolean @default(false)
+  timestampEtapa   Float
+  lockedBy         String?
+}
+
+// 10. Evaluaciones de Desempeño
+model Evaluacion {
+  id             String  @id
+  fecha          String
+  evaluador      String
+  evaluado       String
+  evaluadoNombre String
+  tipo           String
+  obs            String?
+  scores         Json    // Guarda el objeto {metas, ppto, atencion, quejas, resp, ventas}
+  lockedBy       String?
+}
+
+// 11. Comunicados Oficiales
+model Anuncio {
+  id       String  @id
+  fecha    String
+  titulo   String
+  mensaje  String
+  lockedBy String?
+}
+
+// 12. Cotizaciones
+model Cotizacion {
+  id                String     @id
+  fecha             String
+  vendedor          String
+  
+  // Relación con Cliente (Normalizado)
+  clienteId         String
+  cliente           Cliente    @relation(fields: [clienteId], references: [id])
+  
+  // Relación con Producto/Inventario (Normalizado)
+  productoId        String
+  producto          Inventario @relation(fields: [productoId], references: [id])
+  
+  cant              Int
+  desc              Float
+  total             Float
+  comisionistaId    String?
+  comisionistaNombre String?
+  comisionistaPct   Float?
+  comisionistaValor Float?
+  lockedBy          String?
+}
+
+// 13. Chat Interno
+model Chat {
+  id          String   @id
+  timestamp   Float
+  fecha       String
+  user        String
+  nombre      String
+  to          String
+  text        String?
+  senderTabId String?
+  isNudge     Boolean  @default(false)
+  isSticker   Boolean  @default(false)
+  stickerId   String?
+  stickerData String?  @db.Text
+}
+
+// 14. Auditoría Interna
+model Auditoria {
+  id            String  @id @default(uuid())
+  user          String
+  fecha         String
+  action        String
+  modulo        String
+  recordDetails String?
+}
+
+// 15. Notificaciones
+model Notificacion {
+  id           String  @id
+  para         String
+  mensaje      String
+  fecha        String
+  leida        Boolean @default(false)
+  targetModule String?
+}
+
+// 16. Comisionistas y Técnicos
+model Comisionista {
+  id             String  @id
+  tipo           String
+  nombre         String
+  cedula         String
+  telefono       String
+  correo         String
+  direccion      String?
+  cliente_remite String?
+  valor_venta    Float?
+  pct_comision   Float?
+  fecha          String?
+  owner          String?
+  lockedBy       String?
+}
+
+// 17. WhatsApp Configuración (Objeto único)
+model WhatsappConfig {
+  id     Int    @id @default(1)
+  phone  String @default("573000000000")
+  status String @default("Activo")
+}
+
+// 18. Restablecimientos de contraseña pendientes
+model PendingReset {
+  id     String @id @default(uuid())
+  user   String
+  token  String
+  expire Float
+}
