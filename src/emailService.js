@@ -49,11 +49,13 @@ async function sendRecoveryEmail(email, name, resetLink) {
     `,
   };
 
+  console.log(`[EMAIL SERVICE] Intentando enviar correo desde "${smtpUser || 'no-reply'}" hacia "${email}"...`);
+
   // Validar si las credenciales de correo están configuradas
   if (smtpUser && smtpPass) {
     const transporter = getTransporter();
     await transporter.sendMail(mailOptions);
-    console.log(`[EMAIL SERVICE] Recovery email sent successfully to ${email}`);
+    console.log(`[EMAIL SERVICE] Correo de recuperación enviado con éxito hacia: ${email}`);
     return { sent: true };
   } else {
     console.log(`[EMAIL SERVICE MOCK] SMTP not configured. Outputting link to logs:\nLink: ${resetLink}`);
