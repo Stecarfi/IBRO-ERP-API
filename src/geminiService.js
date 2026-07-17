@@ -65,7 +65,7 @@ ${salesList || '- No hay ventas recientes.'}
   }
 }
 
-async function askGemini(userPrompt, chatHistory = []) {
+async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '') {
     throw new Error("Clave de API no configurada. Por favor agrega tu GEMINI_API_KEY en el archivo .env del backend.");
@@ -101,7 +101,7 @@ async function askGemini(userPrompt, chatHistory = []) {
   const fullPrompt = `${systemInstruction}\n\n${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
 
   // Lista de modelos a intentar en orden de preferencia
-  const modelsToTry = [
+  const modelsToTry = selectedModel ? [selectedModel] : [
     "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
     "gemini-2.5-flash",

@@ -72,15 +72,37 @@ app.get('/api/gemini/logs', (req, res) => {
   });
 });
 
+// GET /api/gemini/list-models: Listar modelos disponibles con la API Key actual
+app.get('/api/gemini/list-models', async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY || '';
+  if (!apiKey) {
+    return res.json({ success: false, error: 'No hay API Key configurada' });
+  }
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const result = await genAI.listModels();
+    return res.json({
+      success: true,
+      models: result.models || result
+    });
+  } catch (error) {
+    return res.json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // POST /api/gemini/chat: Comunicar con el Asistente Gemini
 app.post('/api/gemini/chat', async (req, res) => {
-  const { prompt, history } = req.body;
+  const { prompt, history, model } = req.body;
   if (!prompt) {
     return res.status(400).json({ error: 'Falta el parámetro "prompt"' });
   }
 
   try {
-    const aiResponse = await askGemini(prompt, history || []);
+    const aiResponse = await askGemini(prompt, history || [], model || null);
     res.json({ response: aiResponse });
   } catch (error) {
     console.error('Gemini chat error:', error.message);
