@@ -102,25 +102,29 @@ async function askGemini(userPrompt, chatHistory = []) {
     "gemini-pro"
   ];
 
+  const apiVersions = ["v1", "v1beta"];
+
   let lastError = null;
-  for (const modelName of modelsToTry) {
-    try {
-      console.log(`[GEMINI] Intentando iniciar chat con el modelo: ${modelName}`);
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        systemInstruction: systemInstruction
-      });
-      const chat = model.startChat({
-        history: formattedHistory,
-      });
-      const result = await chat.sendMessage(fullPrompt);
-      const response = await result.response;
-      return response.text();
-    } catch (err) {
-      console.warn(`[GEMINI] Falló el modelo ${modelName}:`, err.message);
-      lastError = err;
-      if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
-        throw new Error("Clave de API de Gemini inválida. Por favor, verifica tu clave en el panel de Google AI Studio.");
+  for (const apiVersion of apiVersions) {
+    for (const modelName of modelsToTry) {
+      try {
+        console.log(`[GEMINI] Intentando iniciar chat con modelo ${modelName} y versión ${apiVersion}`);
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          systemInstruction: systemInstruction
+        }, { apiVersion: apiVersion });
+        const chat = model.startChat({
+          history: formattedHistory,
+        });
+        const result = await chat.sendMessage(fullPrompt);
+        const response = await result.response;
+        return response.text();
+      } catch (err) {
+        console.warn(`[GEMINI] Falló el modelo ${modelName} con versión ${apiVersion}:`, err.message);
+        lastError = err;
+        if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
+          throw new Error("Clave de API de Gemini inválida. Por favor, verifica tu clave en el panel de Google AI Studio.");
+        }
       }
     }
   }
