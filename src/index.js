@@ -3,7 +3,7 @@ const prisma = new PrismaClient();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
-const { askGemini } = require('./geminiService');
+const { askGemini, geminiLogs } = require('./geminiService');
 const { sendRecoveryEmail, verifySmtpConnection } = require('./emailService');
 
 const app = express();
@@ -62,6 +62,13 @@ app.get('/api/gemini/test-key', (req, res) => {
     prefix: key.substring(0, 6) + '...',
     suffix: '...' + key.substring(key.length - 4),
     message: 'Compara este prefijo y sufijo con tu clave copiada de Google AI Studio para verificar si Render ya aplicó los cambios.'
+  });
+});
+
+// GET /api/gemini/logs: Obtener la bitácora de ejecución de consultas de Gemini
+app.get('/api/gemini/logs', (req, res) => {
+  return res.json({
+    logs: geminiLogs || []
   });
 });
 

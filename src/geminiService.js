@@ -2,6 +2,13 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+const geminiLogs = [];
+function addLog(msg) {
+  geminiLogs.push(`[${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}] ${msg}`);
+  if (geminiLogs.length > 50) geminiLogs.shift();
+  console.log(msg);
+}
+
 const systemInstruction = `
 Eres G-IBRO-AI, el asistente inteligente oficial de la plataforma G-IBRO S.A.S. (empresa de soluciones de climatización, aire acondicionado y sistemas HVAC en Cartagena, Colombia, fundada en 2003, con más de 73,000 unidades vendidas).
 Tu objetivo es ayudar al equipo de dirección y empleados de la empresa a resolver dudas, analizar el estado del ERP, redactar correos para respuestas de PQRs (quejas de clientes), redactar propuestas comerciales de cotizaciones e informar sobre indicadores de ventas y stock.
@@ -63,7 +70,7 @@ async function askGemini(userPrompt, chatHistory = []) {
   if (!apiKey || apiKey.trim() === '') {
     throw new Error("Clave de API no configurada. Por favor agrega tu GEMINI_API_KEY en el archivo .env del backend.");
   }
-  console.log(`[GEMINI DEBUG] Usando API KEY activa. Prefijo: ${apiKey.substring(0, 6)}... Sufijo: ${apiKey.substring(apiKey.length - 4)}`);
+  addLog(`[GEMINI DEBUG] Usando API KEY activa. Prefijo: ${apiKey.substring(0, 6)}... Sufijo: ${apiKey.substring(apiKey.length - 4)}`);
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const context = await getCompanyContext();
@@ -108,7 +115,7 @@ async function askGemini(userPrompt, chatHistory = []) {
   for (const apiVersion of apiVersions) {
     for (const modelName of modelsToTry) {
       try {
-        console.log(`[GEMINI] Intentando iniciar chat con modelo ${modelName} y versión ${apiVersion}`);
+        addLog(`[GEMINI] Intentando iniciar chat con modelo ${modelName} y versión ${apiVersion}`);
         const model = genAI.getGenerativeModel({
           model: modelName,
           systemInstruction: systemInstruction
@@ -118,9 +125,10 @@ async function askGemini(userPrompt, chatHistory = []) {
         });
         const result = await chat.sendMessage(fullPrompt);
         const response = await result.response;
+        addLog(`[GEMINI SUCCESS] ¡Conectado con éxito al modelo ${modelName} con versión ${apiVersion}!`);
         return response.text();
       } catch (err) {
-        console.warn(`[GEMINI] Falló el modelo ${modelName} con versión ${apiVersion}:`, err.message);
+        addLog(`[GEMINI ERROR] Falló el modelo ${modelName} con versión ${apiVersion}: ${err.message}`);
         lastError = err;
         if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
           throw new Error("Clave de API de Gemini inválida. Por favor, verifica tu clave en el panel de Google AI Studio.");
@@ -133,5 +141,6 @@ async function askGemini(userPrompt, chatHistory = []) {
 }
 
 module.exports = {
-  askGemini
+  askGemini,
+  geminiLogs
 };
