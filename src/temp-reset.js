@@ -14,7 +14,8 @@ async function main() {
       } 
     },
     data: { 
-      pass: hashedPassword 
+      pass: hashedPassword,
+      correo: 'djuridica@obelixsa.com'
     }
   });
   
