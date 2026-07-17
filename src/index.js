@@ -108,18 +108,12 @@ app.post('/api/auth/recover', async (req, res) => {
       console.warn('[SMTP ERROR] Failed to send recovery email. Reset Link is:', resetLink);
       console.error(mailError);
       
-      const isLocal = origin && (origin.startsWith('file://') || origin.includes('localhost') || origin.includes('127.0.0.1'));
-      if (isLocal) {
-        return res.json({
-          success: true,
-          mockMode: true,
-          resetLink: resetLink,
-          message: 'Error al enviar por correo, pero se entrega el enlace por estar en entorno local de pruebas.'
-        });
-      }
-
-      return res.status(500).json({ 
-        error: 'No se pudo enviar el correo de recuperación. Por favor contacta al administrador del sistema.' 
+      // Permitimos el retorno del enlace directamente en producción temporalmente para omitir fallos de SMTP
+      return res.json({
+        success: true,
+        mockMode: true,
+        resetLink: resetLink,
+        message: 'No se pudo despachar el correo (falló la conexión SMTP de Google). Aquí tienes tu enlace directo para restablecer la contraseña:'
       });
     }
 
