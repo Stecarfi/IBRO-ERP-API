@@ -98,7 +98,10 @@ app.post('/api/auth/recover', async (req, res) => {
       }
     });
 
-    const appOrigin = origin || 'http://localhost:3000';
+    let appOrigin = 'https://g-ibro.onrender.com';
+    if (origin && origin.startsWith('http') && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+      appOrigin = origin.split('?')[0];
+    }
     const resetLink = `${appOrigin}?resetUser=${encodeURIComponent(dbUser.user)}&resetToken=${verificationCode}`;
 
     let mailRes;
