@@ -3,6 +3,8 @@ const prisma = new PrismaClient();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
+const { askGemini } = require('./geminiService');
+const { sendRecoveryEmail } = require('./emailService');
 
 const app = express();
 app.use(cors());
@@ -18,7 +20,9 @@ app.get('/api/status', (req, res) => {
 // POST /api/login: Autenticación de usuario con bcrypt
 app.post('/api/login', async (req, res) => {
   const { user, pass } = req.body;
+  console.log(`[LOGIN ATTEMPT] User: "${user}"`);
   if (!user || !pass) {
+    console.log(`[LOGIN FAILED] Missing user or pass`);
     return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
   }
 
@@ -27,7 +31,15 @@ app.post('/api/login', async (req, res) => {
       where: { user: { equals: user, mode: 'insensitive' } }
     });
 
-    if (dbUser && bcrypt.compareSync(pass, dbUser.pass)) {
+    if (!dbUser) {
+      console.log(`[LOGIN FAILED] User "${user}" not found in database`);
+      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    }
+
+    const matches = bcrypt.compareSync(pass, dbUser.pass);
+    console.log(`[LOGIN COMPARE] User found: "${dbUser.user}". Password matches: ${matches}`);
+
+    if (matches) {
       return res.json({ success: true, user: dbUser });
     } else {
       return res.status(401).json({ error: 'Credenciales incorrectas' });
@@ -35,6 +47,137 @@ app.post('/api/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Error interno en el servidor de autenticación' });
+  }
+});
+
+// POST /api/gemini/chat: Comunicar con el Asistente Gemini
+app.post('/api/gemini/chat', async (req, res) => {
+  const { prompt, history } = req.body;
+  if (!prompt) {
+    return res.status(400).json({ error: 'Falta el parámetro "prompt"' });
+  }
+
+  try {
+    const aiResponse = await askGemini(prompt, history || []);
+    res.json({ response: aiResponse });
+  } catch (error) {
+    console.error('Gemini chat error:', error.message);
+    res.status(500).json({ error: error.message || 'Error interno al procesar con Gemini' });
+  }
+});
+
+// POST /api/auth/recover: Iniciar flujo de recuperación de contraseña enviando correo
+app.post('/api/auth/recover', async (req, res) => {
+  const { user, origin } = req.body;
+  if (!user) {
+    return res.status(400).json({ error: 'Usuario requerido' });
+  }
+
+  try {
+    const dbUser = await prisma.user.findFirst({
+      where: { user: { equals: user, mode: 'insensitive' } }
+    });
+
+    if (!dbUser) {
+      return res.status(404).json({ error: 'El usuario no existe en la base de datos.' });
+    }
+
+    if (!dbUser.correo) {
+      return res.status(400).json({ error: 'El usuario existe, pero no tiene registrado un correo electrónico asociado.' });
+    }
+
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expireTime = Date.now() + 3600000; // 1 hora
+
+    // Guardar token en base de datos
+    await prisma.pendingReset.create({
+      data: {
+        user: dbUser.user,
+        token: verificationCode,
+        expire: expireTime
+      }
+    });
+
+    const appOrigin = origin || 'http://localhost:3000';
+    const resetLink = `${appOrigin}?resetUser=${encodeURIComponent(dbUser.user)}&resetToken=${verificationCode}`;
+
+    const mailRes = await sendRecoveryEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido}`, resetLink);
+
+    if (mailRes.mockMode) {
+      return res.json({
+        success: true,
+        mockMode: true,
+        resetLink: resetLink,
+        message: 'Modo de prueba: enlace generado localmente.'
+      });
+    }
+
+    res.json({ success: true, message: 'Correo de recuperación enviado con éxito.' });
+  } catch (error) {
+    console.error('Recovery request error:', error);
+    res.status(500).json({ error: 'Error al procesar la recuperación de contraseña: ' + error.message });
+  }
+});
+
+// POST /api/auth/reset-password: Validar token y cambiar contraseña
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { user, token, newPassword } = req.body;
+  if (!user || !token || !newPassword) {
+    return res.status(400).json({ error: 'Todos los campos son requeridos' });
+  }
+
+  try {
+    const pending = await prisma.pendingReset.findFirst({
+      where: {
+        user: { equals: user, mode: 'insensitive' },
+        token: token
+      }
+    });
+
+    if (!pending) {
+      return res.status(400).json({ error: 'El código de seguridad o usuario es incorrecto.' });
+    }
+
+    if (pending.expire < Date.now()) {
+      await prisma.pendingReset.delete({ where: { id: pending.id } });
+      return res.status(400).json({ error: 'El código de seguridad ha expirado.' });
+    }
+
+    // Buscar al usuario
+    const dbUser = await prisma.user.findFirst({
+      where: { user: { equals: user, mode: 'insensitive' } }
+    });
+
+    if (!dbUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
+
+    // Actualizar contraseña encriptándola
+    const hashedPassword = bcrypt.hashSync(newPassword, 10);
+    await prisma.user.update({
+      where: { id: dbUser.id },
+      data: { pass: hashedPassword }
+    });
+
+    // Registrar en auditoría
+    await prisma.auditoria.create({
+      data: {
+        id: Date.now().toString() + Math.random().toString().slice(-4),
+        user: dbUser.user,
+        fecha: new Date().toLocaleString('es-ES'),
+        action: 'Modificar',
+        modulo: 'Usuario',
+        recordDetails: `Cambio de contraseña para usuario [${dbUser.user}] mediante enlace de correo`
+      }
+    });
+
+    // Eliminar el token usado
+    await prisma.pendingReset.delete({ where: { id: pending.id } });
+
+    res.json({ success: true, message: 'Contraseña restablecida con éxito.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Error al restablecer la contraseña: ' + error.message });
   }
 });
 

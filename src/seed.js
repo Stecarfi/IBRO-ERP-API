@@ -6,7 +6,7 @@ const sysModules = [
   'dashboard', 'chat', 'whatsapp_comercial', 'clientes', 'cotizaciones', 'ventas',
   'inventario', 'servicios', 'pqrs', 'registro_ventas', 'comisionistas', 'solicitudes',
   'evaluacion_desempeno', 'disciplinario', 'informe_ventas', 'comunicados', 'admin',
-  'auditoria', 'perfil'
+  'auditoria', 'perfil', 'gemini_assistant'
 ];
 
 async function main() {
