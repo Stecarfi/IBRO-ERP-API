@@ -101,7 +101,27 @@ app.post('/api/auth/recover', async (req, res) => {
     const appOrigin = origin || 'http://localhost:3000';
     const resetLink = `${appOrigin}?resetUser=${encodeURIComponent(dbUser.user)}&resetToken=${verificationCode}`;
 
-    const mailRes = await sendRecoveryEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido}`, resetLink);
+    let mailRes;
+    try {
+      mailRes = await sendRecoveryEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido}`, resetLink);
+    } catch (mailError) {
+      console.warn('[SMTP ERROR] Failed to send recovery email. Reset Link is:', resetLink);
+      console.error(mailError);
+      
+      const isLocal = origin && (origin.startsWith('file://') || origin.includes('localhost') || origin.includes('127.0.0.1'));
+      if (isLocal) {
+        return res.json({
+          success: true,
+          mockMode: true,
+          resetLink: resetLink,
+          message: 'Error al enviar por correo, pero se entrega el enlace por estar en entorno local de pruebas.'
+        });
+      }
+
+      return res.status(500).json({ 
+        error: 'No se pudo enviar el correo de recuperación. Por favor contacta al administrador del sistema.' 
+      });
+    }
 
     if (mailRes.mockMode) {
       return res.json({
