@@ -8,7 +8,10 @@ async function main() {
   
   const result = await prisma.user.updateMany({
     where: { 
-      user: { equals: 'Stecrafi05', mode: 'insensitive' } 
+      user: { 
+        in: ['Stecrafi05', 'Stecarfi05', 'stecarfi05', 'stecrafi05'],
+        mode: 'insensitive'
+      } 
     },
     data: { 
       pass: hashedPassword 
