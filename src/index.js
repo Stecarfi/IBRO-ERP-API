@@ -50,6 +50,21 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// GET /api/gemini/test-key: Diagnosticar la clave de API activa
+app.get('/api/gemini/test-key', (req, res) => {
+  const key = process.env.GEMINI_API_KEY || '';
+  if (!key) {
+    return res.json({ hasKey: false, message: 'No hay ninguna clave configurada en process.env.GEMINI_API_KEY' });
+  }
+  return res.json({
+    hasKey: true,
+    length: key.length,
+    prefix: key.substring(0, 6) + '...',
+    suffix: '...' + key.substring(key.length - 4),
+    message: 'Compara este prefijo y sufijo con tu clave copiada de Google AI Studio para verificar si Render ya aplicó los cambios.'
+  });
+});
+
 // POST /api/gemini/chat: Comunicar con el Asistente Gemini
 app.post('/api/gemini/chat', async (req, res) => {
   const { prompt, history } = req.body;
