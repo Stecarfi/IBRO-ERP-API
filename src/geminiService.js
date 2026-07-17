@@ -65,11 +65,6 @@ async function askGemini(userPrompt, chatHistory = []) {
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    systemInstruction: systemInstruction
-  });
-
   const context = await getCompanyContext();
   
   // Mapear y sanitizar el historial al formato compatible con el SDK de Gemini
@@ -94,17 +89,42 @@ async function askGemini(userPrompt, chatHistory = []) {
   }
   formattedHistory = cleanHistory;
 
-  // Crear la sesión de chat con el historial previo sanitizado
-  const chat = model.startChat({
-    history: formattedHistory,
-  });
-
   // Enviar el prompt inyectando el contexto de la base de datos en tiempo real al mensaje final del usuario
   const fullPrompt = `${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
 
-  const result = await chat.sendMessage(fullPrompt);
-  const response = await result.response;
-  return response.text();
+  // Lista de modelos a intentar en orden de preferencia
+  const modelsToTry = [
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro",
+    "gemini-pro"
+  ];
+
+  let lastError = null;
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`[GEMINI] Intentando iniciar chat con el modelo: ${modelName}`);
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction: systemInstruction
+      });
+      const chat = model.startChat({
+        history: formattedHistory,
+      });
+      const result = await chat.sendMessage(fullPrompt);
+      const response = await result.response;
+      return response.text();
+    } catch (err) {
+      console.warn(`[GEMINI] Falló el modelo ${modelName}:`, err.message);
+      lastError = err;
+      if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
+        throw new Error("Clave de API de Gemini inválida. Por favor, verifica tu clave en el panel de Google AI Studio.");
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 module.exports = {
