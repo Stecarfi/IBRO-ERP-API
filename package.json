@@ -7,7 +7,7 @@
     "start": "npx prisma generate && npx prisma db push && node src/temp-reset.js && node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
-    "migrate": "prisma migrate dev",
+    "migrate": "npx prisma generate && npx prisma db push",
     "build": "prisma generate"
   },
   "keywords": [],
