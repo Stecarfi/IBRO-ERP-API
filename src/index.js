@@ -1,6 +1,8 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const { askGemini, geminiLogs } = require('./geminiService');
@@ -699,6 +701,7 @@ app.post('/api/db/sync', async (req, res) => {
       });
     }
 
+    broadcastUpdate();
     res.json({ success: true });
   } catch (error) {
     console.error('Error syncing database:', error);
@@ -707,7 +710,36 @@ app.post('/api/db/sync', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+const clients = new Set();
+
+wss.on('connection', (ws) => {
+  clients.add(ws);
+  console.log(`[WS] Client connected. Total: ${clients.size}`);
+  
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log(`[WS] Client disconnected. Total: ${clients.size}`);
+  });
+});
+
+function broadcastUpdate() {
+  const msg = JSON.stringify({ type: 'DB_UPDATE', timestamp: Date.now() });
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      
+      try {
+        client.send(msg);
+      } catch (err) {
+        console.error('Error sending WS message:', err);
+      }
+    }
+  }
+}
+
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   verifySmtpConnection();
 });
