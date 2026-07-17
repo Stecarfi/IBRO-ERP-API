@@ -230,6 +230,19 @@ model Cotizacion {
   comisionistaPct   Float?
   comisionistaValor Float?
   lockedBy          String?
+
+  // Nuevos campos para soporte de múltiples ítems y propuesta
+  contacto          String?
+  condiciones       String?
+  tiempoEntrega     String?
+  garantia          String?
+  observacion       String?
+  vigencia          Int?       @default(10)
+  ivaTipo           String?    @default("exento")
+  equipos           String?    // JSON stringified array of equipments
+  materiales        String?    // JSON stringified array of materials
+  tipo_precio        String?
+  precioUnitario     Float?
 }
 
 // 13. Chat Interno

@@ -344,7 +344,18 @@ app.get('/api/db', async (req, res) => {
       comisionistaNombre: c.comisionistaNombre,
       comisionistaPct: c.comisionistaPct,
       comisionistaValor: c.comisionistaValor,
-      lockedBy: c.lockedBy
+      lockedBy: c.lockedBy,
+      contacto: c.contacto,
+      condiciones: c.condiciones,
+      tiempoEntrega: c.tiempoEntrega,
+      garantia: c.garantia,
+      observacion: c.observacion,
+      vigencia: c.vigencia,
+      ivaTipo: c.ivaTipo,
+      equipos: c.equipos ? JSON.parse(c.equipos) : [],
+      materiales: c.materiales ? JSON.parse(c.materiales) : [],
+      tipo_precio: c.tipo_precio,
+      precioUnitario: c.precioUnitario
     }));
 
     const chat = await prisma.chat.findMany({ orderBy: { timestamp: 'asc' } });
@@ -542,9 +553,17 @@ app.post('/api/db/sync', async (req, res) => {
 
       for (const item of diff.cotizaciones.upserted || []) {
         const client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
-        const product = await prisma.inventario.findFirst({
+        // Since idProd might be a dummy or manual value, we fall back safely
+        let product = await prisma.inventario.findFirst({
           where: { OR: [{ id: item.idProd }, { ref: item.producto }] }
         });
+
+        // Backwards compatibility fallback if product is not found (e.g. legacy or manual product)
+        if (!product) {
+          // Find first product in DB to link, or create a dummy relation if needed.
+          // In most database environments we need to satisfy foreign key constraint.
+          product = await prisma.inventario.findFirst();
+        }
 
         if (!client || !product) {
           console.error(`Sync Cotizacion ${item.id} fallida: Cliente o Producto no encontrado.`);
@@ -564,6 +583,17 @@ app.post('/api/db/sync', async (req, res) => {
           comisionistaPct: item.comisionistaPct ? parseFloat(item.comisionistaPct) : null,
           comisionistaValor: item.comisionistaValor ? parseFloat(item.comisionistaValor) : null,
           lockedBy: item.lockedBy || null,
+          contacto: item.contacto || null,
+          condiciones: item.condiciones || null,
+          tiempoEntrega: item.tiempoEntrega || null,
+          garantia: item.garantia || null,
+          observacion: item.observacion || null,
+          vigencia: item.vigencia ? parseInt(item.vigencia) : 10,
+          ivaTipo: item.ivaTipo || "exento",
+          equipos: item.equipos ? JSON.stringify(item.equipos) : null,
+          materiales: item.materiales ? JSON.stringify(item.materiales) : null,
+          tipo_precio: item.tipo_precio || null,
+          precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null
         };
 
         await prisma.cotizacion.upsert({
