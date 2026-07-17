@@ -63,6 +63,26 @@ async function sendRecoveryEmail(email, name, resetLink) {
   }
 }
 
+async function verifySmtpConnection() {
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+
+  if (!smtpUser || !smtpPass) {
+    console.warn('[SMTP TEST] SMTP credentials not set in .env. Email service will run in MOCK mode.');
+    return;
+  }
+
+  console.log(`[SMTP TEST] Verificando conexión SMTP para ${smtpUser}...`);
+  const transporter = getTransporter();
+  try {
+    await transporter.verify();
+    console.log('[SMTP TEST SUCCESS] Conexión SMTP establecida correctamente.');
+  } catch (error) {
+    console.error('[SMTP TEST ERROR] Falló la conexión SMTP en el arranque:', error.message);
+  }
+}
+
 module.exports = {
-  sendRecoveryEmail
+  sendRecoveryEmail,
+  verifySmtpConnection
 };

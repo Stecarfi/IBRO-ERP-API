@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const { askGemini } = require('./geminiService');
-const { sendRecoveryEmail } = require('./emailService');
+const { sendRecoveryEmail, verifySmtpConnection } = require('./emailService');
 
 const app = express();
 app.use(cors());
@@ -665,4 +665,5 @@ app.post('/api/db/sync', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  verifySmtpConnection();
 });
