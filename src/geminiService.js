@@ -72,14 +72,29 @@ async function askGemini(userPrompt, chatHistory = []) {
 
   const context = await getCompanyContext();
   
-  // Mapear el historial al formato compatible con el SDK de Gemini
-  // [{ role: 'user' | 'model', parts: [{ text: '...' }] }]
-  const formattedHistory = chatHistory.map(msg => ({
+  // Mapear y sanitizar el historial al formato compatible con el SDK de Gemini
+  let formattedHistory = (chatHistory || []).map(msg => ({
     role: msg.role === 'user' ? 'user' : 'model',
-    parts: [{ text: msg.parts[0].text }]
+    parts: [{ text: (msg.parts && msg.parts[0] && msg.parts[0].text) ? msg.parts[0].text : '' }]
   }));
 
-  // Crear la sesión de chat con el historial previo
+  // Regla 1: Debe iniciar con un mensaje de rol 'user'
+  while (formattedHistory.length > 0 && formattedHistory[0].role !== 'user') {
+    formattedHistory.shift();
+  }
+
+  // Regla 2: Debe alternar estrictamente de forma secuencial: user -> model -> user -> model...
+  const cleanHistory = [];
+  let expectedRole = 'user';
+  for (const msg of formattedHistory) {
+    if (msg.role === expectedRole) {
+      cleanHistory.push(msg);
+      expectedRole = expectedRole === 'user' ? 'model' : 'user';
+    }
+  }
+  formattedHistory = cleanHistory;
+
+  // Crear la sesión de chat con el historial previo sanitizado
   const chat = model.startChat({
     history: formattedHistory,
   });
