@@ -63,6 +63,7 @@ async function askGemini(userPrompt, chatHistory = []) {
   if (!apiKey || apiKey.trim() === '') {
     throw new Error("Clave de API no configurada. Por favor agrega tu GEMINI_API_KEY en el archivo .env del backend.");
   }
+  console.log(`[GEMINI DEBUG] Usando API KEY activa. Prefijo: ${apiKey.substring(0, 6)}... Sufijo: ${apiKey.substring(apiKey.length - 4)}`);
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const context = await getCompanyContext();
