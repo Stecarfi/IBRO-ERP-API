@@ -97,8 +97,8 @@ async function askGemini(userPrompt, chatHistory = []) {
   }
   formattedHistory = cleanHistory;
 
-  // Enviar el prompt inyectando el contexto de la base de datos en tiempo real al mensaje final del usuario
-  const fullPrompt = `${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
+  // Enviar el prompt inyectando las instrucciones del sistema y el contexto de la base de datos en tiempo real al mensaje final del usuario
+  const fullPrompt = `${systemInstruction}\n\n${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
 
   // Lista de modelos a intentar en orden de preferencia
   const modelsToTry = [
@@ -117,8 +117,7 @@ async function askGemini(userPrompt, chatHistory = []) {
       try {
         addLog(`[GEMINI] Intentando iniciar chat con modelo ${modelName} y versión ${apiVersion}`);
         const model = genAI.getGenerativeModel({
-          model: modelName,
-          systemInstruction: systemInstruction
+          model: modelName
         }, { apiVersion: apiVersion });
         const chat = model.startChat({
           history: formattedHistory,
