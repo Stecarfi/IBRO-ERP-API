@@ -102,6 +102,7 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
 
   // Lista de modelos a intentar en orden de preferencia
   const modelsToTry = selectedModel ? [selectedModel] : [
+    "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
     "gemini-2.5-flash",
