@@ -28,6 +28,7 @@ model User {
   cedula        String
   correo        String
   cargo         String
+  telefono      String?
   observaciones String?
   user          String   @unique
   pass          String
