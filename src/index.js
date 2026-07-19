@@ -8,11 +8,15 @@ const bcrypt = require('bcryptjs');
 const { askGemini, geminiLogs } = require('./geminiService');
 const { sendRecoveryEmail, verifySmtpConnection } = require('./emailService');
 
+const path = require('path');
 const app = express();
 app.use(cors());
 // Incrementar límite de tamaño para soportar imágenes en Base64 en solicitudes/PQRS
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Servir archivos estáticos del frontend
+app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP')));
 
 // Endpoint de prueba de estado
 app.get('/api/status', (req, res) => {
