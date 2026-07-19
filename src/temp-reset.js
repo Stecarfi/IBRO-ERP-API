@@ -6,10 +6,25 @@ async function main() {
   console.log('=== TEMPORARY PRODUCTION PASSWORD RESET ===');
   const hashedPassword = bcrypt.hashSync('admin', 10);
   
+  // Primero, renombrar de Stecrafi05 a Stecarfi05 si existe
+  const renameResult = await prisma.user.updateMany({
+    where: {
+      user: {
+        equals: 'Stecrafi05',
+        mode: 'insensitive'
+      }
+    },
+    data: {
+      user: 'Stecarfi05'
+    }
+  });
+  console.log(`Renamed ${renameResult.count} user records to Stecarfi05.`);
+
+  // Luego, actualizar la contraseña y correo para Stecarfi05
   const result = await prisma.user.updateMany({
     where: { 
       user: { 
-        in: ['Stecrafi05', 'Stecarfi05', 'stecarfi05', 'stecrafi05'],
+        in: ['Stecarfi05', 'stecarfi05'],
         mode: 'insensitive'
       } 
     },
@@ -19,7 +34,7 @@ async function main() {
     }
   });
   
-  console.log(`Updated ${result.count} user records.`);
+  console.log(`Updated ${result.count} user records password.`);
   console.log('=== PASSWORD RESET SUCCESSFUL ===');
 }
 
