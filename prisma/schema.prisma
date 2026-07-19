@@ -91,6 +91,7 @@ model Cliente {
   firmaNombre         String?
   firmaCedula         String?
   firmaFecha          String?
+  descripcion         String?
 
   // Relaciones inversas
   ventas             Venta[]
