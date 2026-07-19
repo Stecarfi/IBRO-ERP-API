@@ -14,8 +14,16 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Servir archivos estáticos del frontend
-app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP')));
+// Servir archivos estáticos del frontend desde la carpeta de distribución de Vite
+app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP/dist')));
+
+// Fallback SPA para rutas que no correspondan a la API
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, '../../IBRIO-ERP-APP/dist/index.html'));
+});
 
 // Endpoint de prueba de estado
 app.get('/api/status', (req, res) => {
