@@ -55,6 +55,43 @@ model Cliente {
   lockedBy           String?
   habeasDataAccepted Boolean  @default(false)
 
+  // Campos del formato vinculación Clientes
+  numVinculacion      String?
+  fechaVinculacion    String?
+  motivoEncuesta      String?
+  transfA             String?
+  asesorCodigo        String?
+  asesorNombre        String?
+  codigoCliente       String?
+  personaTipo         String?
+  digitoVerificacion  String?
+  sociedadTipo        String?
+  barrio              String?
+  ciudad              String?
+  departamento        String?
+  establecimientoNombre String?
+  correoFacturacion   String?
+  contactoComercial   String?
+  cargoContacto       String?
+  correoComercial     String?
+  celularContacto     String?
+  condicionesPago     String?
+  condicionesPagoDias Int?
+  documentosEntregados String?
+  ameritaSeguimiento  Boolean?
+  formaPago           String?
+  formaPagoContado    String?
+  formaPagoContadoCual String?
+  formaContacto       String?
+  formaContactoOtra   String?
+  transaccionDetalles String?
+  asesorTransaccion   String?
+  porcentajeAutorizado Float?
+  observacionesTransaccion String?
+  firmaNombre         String?
+  firmaCedula         String?
+  firmaFecha          String?
+
   // Relaciones inversas
   ventas             Venta[]
   cotizaciones       Cotizacion[]
