@@ -334,6 +334,7 @@ app.get('/api/db', async (req, res) => {
     });
     const cotizaciones = cotizacionesRaw.map(c => ({
       id: c.id,
+      numCotizacion: c.numCotizacion,
       fecha: c.fecha,
       vendedor: c.vendedor,
       docCli: c.cliente.doc,
@@ -574,6 +575,7 @@ app.post('/api/db/sync', async (req, res) => {
         }
 
         const data = {
+          numCotizacion: item.numCotizacion || null,
           fecha: item.fecha,
           vendedor: item.vendedor,
           clienteId: client.id,

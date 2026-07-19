@@ -249,6 +249,7 @@ model Anuncio {
 // 12. Cotizaciones
 model Cotizacion {
   id                String     @id
+  numCotizacion     String?
   fecha             String
   vendedor          String
   
