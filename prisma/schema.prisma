@@ -274,6 +274,7 @@ model Cotizacion {
   contacto          String?
   condiciones       String?
   tiempoEntrega     String?
+  direccionEntrega  String?
   garantia          String?
   observacion       String?
   vigencia          Int?       @default(10)
