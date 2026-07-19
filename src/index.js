@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('./prisma');
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
