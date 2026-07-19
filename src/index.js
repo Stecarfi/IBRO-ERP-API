@@ -369,7 +369,8 @@ app.get('/api/db', async (req, res) => {
       precioUnitario: c.precioUnitario,
       fechaSeguimiento: c.fechaSeguimiento,
       estadoSeguimiento: c.estadoSeguimiento,
-      motivoSeguimiento: c.motivoSeguimiento
+      motivoSeguimiento: c.motivoSeguimiento,
+      motivoNoCompra: c.motivoNoCompra
     }));
 
     const chat = await prisma.chat.findMany({ orderBy: { timestamp: 'asc' } });
@@ -618,7 +619,8 @@ app.post('/api/db/sync', async (req, res) => {
           precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           fechaSeguimiento: item.fechaSeguimiento || null,
           estadoSeguimiento: item.estadoSeguimiento || null,
-          motivoSeguimiento: item.motivoSeguimiento || null
+          motivoSeguimiento: item.motivoSeguimiento || null,
+          motivoNoCompra: item.motivoNoCompra || null
         };
 
         await prisma.cotizacion.upsert({
