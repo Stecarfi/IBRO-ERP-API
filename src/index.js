@@ -18,11 +18,17 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP/dist')));
 
 // Fallback SPA para rutas que no correspondan a la API
+const fs = require('fs');
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
     return next();
   }
-  res.sendFile(path.join(__dirname, '../../IBRIO-ERP-APP/dist/index.html'));
+  const indexPath = path.join(__dirname, '../../IBRIO-ERP-APP/dist/index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.send('G-IBRO API is running.');
+  }
 });
 
 // Endpoint de prueba de estado
