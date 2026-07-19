@@ -19,7 +19,7 @@ app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP/dist')));
 
 // Fallback SPA para rutas que no correspondan a la API
 const fs = require('fs');
-app.get('*', (req, res, next) => {
+app.get('*any', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
     return next();
   }
