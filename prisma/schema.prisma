@@ -290,6 +290,9 @@ model Cotizacion {
   materiales        String?    // JSON stringified array of materials
   tipo_precio        String?
   precioUnitario     Float?
+  fechaSeguimiento   String?
+  estadoSeguimiento  String?
+  motivoSeguimiento  String?
 }
 
 // 13. Chat Interno

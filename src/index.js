@@ -366,7 +366,10 @@ app.get('/api/db', async (req, res) => {
       equipos: c.equipos ? JSON.parse(c.equipos) : [],
       materiales: c.materiales ? JSON.parse(c.materiales) : [],
       tipo_precio: c.tipo_precio,
-      precioUnitario: c.precioUnitario
+      precioUnitario: c.precioUnitario,
+      fechaSeguimiento: c.fechaSeguimiento,
+      estadoSeguimiento: c.estadoSeguimiento,
+      motivoSeguimiento: c.motivoSeguimiento
     }));
 
     const chat = await prisma.chat.findMany({ orderBy: { timestamp: 'asc' } });
@@ -612,7 +615,10 @@ app.post('/api/db/sync', async (req, res) => {
           equipos: item.equipos ? JSON.stringify(item.equipos) : null,
           materiales: item.materiales ? JSON.stringify(item.materiales) : null,
           tipo_precio: item.tipo_precio || null,
-          precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null
+          precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
+          fechaSeguimiento: item.fechaSeguimiento || null,
+          estadoSeguimiento: item.estadoSeguimiento || null,
+          motivoSeguimiento: item.motivoSeguimiento || null
         };
 
         await prisma.cotizacion.upsert({
