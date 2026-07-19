@@ -276,6 +276,11 @@ model Cotizacion {
   tiempoEntrega     String?
   direccionEntrega  String?
   detallePagoMixto  String?
+  cuentas           String?
+  firmanteNombre    String?
+  firmanteCargo     String?
+  firmanteCorreo    String?
+  firmanteMovil     String?
   garantia          String?
   observacion       String?
   vigencia          Int?       @default(10)
