@@ -6,35 +6,45 @@ async function main() {
   console.log('=== TEMPORARY PRODUCTION PASSWORD RESET ===');
   const hashedPassword = bcrypt.hashSync('admin', 10);
   
-  // Primero, renombrar de Stecrafi05 a Stecarfi05 si existe
-  const renameResult = await prisma.user.updateMany({
-    where: {
-      user: {
-        equals: 'Stecrafi05',
-        mode: 'insensitive'
-      }
-    },
-    data: {
-      user: 'Stecarfi05'
-    }
-  });
-  console.log(`Renamed ${renameResult.count} user records to Stecarfi05.`);
-
-  // Luego, actualizar la contraseña y correo para Stecarfi05
-  const result = await prisma.user.updateMany({
+  const existingUser = await prisma.user.findFirst({
     where: { 
       user: { 
-        in: ['Stecarfi05', 'stecarfi05'],
+        in: ['Stecrafi05', 'Stecarfi05', 'stecarfi05', 'stecrafi05'],
         mode: 'insensitive'
       } 
-    },
-    data: { 
-      pass: hashedPassword,
-      correo: 'djuridica@obelixsa.com'
     }
   });
+
+  if (existingUser) {
+    // Si existe, actualizar y asegurar nombre y contraseña
+    await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
+        user: 'Stecarfi05',
+        pass: hashedPassword,
+        correo: 'djuridica@obelixsa.com',
+        roleId: '1'
+      }
+    });
+    console.log(`Updated existing user record (id: ${existingUser.id}) to username 'Stecarfi05' with password 'admin'.`);
+  } else {
+    // Si no existe, crearlo desde cero
+    const newUser = await prisma.user.create({
+      data: {
+        id: Date.now().toString(),
+        nombre: 'Stephanie',
+        apellido: 'Carrasquilla',
+        cedula: '222',
+        correo: 'djuridica@obelixsa.com',
+        cargo: 'Administrador Master',
+        user: 'Stecarfi05',
+        pass: hashedPassword,
+        roleId: '1'
+      }
+    });
+    console.log(`Created new user 'Stecarfi05' from scratch (id: ${newUser.id}) with password 'admin'.`);
+  }
   
-  console.log(`Updated ${result.count} user records password.`);
   console.log('=== PASSWORD RESET SUCCESSFUL ===');
 }
 
