@@ -93,6 +93,7 @@ model Cliente {
   firmaCedula         String?
   firmaFecha          String?
   descripcion         String?
+  adjuntos            String?  @db.Text
 
   // Relaciones inversas
   ventas             Venta[]
