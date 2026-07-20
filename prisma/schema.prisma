@@ -180,32 +180,47 @@ model PQR {
 
 // 7. Servicios Técnicos
 model Servicio {
-  id        String  @id
+  id             String  @id
   
   // Relación con Cliente (Normalizado)
-  clienteId String
-  cliente   Cliente @relation(fields: [clienteId], references: [id])
+  clienteId      String
+  cliente        Cliente @relation(fields: [clienteId], references: [id])
   
-  fechaProg String
-  tipo      String
-  obs       String
-  estado    String
-  obsAdmin  String?
-  lockedBy  String?
+  fechaProg      String
+  tipo           String
+  obs            String
+  estado         String
+  obsAdmin       String?
+  lockedBy       String?
+  
+  // Campos de React
+  tecnico        String?
+  equipoDetalle  String?
+  obsRecepcion   String? @db.Text
+  obsDiagnostico String? @db.Text
+  obsCotizacion  String? @db.Text
+  obsEjecucion   String? @db.Text
+  obsCalidad     String? @db.Text
+  fechaCreacion  String?
+  fechaIso       String?
 }
 
 // 8. Solicitudes Laborales (Empleados)
 model Solicitud {
-  id           String  @id
-  fecha        String
-  asesor       String
-  nombreAsesor String
-  tipo         String
-  detalle      String
-  evidencia    String?
-  fileData     String? @db.Text
-  estado       String
-  lockedBy     String?
+  id            String  @id
+  fecha         String
+  asesor        String
+  nombreAsesor  String?
+  tipo          String
+  detalle       String?
+  evidencia     String?
+  fileData      String? @db.Text
+  estado        String
+  lockedBy      String?
+  
+  // Campos de React
+  comentario    String? @db.Text
+  fechaRadicado String?
 }
 
 // 9. Procesos Disciplinarios
@@ -213,7 +228,7 @@ model ProcesoDisciplinario {
   id               String  @id
   fecha            String
   asesor           String
-  jefe             String
+  jefe             String?
   falta            String
   obs              String
   etapa            Int
@@ -229,22 +244,34 @@ model ProcesoDisciplinario {
 model Evaluacion {
   id             String  @id
   fecha          String
-  evaluador      String
-  evaluado       String
-  evaluadoNombre String
-  tipo           String
+  evaluador      String?
+  evaluado       String?
+  evaluadoNombre String?
+  tipo           String?
   obs            String?
-  scores         Json    // Guarda el objeto {metas, ppto, atencion, quejas, resp, ventas}
+  scores         Json?   // Guarda el objeto {metas, ppto, atencion, quejas, resp, ventas}
   lockedBy       String?
+  
+  // Campos de React
+  empleado       String?
+  metajobs       Int?
+  asistencia     Int?
+  objetivos      Int?
+  promedio       Float?
 }
 
 // 11. Comunicados Oficiales
 model Anuncio {
-  id       String  @id
-  fecha    String
-  titulo   String
-  mensaje  String
-  lockedBy String?
+  id        String  @id
+  fecha     String?
+  titulo    String
+  mensaje   String?
+  lockedBy  String?
+  
+  // Campos de React
+  contenido String? @db.Text
+  expiresAt String?
+  expired   Boolean? @default(false)
 }
 
 // 12. Cotizaciones
@@ -343,11 +370,11 @@ model Notificacion {
 // 16. Comisionistas y Técnicos
 model Comisionista {
   id             String  @id
-  tipo           String
+  tipo           String?
   nombre         String
-  cedula         String
-  telefono       String
-  correo         String
+  cedula         String?
+  telefono       String?
+  correo         String?
   direccion      String?
   cliente_remite String?
   valor_venta    Float?
@@ -355,6 +382,11 @@ model Comisionista {
   fecha          String?
   owner          String?
   lockedBy       String?
+  
+  // Campos de React
+  doc            String?
+  tel            String?
+  porcentaje     Float?
 }
 
 // 17. WhatsApp Configuración (Objeto único)

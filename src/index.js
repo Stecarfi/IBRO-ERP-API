@@ -333,13 +333,64 @@ app.get('/api/db', async (req, res) => {
       obs: s.obs,
       estado: s.estado,
       obsAdmin: s.obsAdmin,
-      lockedBy: s.lockedBy
+      lockedBy: s.lockedBy,
+      tecnico: s.tecnico || '',
+      equipoDetalle: s.equipoDetalle || '',
+      obsRecepcion: s.obsRecepcion || '',
+      obsDiagnostico: s.obsDiagnostico || '',
+      obsCotizacion: s.obsCotizacion || '',
+      obsEjecucion: s.obsEjecucion || '',
+      obsCalidad: s.obsCalidad || '',
+      fechaCreacion: s.fechaCreacion || '',
+      fechaIso: s.fechaIso || ''
     }));
 
-    const solicitudes = await prisma.solicitud.findMany({ orderBy: { id: 'asc' } });
+    const solicitudesRaw = await prisma.solicitud.findMany({ orderBy: { id: 'asc' } });
+    const solicitudes = solicitudesRaw.map(s => ({
+      id: s.id,
+      fecha: s.fecha,
+      asesor: s.asesor,
+      nombreAsesor: s.nombreAsesor || '',
+      tipo: s.tipo,
+      detalle: s.detalle || '',
+      evidencia: s.evidencia || null,
+      fileData: s.fileData || null,
+      estado: s.estado,
+      lockedBy: s.lockedBy || null,
+      comentario: s.comentario || '',
+      fechaRadicado: s.fechaRadicado || ''
+    }));
+
     const procesosDisciplinarios = await prisma.procesoDisciplinario.findMany({ orderBy: { id: 'asc' } });
-    const evaluaciones = await prisma.evaluacion.findMany({ orderBy: { id: 'asc' } });
-    const anuncios = await prisma.anuncio.findMany({ orderBy: { id: 'asc' } });
+
+    const evaluacionesRaw = await prisma.evaluacion.findMany({ orderBy: { id: 'asc' } });
+    const evaluaciones = evaluacionesRaw.map(ev => ({
+      id: ev.id,
+      fecha: ev.fecha,
+      evaluador: ev.evaluador || '',
+      evaluado: ev.evaluado || '',
+      evaluadoNombre: ev.evaluadoNombre || '',
+      tipo: ev.tipo || '',
+      obs: ev.obs || '',
+      lockedBy: ev.lockedBy || null,
+      empleado: ev.empleado || '',
+      metajobs: ev.metajobs || 5,
+      asistencia: ev.asistencia || 5,
+      objetivos: ev.objetivos || 5,
+      promedio: ev.promedio || 5.0
+    }));
+
+    const anunciosRaw = await prisma.anuncio.findMany({ orderBy: { id: 'asc' } });
+    const anuncios = anunciosRaw.map(a => ({
+      id: a.id,
+      fecha: a.fecha || '',
+      titulo: a.titulo,
+      mensaje: a.mensaje || '',
+      lockedBy: a.lockedBy || null,
+      contenido: a.contenido || '',
+      expiresAt: a.expiresAt || '',
+      expired: a.expired || false
+    }));
 
     // Mapear Cotizaciones
     const cotizacionesRaw = await prisma.cotizacion.findMany({
@@ -390,7 +441,25 @@ app.get('/api/db', async (req, res) => {
     const chat = await prisma.chat.findMany({ orderBy: { timestamp: 'asc' } });
     const auditoria = await prisma.auditoria.findMany({ orderBy: { id: 'asc' } });
     const notificaciones = await prisma.notificacion.findMany({ orderBy: { id: 'asc' } });
-    const comisionistas = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
+    const comisionistasRaw = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
+    const comisionistas = comisionistasRaw.map(c => ({
+      id: c.id,
+      tipo: c.tipo || '',
+      nombre: c.nombre,
+      cedula: c.cedula || '',
+      telefono: c.telefono || '',
+      correo: c.correo || '',
+      direccion: c.direccion || '',
+      cliente_remite: c.cliente_remite || '',
+      valor_venta: c.valor_venta || 0,
+      pct_comision: c.pct_comision || 10,
+      fecha: c.fecha || '',
+      owner: c.owner || '',
+      lockedBy: c.lockedBy || null,
+      doc: c.doc || '',
+      tel: c.tel || '',
+      porcentaje: c.porcentaje || 10
+    }));
 
     // WhatsApp Config
     const config = await prisma.whatsappConfig.findFirst();
@@ -696,6 +765,15 @@ app.post('/api/db/sync', async (req, res) => {
           estado: item.estado,
           obsAdmin: item.obsAdmin || null,
           lockedBy: item.lockedBy || null,
+          tecnico: item.tecnico || null,
+          equipoDetalle: item.equipoDetalle || null,
+          obsRecepcion: item.obsRecepcion || null,
+          obsDiagnostico: item.obsDiagnostico || null,
+          obsCotizacion: item.obsCotizacion || null,
+          obsEjecucion: item.obsEjecucion || null,
+          obsCalidad: item.obsCalidad || null,
+          fechaCreacion: item.fechaCreacion || null,
+          fechaIso: item.fechaIso || null
         };
 
         await prisma.servicio.upsert({
