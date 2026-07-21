@@ -506,6 +506,10 @@ app.post('/api/db/sync', async (req, res) => {
       for (const item of items) {
         const { ...data } = item;
 
+        if (table === 'user') {
+          delete data.foto;
+        }
+
         // Evitar conflictos por llaves únicas (como doc en Clientes o user en Usuarios)
         if (table === 'cliente' && item.doc) {
           const existing = await prisma.cliente.findUnique({ where: { doc: item.doc } });
