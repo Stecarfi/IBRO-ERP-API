@@ -316,7 +316,20 @@ app.get('/api/db', async (req, res) => {
       fileData: p.fileData,
       estado: p.estado,
       satisfecho: p.satisfecho,
-      lockedBy: p.lockedBy
+      lockedBy: p.lockedBy,
+      radicado: p.radicado,
+      hechos: p.hechos,
+      solicitudes: p.solicitudes,
+      evidencias: p.evidencias,
+      aplicaGarantia: p.aplicaGarantia,
+      tratamientoGarantia: p.tratamientoGarantia,
+      terminoLegal: p.terminoLegal,
+      fechaCierre: p.fechaCierre,
+      inventarioId: p.inventarioId,
+      ventaId: p.ventaId,
+      cotizacionId: p.cotizacionId,
+      trazabilidad: p.trazabilidad,
+      usuarioAsignado: p.usuarioAsignado
     }));
 
     // Mapear Servicios Técnicos
@@ -342,7 +355,16 @@ app.get('/api/db', async (req, res) => {
       obsEjecucion: s.obsEjecucion || '',
       obsCalidad: s.obsCalidad || '',
       fechaCreacion: s.fechaCreacion || '',
-      fechaIso: s.fechaIso || ''
+      fechaIso: s.fechaIso || '',
+      radicado: s.radicado,
+      inventarioId: s.inventarioId,
+      ventaId: s.ventaId,
+      cotizacionId: s.cotizacionId,
+      etapaActual: s.etapaActual,
+      evidencias: s.evidencias,
+      trazabilidad: s.trazabilidad,
+      aplicaGarantia: s.aplicaGarantia,
+      costoServicio: s.costoServicio
     }));
 
     const solicitudesRaw = await prisma.solicitud.findMany({ orderBy: { id: 'asc' } });
@@ -377,7 +399,8 @@ app.get('/api/db', async (req, res) => {
       metajobs: ev.metajobs || 5,
       asistencia: ev.asistencia || 5,
       objetivos: ev.objetivos || 5,
-      promedio: ev.promedio || 5.0
+      promedio: ev.promedio || 5.0,
+      scores: ev.scores || null
     }));
 
     const anunciosRaw = await prisma.anuncio.findMany({ orderBy: { id: 'asc' } });
@@ -740,6 +763,19 @@ app.post('/api/db/sync', async (req, res) => {
           estado: item.estado,
           satisfecho: item.satisfecho,
           lockedBy: item.lockedBy || null,
+          radicado: item.radicado || null,
+          hechos: item.hechos || null,
+          solicitudes: item.solicitudes || null,
+          evidencias: item.evidencias || null,
+          aplicaGarantia: item.aplicaGarantia ?? false,
+          tratamientoGarantia: item.tratamientoGarantia || null,
+          terminoLegal: item.terminoLegal || null,
+          fechaCierre: item.fechaCierre || null,
+          inventarioId: item.inventarioId || null,
+          ventaId: item.ventaId || null,
+          cotizacionId: item.cotizacionId || null,
+          trazabilidad: item.trazabilidad || null,
+          usuarioAsignado: item.usuarioAsignado || null,
         };
 
         await prisma.pQR.upsert({
@@ -777,7 +813,16 @@ app.post('/api/db/sync', async (req, res) => {
           obsEjecucion: item.obsEjecucion || null,
           obsCalidad: item.obsCalidad || null,
           fechaCreacion: item.fechaCreacion || null,
-          fechaIso: item.fechaIso || null
+          fechaIso: item.fechaIso || null,
+          radicado: item.radicado || null,
+          inventarioId: item.inventarioId || null,
+          ventaId: item.ventaId || null,
+          cotizacionId: item.cotizacionId || null,
+          etapaActual: item.etapaActual || null,
+          evidencias: item.evidencias || null,
+          trazabilidad: item.trazabilidad || null,
+          aplicaGarantia: item.aplicaGarantia ?? false,
+          costoServicio: item.costoServicio ? parseFloat(item.costoServicio) : 0,
         };
 
         await prisma.servicio.upsert({

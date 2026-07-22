@@ -162,21 +162,36 @@ model Venta {
 
 // 6. PQRS
 model PQR {
-  id         String  @id
-  fecha      String
-  limiteIso  String
+  id                  String   @id
+  fecha               String
+  limiteIso           String
   
   // Relación con Cliente (Normalizado)
-  clienteId  String
-  cliente    Cliente @relation(fields: [clienteId], references: [id])
+  clienteId           String
+  cliente             Cliente  @relation(fields: [clienteId], references: [id])
   
-  tipo       String
-  detalle    String
-  evidencia  String?
-  fileData   String? @db.Text
-  estado     String
-  satisfecho String
-  lockedBy   String?
+  tipo                String
+  detalle             String
+  evidencia           String?
+  fileData            String?  @db.Text
+  estado              String
+  satisfecho          String
+  lockedBy            String?
+
+  // Campos adicionales para el rediseño
+  radicado            String?
+  hechos              String?  @db.Text
+  solicitudes         String?  @db.Text
+  evidencias          String?  @db.Text // JSON list of files
+  aplicaGarantia      Boolean? @default(false)
+  tratamientoGarantia String?
+  terminoLegal        String?
+  fechaCierre         String?
+  inventarioId        String?
+  ventaId             String?
+  cotizacionId        String?
+  trazabilidad        String?  @db.Text // JSON list of history
+  usuarioAsignado     String?
 }
 
 // 7. Servicios Técnicos
@@ -204,6 +219,17 @@ model Servicio {
   obsCalidad     String? @db.Text
   fechaCreacion  String?
   fechaIso       String?
+
+  // Campos adicionales para el rediseño
+  radicado       String?
+  inventarioId   String?
+  ventaId        String?
+  cotizacionId   String?
+  etapaActual    String?
+  evidencias     String? @db.Text // JSON list of files
+  trazabilidad   String? @db.Text // JSON list of history
+  aplicaGarantia Boolean? @default(false)
+  costoServicio  Float?   @default(0)
 }
 
 // 8. Solicitudes Laborales (Empleados)
