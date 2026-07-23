@@ -142,7 +142,55 @@ async function verifySmtpConnection() {
   }
 }
 
+async function sendLockoutEmail(email, name, unlockLink) {
+  const subject = 'Alerta de Seguridad: Cuenta Bloqueada - G-IBRO';
+  const html = `
+    <div style="font-family: Arial, sans-serif; padding: 25px; color: #333; max-width: 600px; margin: auto; border: 1px solid #ef4444; border-radius: 12px; box-shadow: 0 4px 12px rgba(239,68,68,0.15);">
+      <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #ef4444; padding-bottom: 15px;">
+        <h2 style="color: #ef4444; margin: 0; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">G-IBRO S.A.S. - SEGURIDAD</h2>
+      </div>
+      <h3 style="color: #1f2937; font-size: 16px;">Hola ${name},</h3>
+      <p style="line-height: 1.6; font-size: 14px; color: #4b5563;">Tu cuenta ha sido bloqueada temporalmente tras detectar <strong>3 intentos fallidos de inicio de sesión</strong> consecutivos.</p>
+      <p style="line-height: 1.6; font-size: 14px; color: #4b5563;">Si fuiste tú y olvidaste tu contraseña, o si deseas desbloquear la cuenta, haz clic en el siguiente botón:</p>
+      <div style="text-align: center; margin: 25px 0;">
+        <a href="${unlockLink}" style="background-color: #ef4444; color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 8px rgba(239, 68, 68, 0.25);">Desbloquear y Restablecer Contraseña</a>
+      </div>
+      <div style="background-color: #f3f4f6; padding: 12px; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 11px; color: #ef4444; border: 1px solid #e5e7eb;">
+        <a href="${unlockLink}" style="color: #ef4444; text-decoration: none; font-weight: bold;">${unlockLink}</a>
+      </div>
+      <div style="font-size: 10px; text-align: center; color: #71717a; margin-top: 40px; border-top: 1px solid #e4e4e7; padding-top: 15px; line-height: 1.5;">
+        <strong>IBRO S.A.S. - Departamento de IT</strong>
+      </div>
+    </div>
+  `;
+
+  // Intentamos con SMTP Local (El preferido según el backend actual)
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+
+  if (smtpUser && smtpPass) {
+    try {
+      const mailOptions = {
+        from: `"Seguridad G-IBRO" <${smtpUser}>`,
+        to: email,
+        subject,
+        html,
+      };
+      const transporter = getTransporter();
+      await transporter.sendMail(mailOptions);
+      console.log(`[EMAIL SERVICE] Correo de bloqueo enviado a: ${email}`);
+      return { sent: true };
+    } catch (err) {
+      console.error(`[EMAIL SERVICE] Error enviando correo de bloqueo:`, err);
+    }
+  }
+
+  console.log(`[EMAIL SERVICE MOCK] Lockout Email to ${email}. Link: ${unlockLink}`);
+  return { sent: false, mockMode: true, unlockLink };
+}
+
 module.exports = {
   sendRecoveryEmail,
+  sendLockoutEmail,
   verifySmtpConnection
 };

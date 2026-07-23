@@ -4,21 +4,141 @@ const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const { z } = require('zod');
+const { validateSyncPayload } = require('./validators');
 const { askGemini, geminiLogs } = require('./geminiService');
-const { sendRecoveryEmail, verifySmtpConnection } = require('./emailService');
+const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('./emailService');
 
 const path = require('path');
 const app = express();
-app.use(cors());
+app.use(cookieParser());
+const rateLimit = require('express-rate-limit');
+const { setupCronJobs } = require('./cron/backup');
+
+// Iniciar tareas en segundo plano
+setupCronJobs();
+
+// 🔒 CORS Estricto (Lista Blanca)
+const whitelist = ['http://localhost:3001', 'http://localhost:3000', process.env.FRONTEND_URL];
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin || whitelist.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS (Seguridad Restringida)'));
+    }
+  },
+  credentials: true // Permite cookies en el futuro (Fase 2)
+};
+app.use(cors(corsOptions));
+
+// 🛡️ Rate Limiting Global (Anti-DDoS)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 500, // límite de 500 peticiones por IP
+  message: { error: 'Demasiadas peticiones detectadas (Anti-DDoS). Intente más tarde.' }
+});
+app.use('/api/', apiLimiter);
+
+// 🛡️ Rate Limiting Estricto para Login (Anti-Fuerza Bruta)
+const loginLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutos
+  max: 10, // máximo 10 intentos
+  message: { error: 'Demasiados intentos de inicio de sesión. Espere 5 minutos.' }
+});
 // Incrementar límite de tamaño para soportar imágenes en Base64 en solicitudes/PQRS
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Configuración de almacenamiento de avatares (Subida de fotos)
+const fs = require('fs');
+const multer = require('multer');
+const avatarsDir = path.join(__dirname, 'public/avatars');
+if (!fs.existsSync(avatarsDir)) {
+    fs.mkdirSync(avatarsDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, avatarsDir)
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+        const ext = path.extname(file.originalname);
+        cb(null, req.body.username + '-' + uniqueSuffix + ext)
+    }
+});
+const upload = multer({ storage: storage });
+
+app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
+    try {
+        const username = req.body.username;
+        if (!username) return res.status(400).json({ error: 'Username required' });
+        
+        // Eliminar foto vieja de la memoria/disco
+        const user = await prisma.user.findUnique({ where: { user: username } });
+        if (user && user.foto) {
+            try {
+                const oldFileName = path.basename(user.foto);
+                const oldFilePath = path.join(avatarsDir, oldFileName);
+                if (fs.existsSync(oldFilePath)) {
+                    fs.unlinkSync(oldFilePath);
+                }
+            } catch (e) {
+                console.error('Error deleting old avatar:', e);
+            }
+        }
+        
+        // Retornar nueva URL
+        const newUrl = `${req.protocol}://${req.get('host')}/avatars/${req.file.filename}`;
+        
+        // Guardar URL real en la base de datos
+        await prisma.user.update({
+            where: { user: username },
+            data: { foto: newUrl }
+        });
+        
+        res.json({ url: newUrl });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error uploading avatar' });
+    }
+});
+
+app.delete('/api/remove-avatar', async (req, res) => {
+    try {
+        const { username } = req.body;
+        const user = await prisma.user.findUnique({ where: { user: username } });
+        if (user && user.foto) {
+            try {
+                const oldFileName = path.basename(user.foto);
+                const oldFilePath = path.join(avatarsDir, oldFileName);
+                if (fs.existsSync(oldFilePath)) {
+                    fs.unlinkSync(oldFilePath);
+                }
+            } catch (e) {
+                console.error('Error deleting avatar', e);
+            }
+            await prisma.user.update({
+                where: { user: username },
+                data: { foto: null }
+            });
+        }
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: 'Error removing avatar' });
+    }
+});
+
+// Exponer archivos estáticos de la carpeta de avatares
+app.use('/avatars', express.static(avatarsDir));
 
 // Servir archivos estáticos del frontend desde la carpeta de distribución de Vite
 app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP/dist')));
 
 // Fallback SPA para rutas que no correspondan a la API
-const fs = require('fs');
 app.get('*any', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
     return next();
@@ -37,13 +157,21 @@ app.get('/api/status', (req, res) => {
 });
 
 // POST /api/login: Autenticación de usuario con bcrypt
-app.post('/api/login', async (req, res) => {
-  const { user, pass } = req.body;
-  console.log(`[LOGIN ATTEMPT] User: "${user}"`);
-  if (!user || !pass) {
-    console.log(`[LOGIN FAILED] Missing user or pass`);
-    return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
+app.post('/api/login', loginLimiter, async (req, res) => {
+  // Validación Paranoica con Zod
+  const loginSchema = z.object({
+    user: z.string().min(1, 'El usuario no puede estar vacío').max(100, 'Usuario muy largo'),
+    pass: z.string().min(1, 'La contraseña no puede estar vacía').max(200, 'Contraseña muy larga')
+  });
+
+  const parsed = loginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    console.log(`[LOGIN FAILED] Validación Zod fallida:`, parsed.error.issues);
+    return res.status(400).json({ error: 'Formato de credenciales inválido (Protección de Inyección)' });
   }
+
+  const { user, pass } = parsed.data;
+  console.log(`[LOGIN ATTEMPT] User: "${user}"`);
 
   try {
     const dbUser = await prisma.user.findFirst({
@@ -51,21 +179,170 @@ app.post('/api/login', async (req, res) => {
     });
 
     if (!dbUser) {
-      console.log(`[LOGIN FAILED] User "${user}" not found in database`);
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
+      return res.status(401).json({ error: 'Usuario no encontrado' });
     }
 
-    const matches = bcrypt.compareSync(pass, dbUser.pass);
-    console.log(`[LOGIN COMPARE] User found: "${dbUser.user}". Password matches: ${matches}`);
+    if (dbUser.isLocked) {
+      return res.status(403).json({ error: 'Cuenta bloqueada por seguridad. Revisa tu correo electrónico para desbloquearla.' });
+    }
+
+    // Verificar contraseña (soporte legacy y bcrypt)
+    let matches = false;
+    const isBcrypt = dbUser.pass.startsWith('$2a$') || dbUser.pass.startsWith('$2b$') || dbUser.pass.startsWith('$2y$');
+    if (isBcrypt) {
+      matches = bcrypt.compareSync(pass, dbUser.pass);
+    } else {
+      matches = (pass === dbUser.pass);
+      // Auto-actualizar a bcrypt
+      if (matches) {
+        await prisma.user.update({
+          where: { id: dbUser.id },
+          data: { pass: bcrypt.hashSync(pass, 10) }
+        });
+      }
+    }
 
     if (matches) {
+      // Reiniciar intentos fallidos
+      if (dbUser.failedLoginAttempts > 0) {
+        await prisma.user.update({
+          where: { id: dbUser.id },
+          data: { failedLoginAttempts: 0 }
+        });
+      }
+
+      const token = jwt.sign(
+        { id: dbUser.id, user: dbUser.user, roleId: dbUser.roleId },
+        process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+        { expiresIn: '15m' } // 15 minutos para accessToken (Alta seguridad)
+      );
+
+      const refreshToken = jwt.sign(
+        { id: dbUser.id, user: dbUser.user },
+        process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+        { expiresIn: '7d' } // 7 días para refreshToken
+      );
+
+      // Guardar refreshToken en la base de datos
+      await prisma.user.update({
+        where: { id: dbUser.id },
+        data: { refreshToken }
+      });
+
+      res.cookie('token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000 // 15 min
+      });
+
+      res.cookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
+      });
+
       return res.json({ success: true, user: dbUser });
     } else {
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
+      // Incrementar intentos fallidos
+      const newAttempts = dbUser.failedLoginAttempts + 1;
+      let isNowLocked = false;
+      
+      if (newAttempts >= 3) {
+        isNowLocked = true;
+        // Generar token de recuperación
+        const crypto = require('crypto');
+        const token = crypto.randomBytes(32).toString('hex');
+        const expire = Date.now() + 3600000; // 1 hora
+        
+        await prisma.pendingReset.create({
+          data: {
+            user: dbUser.user,
+            token,
+            expire
+          }
+        });
+
+        const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}&user=${encodeURIComponent(dbUser.user)}`;
+        await sendLockoutEmail(dbUser.correo, dbUser.nombre, resetLink);
+      }
+
+      await prisma.user.update({
+        where: { id: dbUser.id },
+        data: { 
+          failedLoginAttempts: newAttempts,
+          isLocked: isNowLocked
+        }
+      });
+
+      if (isNowLocked) {
+        return res.status(403).json({ error: 'Cuenta bloqueada por demasiados intentos fallidos. Revisa tu correo.' });
+      }
+
+      return res.status(401).json({ error: `Contraseña incorrecta. Intento ${newAttempts} de 3.` });
     }
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Error interno en el servidor de autenticación' });
+  }
+});
+
+// POST /api/logout: Cerrar sesión segura
+app.post('/api/logout', async (req, res) => {
+  // Limpiar refreshToken de la base de datos si es posible
+  const refreshToken = req.cookies?.refreshToken;
+  if (refreshToken) {
+    try {
+      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026');
+      await prisma.user.update({
+        where: { id: decoded.id },
+        data: { refreshToken: null }
+      });
+    } catch (e) {
+      console.log('Error invalidating refresh token on logout');
+    }
+  }
+
+  res.clearCookie('token');
+  res.clearCookie('refreshToken');
+  res.json({ success: true });
+});
+
+// POST /api/refresh: Rotación de sesión silenciosa
+app.post('/api/refresh', async (req, res) => {
+  const refreshToken = req.cookies?.refreshToken;
+  if (!refreshToken) return res.status(401).json({ error: 'No refresh token provided' });
+
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026');
+    
+    // Verificar si el token sigue siendo válido en la base de datos
+    const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
+    if (!dbUser || dbUser.refreshToken !== refreshToken) {
+      return res.status(403).json({ error: 'Refresh token invalid or revoked' });
+    }
+
+    // Emitir nuevo access token
+    const token = jwt.sign(
+      { id: dbUser.id, user: dbUser.user, roleId: dbUser.roleId },
+      process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+      { expiresIn: '15m' }
+    );
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 15 * 60 * 1000
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    res.clearCookie('token');
+    res.clearCookie('refreshToken');
+    res.status(403).json({ error: 'Refresh token expired' });
   }
 });
 
@@ -516,11 +793,67 @@ app.get('/api/db', async (req, res) => {
   }
 });
 
+// POST /api/location/update: Reportar ubicación en tiempo real
+app.post('/api/location/update', async (req, res) => {
+  const { user, lat, lng } = req.body;
+  if (!user || lat === undefined || lng === undefined) {
+    return res.status(400).json({ error: 'Faltan datos de ubicación' });
+  }
+
+  try {
+    await prisma.user.update({
+      where: { user: user },
+      data: {
+        lat: parseFloat(lat),
+        lng: parseFloat(lng),
+        lastLocationUpdate: Date.now()
+      }
+    });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error actualizando ubicación:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/location/users: Obtener la ubicación de todos los usuarios
+app.get('/api/location/users', async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        nombre: true,
+        apellido: true,
+        cargo: true,
+        lat: true,
+        lng: true,
+        lastLocationUpdate: true
+      },
+      where: {
+        lat: { not: null },
+        lng: { not: null }
+      }
+    });
+    res.json(users);
+  } catch (error) {
+    console.error('Error obteniendo ubicaciones:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // POST /api/db/sync: Procesa el diff incremental del cliente
 app.post('/api/db/sync', async (req, res) => {
-  const { diff } = req.body;
+  const { diff, user } = req.body;
   if (!diff) {
     return res.status(400).json({ error: 'No diff payload provided' });
+  }
+
+  try {
+    // 🛡️ Zod Global: Validación Estricta
+    validateSyncPayload(diff);
+  } catch (validationError) {
+    console.error('Zod Validation Blocked Request:', validationError.message);
+    return res.status(400).json({ error: validationError.message });
   }
 
   try {
@@ -530,7 +863,7 @@ app.post('/api/db/sync', async (req, res) => {
         const { ...data } = item;
 
         if (table === 'user') {
-          delete data.foto;
+          // Ya permitimos que foto se guarde y sincronice
         }
 
         // Evitar conflictos por llaves únicas (como doc en Clientes o user en Usuarios)
@@ -900,7 +1233,36 @@ app.post('/api/db/sync', async (req, res) => {
     }
 
     broadcastUpdate();
-    res.json({ success: true });
+    // 🛡️ Trazabilidad de Auditoría
+    const actorUser = user || 'Sistema';
+    if (Object.keys(diff.updated || {}).length > 0) {
+      for (const table of Object.keys(diff.updated)) {
+        await prisma.auditoria.create({
+          data: {
+            user: actorUser,
+            fecha: new Date().toISOString(),
+            action: 'UPDATE/INSERT',
+            modulo: table,
+            recordDetails: JSON.stringify(diff.updated[table].map(i => i.id || i.doc || 'unknown'))
+          }
+        });
+      }
+    }
+    if (Object.keys(diff.deleted || {}).length > 0) {
+      for (const table of Object.keys(diff.deleted)) {
+        await prisma.auditoria.create({
+          data: {
+            user: actorUser,
+            fecha: new Date().toISOString(),
+            action: 'DELETE',
+            modulo: table,
+            recordDetails: JSON.stringify(diff.deleted[table])
+          }
+        });
+      }
+    }
+
+    res.json({ success: true, timestamp: Date.now() });
   } catch (error) {
     console.error('Error syncing database:', error);
     res.status(500).json({ error: 'Error al sincronizar la base de datos', details: error.message });

@@ -40,6 +40,19 @@ model User {
   soundsEnabled Boolean? @default(true)
   cumpleanos    String?
   habeasDataAccepted Boolean? @default(false)
+  refreshToken  String?
+  
+  // Anti-Brute Force
+  failedLoginAttempts Int @default(0)
+  isLocked            Boolean @default(false)
+  
+  // Archivos multimedia
+  foto                String?
+
+  // Módulo de Ubicación
+  lat                 Float?
+  lng                 Float?
+  lastLocationUpdate  Float?
 }
 
 // 3. Clientes
