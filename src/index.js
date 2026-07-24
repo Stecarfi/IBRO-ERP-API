@@ -446,7 +446,7 @@ app.post('/api/auth/recover', async (req, res) => {
         success: true,
         mockMode: true,
         resetLink: resetLink,
-        message: 'No se pudo despachar el correo (falló la conexión SMTP de Google). Aquí tienes tu enlace directo para restablecer la contraseña:'
+        message: 'No se pudo despachar el correo (El servicio de mensajería rechazó la petición). Aquí tienes tu enlace directo para restablecer la contraseña:'
       });
     }
 
