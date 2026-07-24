@@ -7,18 +7,11 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// 1. Roles (Se mantiene plano como está actualmente)
+// 1. Roles (Rediseñado para RBAC flexible)
 model Role {
   id                 String   @id
   name               String
-  modules            String[] // Módulos habilitados
-  canAssignSales     Boolean  @default(false)
-  clientLevel        Int      @default(3)
-  canManageEvals     Boolean  @default(false)
-  canCreateMeetings  Boolean  @default(false)
-  viewTechPrice      Boolean  @default(false)
-  viewWholesalePrice Boolean  @default(false)
-  viewCostPrice      Boolean  @default(false)
+  permissions        String?  @db.Text // JSON con la estructura de permisos por módulo
 }
 
 // 2. Usuarios
