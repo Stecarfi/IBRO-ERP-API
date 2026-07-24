@@ -386,6 +386,7 @@ model Chat {
   fileType    String?
   isMeeting   Boolean  @default(false)
   meetingId   String?
+  readAt      Float?
 }
 
 // 14. Auditoría Interna
