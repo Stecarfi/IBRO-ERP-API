@@ -22,7 +22,12 @@ const { setupCronJobs } = require('./cron/backup');
 setupCronJobs();
 
 // 🔒 CORS
-app.use(cors()); // Permitir todo temporalmente
+app.use(cors({
+    origin: function(origin, callback) {
+        callback(null, true);
+    },
+    credentials: true
+}));
 
 // 🛡️ Rate Limiting Global (Anti-DDoS)
 const apiLimiter = rateLimit({
