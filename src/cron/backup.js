@@ -34,7 +34,6 @@ function setupCronJobs() {
       console.log(`[CRON] Respaldo completado exitosamente: ${backupFile}`);
     });
   });
-  });
 
   // Configurar automatización de cumpleaños (Todos los días a las 8:00 AM)
   cron.schedule('0 8 * * *', async () => {
