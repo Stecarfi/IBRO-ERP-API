@@ -21,19 +21,8 @@ const { setupCronJobs } = require('./cron/backup');
 // Iniciar tareas en segundo plano
 setupCronJobs();
 
-// 🔒 CORS Estricto (Lista Blanca)
-const whitelist = ['http://localhost:3001', 'http://localhost:3000', process.env.FRONTEND_URL];
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin || whitelist.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('No permitido por CORS (Seguridad Restringida)'));
-    }
-  },
-  credentials: true // Permite cookies en el futuro (Fase 2)
-};
-app.use(cors(corsOptions));
+// 🔒 CORS
+app.use(cors()); // Permitir todo temporalmente
 
 // 🛡️ Rate Limiting Global (Anti-DDoS)
 const apiLimiter = rateLimit({
