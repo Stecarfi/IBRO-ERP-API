@@ -443,3 +443,13 @@ model PendingReset {
   token  String
   expire Float
 }
+
+// 19. Configuracion de Informes (Valores editables)
+model InformesConfig {
+  id                Int    @id @default(1)
+  margenOperativo   Float  @default(72)
+  ingresoProyectos  Float  @default(85)
+  gastosInstalacion Float  @default(35)
+  anticipos         Float  @default(12450000)
+  gastosCajaChica   Float  @default(2180000)
+}

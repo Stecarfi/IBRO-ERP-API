@@ -68,7 +68,7 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
         if (!username) return res.status(400).json({ error: 'Username required' });
         
         // Eliminar foto vieja de la memoria/disco
-        const user = await prisma.user.findUnique({ where: { user: username } });
+        const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
         if (user && user.foto) {
             try {
                 const oldFileName = path.basename(user.foto);
@@ -85,8 +85,8 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
         const newUrl = `${req.protocol}://${req.get('host')}/avatars/${req.file.filename}`;
         
         // Guardar URL real en la base de datos
-        await prisma.user.update({
-            where: { user: username },
+        await prisma.user.updateMany({
+            where: { user: { equals: username, mode: 'insensitive' } },
             data: { foto: newUrl }
         });
         
@@ -99,8 +99,10 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
 
 app.delete('/api/remove-avatar', async (req, res) => {
     try {
-        const { username } = req.body;
-        const user = await prisma.user.findUnique({ where: { user: username } });
+        const username = req.body.username;
+        if (!username) return res.status(400).json({ error: 'Username required' });
+        
+        const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
         if (user && user.foto) {
             try {
                 const oldFileName = path.basename(user.foto);
@@ -109,13 +111,14 @@ app.delete('/api/remove-avatar', async (req, res) => {
                     fs.unlinkSync(oldFilePath);
                 }
             } catch (e) {
-                console.error('Error deleting avatar', e);
+                console.error('Error deleting avatar:', e);
             }
-            await prisma.user.update({
-                where: { user: username },
-                data: { foto: null }
-            });
         }
+        
+        await prisma.user.updateMany({
+            where: { user: { equals: username, mode: 'insensitive' } },
+            data: { foto: null }
+        });
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Error removing avatar' });
@@ -528,6 +531,24 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
+// POST /api/db/informes-config
+app.post('/api/db/informes-config', async (req, res) => {
+  try {
+    const data = req.body;
+    const existing = await prisma.informesConfig.findUnique({ where: { id: 1 } });
+    
+    if (existing) {
+      await prisma.informesConfig.update({ where: { id: 1 }, data });
+    } else {
+      await prisma.informesConfig.create({ data: { id: 1, ...data } });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error saving informes config:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/db: Carga el JSON global para el frontend mapeando relaciones
 app.get('/api/db', async (req, res) => {
   try {
@@ -754,6 +775,19 @@ app.get('/api/db', async (req, res) => {
     // WhatsApp Config
     const config = await prisma.whatsappConfig.findFirst();
     const whatsappConfig = config ? { phone: config.phone, status: config.status } : { phone: '573000000000', status: 'Activo' };
+    const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
+    
+    // Configuración general combinada
+    const appConfig = {
+      whatsapp: whatsappConfig || { phone: '573000000000', status: 'Activo' },
+      informes: informesConfig || { 
+        margenOperativo: 72, 
+        ingresoProyectos: 85, 
+        gastosInstalacion: 35, 
+        anticipos: 12450000, 
+        gastosCajaChica: 2180000 
+      }
+    };
 
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
 
@@ -774,7 +808,7 @@ app.get('/api/db', async (req, res) => {
       auditoria,
       notificaciones,
       comisionistas,
-      whatsappConfig,
+      config: appConfig,
       pendingResets
     });
   } catch (error) {
