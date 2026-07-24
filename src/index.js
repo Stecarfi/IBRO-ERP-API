@@ -791,8 +791,8 @@ app.post('/api/location/update', async (req, res) => {
   }
 
   try {
-    await prisma.user.update({
-      where: { user: user },
+    await prisma.user.updateMany({
+      where: { user: { equals: user, mode: 'insensitive' } },
       data: {
         lat: parseFloat(lat),
         lng: parseFloat(lng),
@@ -800,9 +800,9 @@ app.post('/api/location/update', async (req, res) => {
       }
     });
     res.json({ success: true });
-  } catch (error) {
+    } catch (error) {
     console.error('Error actualizando ubicación:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    res.status(500).json({ error: 'Error del servidor', details: error.message, stack: error.stack });
   }
 });
 
