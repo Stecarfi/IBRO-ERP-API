@@ -15,6 +15,7 @@ model Role {
   canAssignSales     Boolean  @default(false)
   clientLevel        Int      @default(3)
   canManageEvals     Boolean  @default(false)
+  canCreateMeetings  Boolean  @default(false)
   viewTechPrice      Boolean  @default(false)
   viewWholesalePrice Boolean  @default(false)
   viewCostPrice      Boolean  @default(false)
