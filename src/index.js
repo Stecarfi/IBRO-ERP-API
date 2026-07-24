@@ -141,6 +141,29 @@ app.get('*any', (req, res, next) => {
   }
 });
 
+// TEMPORARY ENDPOINT TO WIPE DB FOR PRESENTATION
+app.get('/api/wipe-db-2026', async (req, res) => {
+  try {
+    await prisma.auditoria.deleteMany({});
+    await prisma.notificacion.deleteMany({});
+    await prisma.chat.deleteMany({});
+    await prisma.anuncio.deleteMany({});
+    await prisma.evaluacion.deleteMany({});
+    await prisma.procesoDisciplinario.deleteMany({});
+    await prisma.solicitud.deleteMany({});
+    await prisma.servicio.deleteMany({});
+    await prisma.pQR.deleteMany({});
+    await prisma.venta.deleteMany({});
+    await prisma.cotizacion.deleteMany({});
+    await prisma.cliente.deleteMany({});
+    await prisma.inventario.deleteMany({});
+    await prisma.comisionista.deleteMany({});
+    res.json({ success: true, message: '¡Base de datos de producción limpiada con éxito!' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Endpoint de prueba de estado
 app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
