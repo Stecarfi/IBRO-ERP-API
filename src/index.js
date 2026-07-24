@@ -14,6 +14,7 @@ const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('.
 
 const path = require('path');
 const app = express();
+app.set('trust proxy', 1); // Solución para error de express-rate-limit en Render (X-Forwarded-For)
 app.use(cookieParser());
 const rateLimit = require('express-rate-limit');
 const { setupCronJobs } = require('./cron/backup');
