@@ -780,12 +780,12 @@ app.get('/api/db', async (req, res) => {
 
     // WhatsApp Config
     const config = await prisma.whatsappConfig.findFirst();
-    const whatsappConfig = config ? { phone: config.phone, status: config.status } : { phone: '573000000000', status: 'Activo' };
+    const whatsappConfig = config ? { phone: config.phone, status: config.status } : { phone: '', status: 'Activo' };
     const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
     
     // Configuración general combinada
     const appConfig = {
-      whatsapp: whatsappConfig || { phone: '573000000000', status: 'Activo' },
+      whatsapp: whatsappConfig || { phone: '', status: 'Activo' },
       informes: informesConfig || { 
         margenOperativo: 72, 
         ingresoProyectos: 85, 
@@ -815,6 +815,7 @@ app.get('/api/db', async (req, res) => {
       notificaciones,
       comisionistas,
       config: appConfig,
+      whatsappConfig,
       pendingResets
     });
   } catch (error) {
