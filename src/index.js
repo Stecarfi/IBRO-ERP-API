@@ -1270,40 +1270,36 @@ app.post('/api/db/sync', async (req, res) => {
 
     // Determinar si SOLO se actualizó el chat (para evitar bloqueos en el frontend)
     let updateType = 'DB_UPDATE';
-    const allUpdated = Object.keys(diff.updated || {});
-    const allDeleted = Object.keys(diff.deleted || {});
-    const allTables = new Set([...allUpdated, ...allDeleted]);
+    const allTables = Object.keys(diff || {});
     
     // Si la solicitud modificó/eliminó algo, y TODAS las tablas modificadas son 'chat'
-    if (allTables.size > 0 && Array.from(allTables).every(t => t === 'chat')) {
+    if (allTables.length > 0 && allTables.every(t => t === 'chat')) {
       updateType = 'CHAT_UPDATE';
     }
 
     broadcastUpdate(updateType);
     // 🛡️ Trazabilidad de Auditoría
     const actorUser = user || 'Sistema';
-    if (Object.keys(diff.updated || {}).length > 0) {
-      for (const table of Object.keys(diff.updated)) {
+    for (const table of allTables) {
+      if (diff[table]?.upserted && diff[table].upserted.length > 0) {
         await prisma.auditoria.create({
           data: {
             user: actorUser,
             fecha: new Date().toISOString(),
             action: 'UPDATE/INSERT',
             modulo: table,
-            recordDetails: JSON.stringify(diff.updated[table].map(i => i.id || i.doc || 'unknown'))
+            recordDetails: JSON.stringify(diff[table].upserted.map(i => i.id || i.doc || 'unknown'))
           }
         });
       }
-    }
-    if (Object.keys(diff.deleted || {}).length > 0) {
-      for (const table of Object.keys(diff.deleted)) {
+      if (diff[table]?.deleted && diff[table].deleted.length > 0) {
         await prisma.auditoria.create({
           data: {
             user: actorUser,
             fecha: new Date().toISOString(),
             action: 'DELETE',
             modulo: table,
-            recordDetails: JSON.stringify(diff.deleted[table])
+            recordDetails: JSON.stringify(diff[table].deleted)
           }
         });
       }
