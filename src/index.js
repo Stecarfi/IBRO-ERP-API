@@ -88,7 +88,9 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
         }
         
         // Retornar nueva URL
-        const newUrl = `${req.protocol}://${req.get('host')}/avatars/${req.file.filename}`;
+        const isProd = req.get('host').includes('onrender.com');
+        const protocol = isProd ? 'https' : req.protocol;
+        const newUrl = `${protocol}://${req.get('host')}/avatars/${req.file.filename}`;
         
         // Guardar URL real en la base de datos
         await prisma.user.updateMany({
