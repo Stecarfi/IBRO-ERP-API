@@ -23,7 +23,7 @@ const inventarioSchema = z.object({
 const syncDiffSchema = z.object({
   updated: z.record(z.array(z.any())).optional(),
   deleted: z.record(z.array(z.string())).optional()
-});
+}).passthrough();
 
 function validateSyncPayload(diff) {
   // 1. Validar estructura global del diff
