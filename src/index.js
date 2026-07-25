@@ -559,6 +559,9 @@ app.post('/api/db/informes-config', async (req, res) => {
 
 // GET /api/db: Carga el JSON global para el frontend mapeando relaciones
 app.get('/api/db', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   try {
     const users = await prisma.user.findMany({ orderBy: { id: 'asc' } });
     const roles = await prisma.role.findMany({ orderBy: { id: 'asc' } });
