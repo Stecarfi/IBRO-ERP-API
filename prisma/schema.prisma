@@ -388,6 +388,8 @@ model Chat {
   isMeeting   Boolean  @default(false)
   meetingId   String?
   readAt      Float?
+  isDeleted   Boolean  @default(false)
+  isEdited    Boolean  @default(false)
 }
 
 // 14. Auditoría Interna

@@ -1268,7 +1268,18 @@ app.post('/api/db/sync', async (req, res) => {
       });
     }
 
-    broadcastUpdate();
+    // Determinar si SOLO se actualizó el chat (para evitar bloqueos en el frontend)
+    let updateType = 'DB_UPDATE';
+    const allUpdated = Object.keys(diff.updated || {});
+    const allDeleted = Object.keys(diff.deleted || {});
+    const allTables = new Set([...allUpdated, ...allDeleted]);
+    
+    // Si la solicitud modificó/eliminó algo, y TODAS las tablas modificadas son 'chat'
+    if (allTables.size > 0 && Array.from(allTables).every(t => t === 'chat')) {
+      updateType = 'CHAT_UPDATE';
+    }
+
+    broadcastUpdate(updateType);
     // 🛡️ Trazabilidad de Auditoría
     const actorUser = user || 'Sistema';
     if (Object.keys(diff.updated || {}).length > 0) {
@@ -1321,8 +1332,8 @@ wss.on('connection', (ws) => {
   });
 });
 
-function broadcastUpdate() {
-  const msg = JSON.stringify({ type: 'DB_UPDATE', timestamp: Date.now() });
+function broadcastUpdate(type = 'DB_UPDATE') {
+  const msg = JSON.stringify({ type, timestamp: Date.now() });
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       
