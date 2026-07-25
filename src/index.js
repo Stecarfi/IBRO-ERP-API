@@ -760,6 +760,16 @@ app.get('/api/db', async (req, res) => {
       motivoNoCompra: c.motivoNoCompra
     }));
 
+    const chatGroupsRaw = await prisma.chatGroup.findMany({ orderBy: { fecha: 'asc' } });
+    const chatGroups = chatGroupsRaw.map(g => ({
+      id: g.id,
+      nombre: g.nombre,
+      descripcion: g.descripcion || '',
+      createdBy: g.createdBy,
+      fecha: g.fecha,
+      integrantes: g.integrantes ? JSON.parse(g.integrantes) : []
+    }));
+
     const chat = await prisma.chat.findMany({ orderBy: { timestamp: 'asc' } });
     const auditoria = await prisma.auditoria.findMany({ orderBy: { id: 'asc' } });
     const notificaciones = await prisma.notificacion.findMany({ orderBy: { id: 'asc' } });
@@ -815,6 +825,7 @@ app.get('/api/db', async (req, res) => {
       evaluaciones,
       anuncios,
       cotizaciones,
+      chatGroups,
       chat,
       auditoria,
       notificaciones,
@@ -1232,6 +1243,12 @@ app.post('/api/db/sync', async (req, res) => {
     if (diff.chat) {
       await flatUpsert('chat', diff.chat.upserted || []);
       await flatDelete('chat', diff.chat.deleted || []);
+    }
+
+    // 13.5 Grupos de Chat
+    if (diff.chatGroups) {
+      await flatUpsert('chatGroup', diff.chatGroups.upserted || []);
+      await flatDelete('chatGroup', diff.chatGroups.deleted || []);
     }
 
     // 14. Auditoría

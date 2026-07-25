@@ -392,6 +392,16 @@ model Chat {
   isEdited    Boolean  @default(false)
 }
 
+// 13.5 Grupos de Chat
+model ChatGroup {
+  id          String   @id
+  nombre      String
+  descripcion String?
+  createdBy   String
+  fecha       String
+  integrantes String   // JSON stringified array of usernames
+}
+
 // 14. Auditoría Interna
 model Auditoria {
   id            String  @id @default(uuid())
