@@ -28,6 +28,7 @@ model User {
   nombre        String
   apellido      String
   cedula        String
+  tipoDoc       String?  @default("CC")
   correo        String
   cargo         String
   telefono      String?
