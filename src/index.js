@@ -1342,12 +1342,24 @@ function broadcastUpdate(type = 'DB_UPDATE') {
   io.emit('db_update', { type, timestamp: Date.now() });
 }
 
+const onlineUsers = new Map(); // socket.id -> username
+
+function broadcastOnlineUsers() {
+    const uniqueUsers = Array.from(new Set(onlineUsers.values()));
+    io.emit('online_users', uniqueUsers);
+}
+
 io.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
+  
+  // Enviar lista actual al nuevo cliente
+  socket.emit('online_users', Array.from(new Set(onlineUsers.values())));
 
   socket.on('join_chat', (data) => {
     if (data && data.user) {
       socket.join(data.user);
+      onlineUsers.set(socket.id, data.user);
+      broadcastOnlineUsers();
       console.log(`User ${data.user} joined personal room`);
     }
   });
@@ -1382,6 +1394,10 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`[Socket.io] Client disconnected: ${socket.id}`);
+    if (onlineUsers.has(socket.id)) {
+        onlineUsers.delete(socket.id);
+        broadcastOnlineUsers();
+    }
   });
 });
 
