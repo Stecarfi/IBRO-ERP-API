@@ -2,7 +2,7 @@ require('dotenv').config();
 const prisma = require('./prisma');
 const express = require('express');
 const http = require('http');
-const WebSocket = require('ws');
+const { Server } = require('socket.io');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -1331,33 +1331,59 @@ app.post('/api/db/sync', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-const clients = new Set();
-
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  console.log(`[WS] Client connected. Total: ${clients.size}`);
-  
-  ws.on('close', () => {
-    clients.delete(ws);
-    console.log(`[WS] Client disconnected. Total: ${clients.size}`);
-  });
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
 function broadcastUpdate(type = 'DB_UPDATE') {
-  const msg = JSON.stringify({ type, timestamp: Date.now() });
-  for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      
-      try {
-        client.send(msg);
-      } catch (err) {
-        console.error('Error sending WS message:', err);
-      }
-    }
-  }
+  io.emit('db_update', { type, timestamp: Date.now() });
 }
+
+io.on('connection', (socket) => {
+  console.log(`[Socket.io] Client connected: ${socket.id}`);
+
+  socket.on('join_chat', (data) => {
+    if (data && data.user) {
+      socket.join(data.user);
+      console.log(`User ${data.user} joined personal room`);
+    }
+  });
+
+  socket.on('join_group', (groupId) => {
+     socket.join(groupId);
+     console.log(`Socket joined group ${groupId}`);
+  });
+
+  socket.on('send_message', (messageData) => {
+    if (messageData.to === 'Todos') {
+        socket.broadcast.emit('receive_message', messageData);
+    } else if (messageData.to && messageData.to.startsWith('group_')) {
+        socket.to(messageData.to).emit('receive_message', messageData);
+    } else if (messageData.to) {
+        socket.to(messageData.to).emit('receive_message', messageData);
+    }
+  });
+
+  socket.on('send_nudge', (data) => {
+     if (data.to) {
+         if (data.to === 'Todos') socket.broadcast.emit('receive_nudge', data);
+         else socket.to(data.to).emit('receive_nudge', data);
+     }
+  });
+
+  socket.on('typing', (data) => {
+     if (data.to) {
+         socket.to(data.to).emit('typing', data);
+     }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`[Socket.io] Client disconnected: ${socket.id}`);
+  });
+});
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
