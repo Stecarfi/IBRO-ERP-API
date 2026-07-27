@@ -28,6 +28,7 @@
     "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
     "prisma": "^5.22.0",
+    "resend": "^6.18.0",
     "socket.io": "^4.8.3",
     "ws": "^8.21.1",
     "zod": "^4.4.3"
@@ -36,7 +37,9 @@
     "nodemon": "^3.1.14"
   },
   "nodemonConfig": {
-    "ignore": ["src/public/**"]
+    "ignore": [
+      "src/public/**"
+    ]
   },
   "allowScripts": {
     "prisma@5.22.0": true,
