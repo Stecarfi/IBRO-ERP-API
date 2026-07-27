@@ -51,19 +51,19 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Configuración de almacenamiento de avatares (Subida de fotos)
 const fs = require('fs');
 const multer = require('multer');
-const avatarsDir = path.join(__dirname, 'public/avatars');
-if (!fs.existsSync(avatarsDir)) {
-    fs.mkdirSync(avatarsDir, { recursive: true });
+const crypto = require('crypto');
+const uploadsDir = path.join(__dirname, 'public/uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, avatarsDir)
+        cb(null, uploadsDir)
     },
     filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
         const ext = path.extname(file.originalname);
-        cb(null, req.body.username + '-' + uniqueSuffix + ext)
+        cb(null, crypto.randomUUID() + ext)
     }
 });
 const upload = multer({ storage: storage });
@@ -78,7 +78,7 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
         if (user && user.foto) {
             try {
                 const oldFileName = path.basename(user.foto);
-                const oldFilePath = path.join(avatarsDir, oldFileName);
+                const oldFilePath = path.join(uploadsDir, oldFileName);
                 if (fs.existsSync(oldFilePath)) {
                     fs.unlinkSync(oldFilePath);
                 }
@@ -90,7 +90,7 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
         // Retornar nueva URL
         const isProd = req.get('host').includes('onrender.com');
         const protocol = isProd ? 'https' : req.protocol;
-        const newUrl = `${protocol}://${req.get('host')}/avatars/${req.file.filename}`;
+        const newUrl = `${protocol}://${req.get('host')}/uploads/${req.file.filename}`;
         
         // Guardar URL real en la base de datos
         await prisma.user.updateMany({
@@ -114,7 +114,7 @@ app.delete('/api/remove-avatar', async (req, res) => {
         if (user && user.foto) {
             try {
                 const oldFileName = path.basename(user.foto);
-                const oldFilePath = path.join(avatarsDir, oldFileName);
+                const oldFilePath = path.join(uploadsDir, oldFileName);
                 if (fs.existsSync(oldFilePath)) {
                     fs.unlinkSync(oldFilePath);
                 }
@@ -133,8 +133,10 @@ app.delete('/api/remove-avatar', async (req, res) => {
     }
 });
 
-// Exponer archivos estáticos de la carpeta de avatares
-app.use('/avatars', express.static(avatarsDir));
+// Exponer archivos estáticos de la carpeta de uploads
+app.use('/uploads', express.static(uploadsDir));
+// Mantener la ruta de avatares temporalmente para compatibilidad
+app.use('/avatars', express.static(path.join(__dirname, 'public/avatars')));
 
 // Servir archivos estáticos del frontend desde la carpeta de distribución de Vite
 app.use(express.static(path.join(__dirname, '../../IBRIO-ERP-APP/dist')));
