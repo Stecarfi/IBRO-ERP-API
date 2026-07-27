@@ -480,24 +480,17 @@ app.post('/api/auth/recover', async (req, res) => {
     try {
       mailRes = await sendRecoveryEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido}`, resetLink);
     } catch (mailError) {
-      console.warn('[SMTP ERROR] Failed to send recovery email. Reset Link is:', resetLink);
+      console.warn('[SMTP ERROR] Failed to send recovery email.');
       console.error(mailError);
-      
-      // Permitimos el retorno del enlace directamente en producción temporalmente para omitir fallos de SMTP
-      return res.json({
-        success: true,
-        mockMode: true,
-        resetLink: resetLink,
-        message: 'No se pudo despachar el correo (El servicio de mensajería rechazó la petición). Aquí tienes tu enlace directo para restablecer la contraseña:'
-      });
+      return res.status(500).json({ error: 'No se pudo despachar el correo debido a un error del servicio de mensajería. Por favor intenta más tarde.' });
     }
 
     if (mailRes.mockMode) {
+      // Incluso en mock mode ya no devolvemos el resetLink al frontend. 
+      // Se registrará en la consola del servidor únicamente para el desarrollador.
       return res.json({
         success: true,
-        mockMode: true,
-        resetLink: resetLink,
-        message: 'Modo de prueba: enlace generado localmente.'
+        message: 'Modo de prueba activo en el servidor. Revisa los logs de la consola del servidor.'
       });
     }
 
