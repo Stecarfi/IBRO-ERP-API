@@ -595,7 +595,12 @@ app.get('/api/db', async (req, res) => {
       tipo_precio: v.tipo_precio,
       precioUnitario: v.precioUnitario,
       lockedBy: v.lockedBy,
-      serialEquipo: v.serialEquipo
+      serialEquipo: v.serialEquipo,
+      vendedorNombre: v.vendedorNombre,
+      vendedorCargo: v.vendedorCargo,
+      vendedorEmail: v.vendedorEmail,
+      vendedorMovil: v.vendedorMovil,
+      vendedorCodigoAsesor: v.vendedorCodigoAsesor
     }));
 
     // Mapear PQRS
@@ -748,6 +753,11 @@ app.get('/api/db', async (req, res) => {
       firmanteMovil: c.firmanteMovil,
       garantia: c.garantia,
       observacion: c.observacion,
+      vendedorNombre: c.vendedorNombre,
+      vendedorCargo: c.vendedorCargo,
+      vendedorEmail: c.vendedorEmail,
+      vendedorMovil: c.vendedorMovil,
+      vendedorCodigoAsesor: c.vendedorCodigoAsesor,
       vigencia: c.vigencia,
       ivaTipo: c.ivaTipo,
       equipos: c.equipos ? JSON.parse(c.equipos) : [],
@@ -1042,6 +1052,11 @@ app.post('/api/db/sync', async (req, res) => {
           precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           lockedBy: item.lockedBy || null,
           serialEquipo: item.serialEquipo || null,
+          vendedorNombre: item.vendedorNombre || null,
+          vendedorCargo: item.vendedorCargo || null,
+          vendedorEmail: item.vendedorEmail || null,
+          vendedorMovil: item.vendedorMovil || null,
+          vendedorCodigoAsesor: item.vendedorCodigoAsesor || null
         };
 
         await prisma.venta.upsert({
@@ -1101,6 +1116,11 @@ app.post('/api/db/sync', async (req, res) => {
           firmanteMovil: item.firmanteMovil || null,
           garantia: item.garantia || null,
           observacion: item.observacion || null,
+          vendedorNombre: item.vendedorNombre || null,
+          vendedorCargo: item.vendedorCargo || null,
+          vendedorEmail: item.vendedorEmail || null,
+          vendedorMovil: item.vendedorMovil || null,
+          vendedorCodigoAsesor: item.vendedorCodigoAsesor || null,
           vigencia: item.vigencia ? parseInt(item.vigencia) : 10,
           ivaTipo: item.ivaTipo || "exento",
           equipos: item.equipos ? JSON.stringify(item.equipos) : null,

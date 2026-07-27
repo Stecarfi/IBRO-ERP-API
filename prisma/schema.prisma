@@ -56,6 +56,9 @@ model User {
   lat                 Float?
   lng                 Float?
   lastLocationUpdate  Float?
+
+  // Datos Adicionales
+  codigoAsesor        String?
 }
 
 // 3. Clientes
@@ -174,6 +177,13 @@ model Venta {
   precioUnitario    Float?
   lockedBy          String?
   serialEquipo      String?
+
+  // Nuevos campos para datos del vendedor
+  vendedorNombre        String?
+  vendedorCargo         String?
+  vendedorEmail         String?
+  vendedorMovil         String?
+  vendedorCodigoAsesor  String?
 }
 
 // 6. PQRS
@@ -364,6 +374,13 @@ model Cotizacion {
   estadoSeguimiento  String?
   motivoSeguimiento  String?
   motivoNoCompra     String?
+
+  // Nuevos campos para datos del vendedor
+  vendedorNombre        String?
+  vendedorCargo         String?
+  vendedorEmail         String?
+  vendedorMovil         String?
+  vendedorCodigoAsesor  String?
 }
 
 // 13. Chat Interno
