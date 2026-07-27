@@ -428,6 +428,8 @@ model Auditoria {
   action        String
   modulo        String
   recordDetails String?
+  shadowingData String?  @db.Text
+  hash          String?
 }
 
 // 15. Notificaciones
