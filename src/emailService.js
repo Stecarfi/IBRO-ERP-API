@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 
 // Crear el transportador utilizando variables de entorno
 const getTransporter = () => {
@@ -42,28 +43,25 @@ async function sendRecoveryEmail(email, name, resetLink) {
     </div>
   `;
 
-  // 1. HTTP API: Resend
+  // 1. HTTP API: Resend (SDK)
   if (process.env.RESEND_API_KEY) {
-    console.log(`[EMAIL SERVICE] Enviando correo vía Resend API hacia "${email}"...`);
-    const from = process.env.EMAIL_FROM || 'Soporte G-IBRO <onboarding@resend.dev>';
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        from,
-        to: [email],
-        subject,
-        html
-      })
+    console.log(`[EMAIL SERVICE] Enviando correo vía Resend SDK hacia "${email}"...`);
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const fromEmail = process.env.EMAIL_FROM || 'Soporte G-IBRO <onboarding@resend.dev>';
+    
+    const { data, error } = await resend.emails.send({
+      from: fromEmail,
+      to: [email],
+      subject: subject,
+      html: html,
     });
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Resend API Error: ${response.status} - ${errText}`);
+
+    if (error) {
+      console.error(`[EMAIL SERVICE] Resend SDK Error:`, error);
+      throw new Error(`Resend SDK Error: ${error.message}`);
     }
-    console.log(`[EMAIL SERVICE] Correo enviado exitosamente con Resend.`);
+
+    console.log(`[EMAIL SERVICE] Correo enviado exitosamente con Resend:`, data);
     return { sent: true };
   }
 
@@ -164,7 +162,28 @@ async function sendLockoutEmail(email, name, unlockLink) {
     </div>
   `;
 
-  // Intentamos con SMTP Local (El preferido según el backend actual)
+  // 1. HTTP API: Resend (SDK)
+  if (process.env.RESEND_API_KEY) {
+    console.log(`[EMAIL SERVICE] Enviando correo de bloqueo vía Resend SDK hacia "${email}"...`);
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const fromEmail = process.env.EMAIL_FROM || 'Seguridad G-IBRO <onboarding@resend.dev>';
+    
+    const { data, error } = await resend.emails.send({
+      from: fromEmail,
+      to: [email],
+      subject: subject,
+      html: html,
+    });
+
+    if (error) {
+      console.error(`[EMAIL SERVICE] Resend SDK Error en bloqueo:`, error);
+    } else {
+      console.log(`[EMAIL SERVICE] Correo de bloqueo enviado exitosamente con Resend:`, data);
+      return { sent: true };
+    }
+  }
+
+  // Intentamos con SMTP Local (Fallback)
   const smtpUser = process.env.SMTP_USER || '';
   const smtpPass = process.env.SMTP_PASS || '';
 
