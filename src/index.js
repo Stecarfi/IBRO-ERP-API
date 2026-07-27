@@ -66,7 +66,16 @@ const storage = multer.diskStorage({
         cb(null, crypto.randomUUID() + ext)
     }
 });
-const upload = multer({ storage: storage });
+const upload = multer({ 
+    storage: storage,
+    fileFilter: function (req, file, cb) {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Formato no válido. Solo se permiten archivos de imagen (fotos).'));
+        }
+    }
+});
 
 app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
     try {
@@ -130,6 +139,26 @@ app.delete('/api/remove-avatar', async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Error removing avatar' });
+    }
+});
+
+// Endpoint genérico de subida de archivos (Evidencias de PQRS, Solicitudes, etc.)
+app.post('/api/upload', upload.array('files', 5), async (req, res) => {
+    try {
+        const uploadedFiles = req.files.map(file => {
+            const isProd = req.get('host').includes('onrender.com');
+            const protocol = isProd ? 'https' : req.protocol;
+            return {
+                name: file.originalname,
+                type: file.mimetype,
+                size: file.size,
+                url: `${protocol}://${req.get('host')}/uploads/${file.filename}`
+            };
+        });
+        res.json({ success: true, files: uploadedFiles });
+    } catch (error) {
+        console.error('Error uploading generic files:', error);
+        res.status(500).json({ error: error.message || 'Error uploading files' });
     }
 });
 
