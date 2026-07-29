@@ -173,6 +173,8 @@ model Venta {
   comisionistaNombre String?
   comisionistaPct   Float?
   comisionistaValor Float?
+  estadoComision    String?
+  fechaComision     String?
   tipo_precio       String?
   precioUnitario    Float?
   lockedBy          String?
