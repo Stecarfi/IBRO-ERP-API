@@ -184,6 +184,8 @@ model Venta {
   vendedorEmail         String?
   vendedorMovil         String?
   vendedorCodigoAsesor  String?
+  equipos               String?
+  materiales            String?
 }
 
 // 6. PQRS
