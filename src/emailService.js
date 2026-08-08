@@ -43,7 +43,25 @@ async function sendRecoveryEmail(email, name, resetLink) {
     </div>
   `;
 
-  // 1. HTTP API: Resend (SDK)
+  // 1. SMTP local / estándar
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+
+  if (smtpUser && smtpPass) {
+    console.log(`[EMAIL SERVICE] Intentando enviar correo vía SMTP desde "${smtpUser}" hacia "${email}"...`);
+    const mailOptions = {
+      from: `"Soporte G-IBRO" <${smtpUser}>`,
+      to: email,
+      subject,
+      html,
+    };
+    const transporter = getTransporter();
+    await transporter.sendMail(mailOptions);
+    console.log(`[EMAIL SERVICE] Correo enviado con éxito vía SMTP hacia: ${email}`);
+    return { sent: true };
+  }
+
+  // 2. HTTP API: Resend (SDK)
   if (process.env.RESEND_API_KEY) {
     console.log(`[EMAIL SERVICE] Enviando correo vía Resend SDK hacia "${email}"...`);
     const resend = new Resend(process.env.RESEND_API_KEY);
@@ -65,7 +83,7 @@ async function sendRecoveryEmail(email, name, resetLink) {
     return { sent: true };
   }
 
-  // 2. HTTP API: Brevo
+  // 3. HTTP API: Brevo
   if (process.env.BREVO_API_KEY) {
     console.log(`[EMAIL SERVICE] Enviando correo vía Brevo API hacia "${email}"...`);
     const fromEmail = process.env.EMAIL_FROM || 'soporte-no-reply@ibroerp.com';
@@ -90,29 +108,26 @@ async function sendRecoveryEmail(email, name, resetLink) {
     return { sent: true };
   }
 
-  // 3. SMTP local / estándar
-  const smtpUser = process.env.SMTP_USER || '';
-  const smtpPass = process.env.SMTP_PASS || '';
-
-  if (smtpUser && smtpPass) {
-    console.log(`[EMAIL SERVICE] Intentando enviar correo vía SMTP desde "${smtpUser}" hacia "${email}"...`);
-    const mailOptions = {
-      from: `"Soporte G-IBRO" <${smtpUser}>`,
-      to: email,
-      subject,
-      html,
-    };
-    const transporter = getTransporter();
-    await transporter.sendMail(mailOptions);
-    console.log(`[EMAIL SERVICE] Correo enviado con éxito vía SMTP hacia: ${email}`);
-    return { sent: true };
-  }
-
   console.log(`[EMAIL SERVICE MOCK] No email credentials configured. Link: ${resetLink}`);
   return { sent: false, mockMode: true, resetLink };
 }
 
 async function verifySmtpConnection() {
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+
+  if (smtpUser && smtpPass) {
+    console.log(`[SMTP TEST] Verificando conexión SMTP para ${smtpUser}...`);
+    const transporter = getTransporter();
+    try {
+      await transporter.verify();
+      console.log('[SMTP TEST SUCCESS] Conexión SMTP establecida correctamente.');
+      return;
+    } catch (error) {
+      console.error('[SMTP TEST ERROR] Falló la conexión SMTP en el arranque:', error.message);
+    }
+  }
+
   if (process.env.RESEND_API_KEY) {
     console.log('[SMTP TEST] Usando servicio Resend HTTP API (No requiere verificación SMTP).');
     return;
@@ -122,21 +137,8 @@ async function verifySmtpConnection() {
     return;
   }
 
-  const smtpUser = process.env.SMTP_USER || '';
-  const smtpPass = process.env.SMTP_PASS || '';
-
   if (!smtpUser || !smtpPass) {
     console.warn('[SMTP TEST] SMTP credentials not set in .env. Email service will run in MOCK mode.');
-    return;
-  }
-
-  console.log(`[SMTP TEST] Verificando conexión SMTP para ${smtpUser}...`);
-  const transporter = getTransporter();
-  try {
-    await transporter.verify();
-    console.log('[SMTP TEST SUCCESS] Conexión SMTP establecida correctamente.');
-  } catch (error) {
-    console.error('[SMTP TEST ERROR] Falló la conexión SMTP en el arranque:', error.message);
   }
 }
 
@@ -162,7 +164,28 @@ async function sendLockoutEmail(email, name, unlockLink) {
     </div>
   `;
 
-  // 1. HTTP API: Resend (SDK)
+  // 1. SMTP Local
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+
+  if (smtpUser && smtpPass) {
+    try {
+      const mailOptions = {
+        from: `"Seguridad G-IBRO" <${smtpUser}>`,
+        to: email,
+        subject,
+        html,
+      };
+      const transporter = getTransporter();
+      await transporter.sendMail(mailOptions);
+      console.log(`[EMAIL SERVICE] Correo de bloqueo enviado a: ${email}`);
+      return { sent: true };
+    } catch (err) {
+      console.error(`[EMAIL SERVICE] Error enviando correo de bloqueo vía SMTP:`, err);
+    }
+  }
+
+  // 2. HTTP API: Resend (SDK)
   if (process.env.RESEND_API_KEY) {
     console.log(`[EMAIL SERVICE] Enviando correo de bloqueo vía Resend SDK hacia "${email}"...`);
     const resend = new Resend(process.env.RESEND_API_KEY);
@@ -180,27 +203,6 @@ async function sendLockoutEmail(email, name, unlockLink) {
     } else {
       console.log(`[EMAIL SERVICE] Correo de bloqueo enviado exitosamente con Resend:`, data);
       return { sent: true };
-    }
-  }
-
-  // Intentamos con SMTP Local (Fallback)
-  const smtpUser = process.env.SMTP_USER || '';
-  const smtpPass = process.env.SMTP_PASS || '';
-
-  if (smtpUser && smtpPass) {
-    try {
-      const mailOptions = {
-        from: `"Seguridad G-IBRO" <${smtpUser}>`,
-        to: email,
-        subject,
-        html,
-      };
-      const transporter = getTransporter();
-      await transporter.sendMail(mailOptions);
-      console.log(`[EMAIL SERVICE] Correo de bloqueo enviado a: ${email}`);
-      return { sent: true };
-    } catch (err) {
-      console.error(`[EMAIL SERVICE] Error enviando correo de bloqueo:`, err);
     }
   }
 
