@@ -256,10 +256,28 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       );
 
       // Guardar refreshToken en la base de datos
+      const nowIso = new Date().toISOString();
       await prisma.user.update({
         where: { id: dbUser.id },
-        data: { refreshToken }
+        data: { 
+          refreshToken,
+          lastLogin: nowIso,
+          isOnline: true
+        }
       });
+
+      // Registrar auditoría
+      await prisma.auditoria.create({
+        data: {
+          user: dbUser.user,
+          fecha: nowIso,
+          action: 'LOGIN',
+          modulo: 'Autenticación',
+          recordDetails: 'Inicio de sesión exitoso'
+        }
+      });
+      // Update clients
+      broadcastUpdate('DB_UPDATE');
 
       res.cookie('token', token, {
         httpOnly: true,
@@ -1399,12 +1417,21 @@ io.on('connection', (socket) => {
   // Enviar lista actual al nuevo cliente
   socket.emit('online_users', Array.from(new Set(onlineUsers.values())));
 
-  socket.on('join_chat', (data) => {
+  socket.on('join_chat', async (data) => {
     if (data && data.user) {
       socket.join(data.user);
       onlineUsers.set(socket.id, data.user);
       broadcastOnlineUsers();
       console.log(`User ${data.user} joined personal room`);
+      try {
+        await prisma.user.updateMany({
+          where: { user: data.user },
+          data: { isOnline: true }
+        });
+        broadcastUpdate('DB_UPDATE');
+      } catch (err) {
+        console.error("Error setting isOnline true:", err);
+      }
     }
   });
 
@@ -1436,11 +1463,26 @@ io.on('connection', (socket) => {
      }
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`[Socket.io] Client disconnected: ${socket.id}`);
     if (onlineUsers.has(socket.id)) {
+        const username = onlineUsers.get(socket.id);
         onlineUsers.delete(socket.id);
         broadcastOnlineUsers();
+        
+        // Comprobar si el usuario tiene otras conexiones activas
+        const isStillOnline = Array.from(onlineUsers.values()).includes(username);
+        if (!isStillOnline) {
+            try {
+                await prisma.user.updateMany({
+                    where: { user: username },
+                    data: { isOnline: false }
+                });
+                broadcastUpdate('DB_UPDATE');
+            } catch (err) {
+                console.error("Error setting isOnline false:", err);
+            }
+        }
     }
   });
 });

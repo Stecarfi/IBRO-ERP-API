@@ -49,6 +49,10 @@ model User {
   failedLoginAttempts Int @default(0)
   isLocked            Boolean @default(false)
   
+  // Auditoría de Sesión
+  lastLogin           String?
+  isOnline            Boolean @default(false)
+  
   // Archivos multimedia
   foto                String?
 

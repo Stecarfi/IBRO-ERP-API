@@ -92,7 +92,68 @@ function setupCronJobs() {
     }
   });
 
-  console.log('✅ Cron jobs configurados (Backup automático diario 2:00 AM, Cumpleaños 8:00 AM)');
+  // Función auxiliar para enviar el reporte de actividad
+  const generateActivityReport = async (reportName) => {
+    console.log(`[CRON] Generando reporte de actividad de sesiones: ${reportName}...`);
+    try {
+      const { sendDailyLoginReportEmail } = require('../emailService');
+      const today = new Date();
+      // Ajustar la fecha a inicio de día local para comparar
+      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+      const dateStr = today.toLocaleDateString('es-ES');
+
+      const allUsers = await prisma.user.findMany();
+      const activeUsers = [];
+      const inactiveUsers = [];
+      
+      for (const u of allUsers) {
+        if (u.lastLogin && u.lastLogin >= startOfDay) {
+          activeUsers.push(u);
+        } else {
+          inactiveUsers.push(u);
+        }
+      }
+
+      // Obtener Administrador Master y Director Comercial
+      const adminsAndDirectors = await prisma.user.findMany({
+        where: {
+          OR: [
+            { cargo: { contains: 'Administrad', mode: 'insensitive' } },
+            { cargo: { contains: 'Director', mode: 'insensitive' } }
+          ]
+        }
+      });
+      
+      const adminEmails = adminsAndDirectors.map(a => a.correo).filter(Boolean);
+      const uniqueAdminEmails = [...new Set(adminEmails)];
+
+      // Enviar reporte general a admins/directores
+      if (uniqueAdminEmails.length > 0) {
+          await sendDailyLoginReportEmail(uniqueAdminEmails, activeUsers, inactiveUsers, dateStr, reportName);
+      }
+      
+      // Enviar alerta individual a cada persona que no ingresó
+      for (const inact of inactiveUsers) {
+          if (inact.correo && !uniqueAdminEmails.includes(inact.correo)) {
+              await sendDailyLoginReportEmail([inact.correo], [], [inact], dateStr, reportName);
+          }
+      }
+    } catch (error) {
+      console.error(`[CRON] Error generando reporte de actividad (${reportName}):`, error);
+    }
+  };
+
+  // Configurar reporte de inactividad de sesión de Medio Día (12:00 PM) Lunes a Sábado
+  cron.schedule('0 12 * * 1-6', async () => {
+    await generateActivityReport("Corte de Medio Día");
+  });
+
+  // Configurar reporte de inactividad de sesión de Fin de Jornada (17:00 PM) Lunes a Sábado
+  cron.schedule('0 17 * * 1-6', async () => {
+    await generateActivityReport("Corte de Fin de Jornada");
+  });
+
+  console.log('✅ Cron jobs configurados (Backup 2:00 AM, Cumpleaños 8:00 AM, Reportes de Sesión 12:00 PM y 5:00 PM)');
 }
 
 module.exports = { setupCronJobs };

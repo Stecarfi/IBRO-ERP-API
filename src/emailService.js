@@ -180,8 +180,8 @@ async function sendLockoutEmail(email, name, unlockLink) {
       await transporter.sendMail(mailOptions);
       console.log(`[EMAIL SERVICE] Correo de bloqueo enviado a: ${email}`);
       return { sent: true };
-    } catch (err) {
-      console.error(`[EMAIL SERVICE] Error enviando correo de bloqueo vía SMTP:`, err);
+    } catch (error) {
+      console.error(`[EMAIL SERVICE] Error inesperado enviando correo de bloqueo a ${email}:`, error);
     }
   }
 
@@ -210,8 +210,66 @@ async function sendLockoutEmail(email, name, unlockLink) {
   return { sent: false, mockMode: true, unlockLink };
 }
 
+async function sendDailyLoginReportEmail(adminEmails, activeUsers, inactiveUsers, dateStr, reportName = "Corte Diario") {
+  const subject = `Reporte de Auditoría de Sesiones (${reportName}) - ${dateStr}`;
+  let inactiveHtml = inactiveUsers.map(u => `<li><span style="color:#ef4444;">🔴 INACTIVO</span>: <strong>${u.nombre} ${u.apellido}</strong> (${u.correo}) - Último acceso: ${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Nunca'}</li>`).join('');
+  let activeHtml = activeUsers.map(u => `<li><span style="color:#22c55e;">🟢 ACTIVO</span>: <strong>${u.nombre} ${u.apellido}</strong> (${u.correo}) - Último acceso: ${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'N/A'}</li>`).join('');
+  
+  if (inactiveUsers.length === 0) inactiveHtml = '<li>Todos los usuarios registraron actividad hoy.</li>';
+  if (activeUsers.length === 0) activeHtml = '<li>Ningún usuario registró actividad hoy.</li>';
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; padding: 25px; color: #333; max-width: 650px; margin: auto; border: 1px solid #e4e4e7; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+      <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #002060; padding-bottom: 15px;">
+        <h2 style="color: #002060; margin: 0; font-size: 22px;">Reporte de Inicio de Sesión</h2>
+        <p style="color: #666; font-size: 14px;">Fecha: ${dateStr} | <strong>${reportName}</strong></p>
+      </div>
+      <h3 style="color: #1f2937; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px;">Usuarios Inactivos Hoy</h3>
+      <ul style="list-style: none; padding-left: 0; line-height: 1.6;">${inactiveHtml}</ul>
+      
+      <h3 style="color: #1f2937; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; margin-top: 25px;">Usuarios Activos Hoy</h3>
+      <ul style="list-style: none; padding-left: 0; line-height: 1.6;">${activeHtml}</ul>
+      
+      <div style="font-size: 11px; text-align: center; color: #71717a; margin-top: 30px; border-top: 1px solid #e4e4e7; padding-top: 15px;">
+        <p>Este es un reporte automatizado del sistema G-IBRO.</p>
+      </div>
+    </div>
+  `;
+
+  for (const email of adminEmails) {
+    const smtpUser = process.env.SMTP_USER || '';
+    const smtpPass = process.env.SMTP_PASS || '';
+
+    try {
+      if (smtpUser && smtpPass) {
+        const mailOptions = {
+          from: `"Soporte G-IBRO" <${smtpUser}>`,
+          to: email,
+          subject,
+          html,
+        };
+        const transporter = getTransporter();
+        await transporter.sendMail(mailOptions);
+        console.log(`[EMAIL SERVICE] Reporte de inactividad enviado a: ${email}`);
+      } else if (process.env.RESEND_API_KEY) {
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        await resend.emails.send({
+          from: process.env.EMAIL_FROM || 'Soporte G-IBRO <onboarding@resend.dev>',
+          to: [email],
+          subject: subject,
+          html: html,
+        });
+        console.log(`[EMAIL SERVICE] Reporte enviado con Resend a: ${email}`);
+      }
+    } catch (e) {
+      console.error(`[EMAIL SERVICE] Error enviando reporte a ${email}:`, e);
+    }
+  }
+}
+
 module.exports = {
   sendRecoveryEmail,
   sendLockoutEmail,
-  verifySmtpConnection
+  verifySmtpConnection,
+  sendDailyLoginReportEmail
 };
