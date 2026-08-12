@@ -163,11 +163,11 @@ model Venta {
   
   // Relación con Cliente (Normalizado)
   clienteId         String
-  cliente           Cliente    @relation(fields: [clienteId], references: [id])
+  cliente           Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   
   // Relación con Producto/Inventario (Normalizado)
   productoId        String
-  producto          Inventario @relation(fields: [productoId], references: [id])
+  producto          Inventario @relation(fields: [productoId], references: [id], onDelete: Cascade)
   
   cant              Int
   desc              Float
@@ -202,7 +202,7 @@ model PQR {
   
   // Relación con Cliente (Normalizado)
   clienteId           String
-  cliente             Cliente  @relation(fields: [clienteId], references: [id])
+  cliente             Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   
   tipo                String
   detalle             String
@@ -234,7 +234,7 @@ model Servicio {
   
   // Relación con Cliente (Normalizado)
   clienteId      String
-  cliente        Cliente @relation(fields: [clienteId], references: [id])
+  cliente        Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   
   fechaProg      String
   tipo           String
@@ -344,11 +344,11 @@ model Cotizacion {
   
   // Relación con Cliente (Normalizado)
   clienteId         String
-  cliente           Cliente    @relation(fields: [clienteId], references: [id])
+  cliente           Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   
   // Relación con Producto/Inventario (Normalizado)
   productoId        String
-  producto          Inventario @relation(fields: [productoId], references: [id])
+  producto          Inventario @relation(fields: [productoId], references: [id], onDelete: Cascade)
   
   cant              Int
   desc              Float
