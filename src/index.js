@@ -858,7 +858,8 @@ app.get('/api/db', async (req, res) => {
         ingresoProyectos: 85, 
         gastosInstalacion: 35, 
         anticipos: 12450000, 
-        gastosCajaChica: 2180000 
+        gastosCajaChica: 2180000,
+        diasHabilesMes: 25 
       }
     };
 
@@ -1337,14 +1338,40 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('pendingReset', diff.pendingResets.deleted || []);
     }
 
-    // 18. Configuración WhatsApp (Objeto Único)
-    if (diff.whatsappConfig && diff.whatsappConfig.value) {
-      const val = diff.whatsappConfig.value;
-      await prisma.whatsappConfig.upsert({
-        where: { id: 1 },
-        update: { phone: val.phone, status: val.status },
-        create: { id: 1, phone: val.phone, status: val.status },
-      });
+    // 18. Configuración Global (WhatsApp e Informes)
+    if (diff.config && diff.config.value) {
+      const configVal = diff.config.value;
+      
+      if (configVal.whatsapp) {
+        await prisma.whatsappConfig.upsert({
+          where: { id: 1 },
+          update: { phone: configVal.whatsapp.phone, status: configVal.whatsapp.status },
+          create: { id: 1, phone: configVal.whatsapp.phone, status: configVal.whatsapp.status },
+        });
+      }
+
+      if (configVal.informes) {
+        await prisma.informesConfig.upsert({
+          where: { id: 1 },
+          update: { 
+            margenOperativo: configVal.informes.margenOperativo,
+            ingresoProyectos: configVal.informes.ingresoProyectos,
+            gastosInstalacion: configVal.informes.gastosInstalacion,
+            anticipos: configVal.informes.anticipos,
+            gastosCajaChica: configVal.informes.gastosCajaChica,
+            diasHabilesMes: configVal.informes.diasHabilesMes
+          },
+          create: { 
+            id: 1, 
+            margenOperativo: configVal.informes.margenOperativo,
+            ingresoProyectos: configVal.informes.ingresoProyectos,
+            gastosInstalacion: configVal.informes.gastosInstalacion,
+            anticipos: configVal.informes.anticipos,
+            gastosCajaChica: configVal.informes.gastosCajaChica,
+            diasHabilesMes: configVal.informes.diasHabilesMes
+          },
+        });
+      }
     }
 
     // Determinar si SOLO se actualizó el chat (para evitar bloqueos en el frontend)
