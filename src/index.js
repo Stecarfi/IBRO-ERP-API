@@ -114,6 +114,37 @@ app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
     }
 });
 
+const uploadEvidence = multer({ 
+    storage: storage,
+    fileFilter: function (req, file, cb) {
+        // Permitir imágenes y documentos pdf/word
+        if (file.mimetype.startsWith('image/') || 
+            file.mimetype === 'application/pdf' ||
+            file.mimetype.includes('document')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Formato no válido. Solo imágenes y documentos PDF/Word.'));
+        }
+    }
+});
+
+app.post('/api/upload-evidence', uploadEvidence.array('evidencias', 10), async (req, res) => {
+    try {
+        const isProd = req.get('host').includes('onrender.com');
+        const protocol = isProd ? 'https' : req.protocol;
+        
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+
+        const urls = req.files.map(file => `${protocol}://${req.get('host')}/uploads/${file.filename}`);
+        res.json({ urls });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error uploading evidence' });
+    }
+});
+
 app.delete('/api/remove-avatar', async (req, res) => {
     try {
         const username = req.body.username;
@@ -605,7 +636,18 @@ app.get('/api/db', async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   try {
-    const users = await prisma.user.findMany({ orderBy: { id: 'asc' } });
+    const users = await prisma.user.findMany({
+      select: {
+        id: true, nombre: true, apellido: true, cedula: true, tipoDoc: true,
+        correo: true, cargo: true, telefono: true, observaciones: true,
+        user: true, roleId: true, meta_u: true, ejec_u: true, meta_p: true,
+        ejec_p: true, soundsEnabled: true, cumpleanos: true,
+        habeasDataAccepted: true, failedLoginAttempts: true, isLocked: true,
+        lastLogin: true, isOnline: true, foto: true, lat: true, lng: true,
+        lastLocationUpdate: true, codigoAsesor: true
+      },
+      orderBy: { id: 'asc' }
+    });
     const roles = await prisma.role.findMany({ orderBy: { id: 'asc' } });
     const clientes = await prisma.cliente.findMany({ orderBy: { id: 'asc' } });
     const inventario = await prisma.inventario.findMany({ orderBy: { id: 'asc' } });
@@ -822,9 +864,12 @@ app.get('/api/db', async (req, res) => {
       integrantes: g.integrantes ? JSON.parse(g.integrantes) : []
     }));
 
-    const chat = await prisma.chat.findMany({ orderBy: { timestamp: 'asc' } });
-    const auditoria = await prisma.auditoria.findMany({ orderBy: { id: 'asc' } });
-    const notificaciones = await prisma.notificacion.findMany({ orderBy: { id: 'asc' } });
+    const chatDesc = await prisma.chat.findMany({ orderBy: { timestamp: 'desc' }, take: 150 });
+    const chat = chatDesc.reverse();
+    const auditoriaDesc = await prisma.auditoria.findMany({ orderBy: { id: 'desc' }, take: 200 });
+    const auditoria = auditoriaDesc.reverse();
+    const notificacionesDesc = await prisma.notificacion.findMany({ orderBy: { id: 'desc' }, take: 100 });
+    const notificaciones = notificacionesDesc.reverse();
     const comisionistasRaw = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
     const comisionistas = comisionistasRaw.map(c => ({
       id: c.id,
@@ -1001,18 +1046,29 @@ app.post('/api/db/sync', async (req, res) => {
         }
 
         if (table === 'user' && data.pass) {
-          const isBcrypt = data.pass.startsWith('$2a$') || data.pass.startsWith('$2b$') || data.pass.startsWith('$2y$');
-          if (!isBcrypt) {
-            data.pass = bcrypt.hashSync(data.pass, 10);
-          }
+        const isBcrypt = data.pass.startsWith('$2a$') || data.pass.startsWith('$2b$') || data.pass.startsWith('$2y$');
+        if (!isBcrypt) {
+          data.pass = bcrypt.hashSync(data.pass, 10);
         }
-
-        await prisma[table].upsert({
-          where: { id: item.id },
-          update: data,
-          create: data,
-        });
       }
+
+      // Optimistic Concurrency Control (OCC) - Prevención Anti-Sobrescritura
+      try {
+        const existingRecord = await prisma[table].findUnique({ where: { id: item.id } });
+        if (existingRecord && existingRecord.lockedBy && existingRecord.lockedBy !== user) {
+          console.warn(`[OCC BLOCK] Usuario '${user}' intentó sobrescribir '${table}' ID '${item.id}' que está bloqueado por '${existingRecord.lockedBy}'. Sincronización denegada para este registro.`);
+          continue; // Saltar la actualización para no corromper datos del otro asesor
+        }
+      } catch (e) {
+        // Ignorar si la tabla no soporta findUnique por ID u otras razones
+      }
+
+      await prisma[table].upsert({
+        where: { id: item.id },
+        update: data,
+        create: data,
+      });
+    }
     };
 
     // Helper para eliminaciones en tablas planas directas
