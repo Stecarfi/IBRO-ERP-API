@@ -859,7 +859,10 @@ app.get('/api/db', async (req, res) => {
         gastosInstalacion: 35, 
         anticipos: 12450000, 
         gastosCajaChica: 2180000,
-        diasHabilesMes: 25 
+        diasHabilesMes: 25,
+        mesPresupuesto: "ACTUAL",
+        fechaCorte: "HOY",
+        diasTranscurridos: 0
       }
     };
 
@@ -1359,7 +1362,10 @@ app.post('/api/db/sync', async (req, res) => {
             gastosInstalacion: configVal.informes.gastosInstalacion,
             anticipos: configVal.informes.anticipos,
             gastosCajaChica: configVal.informes.gastosCajaChica,
-            diasHabilesMes: configVal.informes.diasHabilesMes
+            diasHabilesMes: configVal.informes.diasHabilesMes,
+            mesPresupuesto: configVal.informes.mesPresupuesto,
+            fechaCorte: configVal.informes.fechaCorte,
+            diasTranscurridos: configVal.informes.diasTranscurridos
           },
           create: { 
             id: 1, 
@@ -1368,7 +1374,10 @@ app.post('/api/db/sync', async (req, res) => {
             gastosInstalacion: configVal.informes.gastosInstalacion,
             anticipos: configVal.informes.anticipos,
             gastosCajaChica: configVal.informes.gastosCajaChica,
-            diasHabilesMes: configVal.informes.diasHabilesMes
+            diasHabilesMes: configVal.informes.diasHabilesMes,
+            mesPresupuesto: configVal.informes.mesPresupuesto,
+            fechaCorte: configVal.informes.fechaCorte,
+            diasTranscurridos: configVal.informes.diasTranscurridos
           },
         });
       }

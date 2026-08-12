@@ -496,4 +496,7 @@ model InformesConfig {
   anticipos         Float  @default(12450000)
   gastosCajaChica   Float  @default(2180000)
   diasHabilesMes    Int    @default(25)
+  mesPresupuesto    String @default("ACTUAL")
+  fechaCorte        String @default("HOY")
+  diasTranscurridos Int    @default(0)
 }
