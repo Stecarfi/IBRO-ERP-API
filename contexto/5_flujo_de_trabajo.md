@@ -1,21 +1,23 @@
-# Flujo de Trabajo Backend (Workflow)
+# Flujo de Trabajo (Desarrollo Backend): IBRO-ERP-API
 
-## 1. Flujo de una Petición Típica a la API
-1. **Recepción HTTP**: La petición llega a Express.js desde el frontend.
-2. **CORS y Parsers**: El middleware de CORS verifica el origen. El middleware de `express.json()` o Multer extraen el body/archivos.
-3. **Autenticación (Middleware)**: Verifica las cookies o el header `Authorization`. Si el JWT es válido, inyecta `req.user` para uso posterior.
-4. **Validación (Zod)**: Verifica que el body posea todos los campos obligatorios.
-5. **Controlador**: Contiene la lógica de negocio. Realiza consultas a Prisma.
-6. **Emisión de Eventos (Opcional)**: Si la acción afecta a otros usuarios (ej. Chat nuevo, Pedido nuevo), dispara un evento por `Socket.io` a las salas correspondientes.
-7. **Respuesta HTTP**: Devuelve un JSON estructurado con estado HTTP (200, 201, 400).
+## 1. Entorno de Desarrollo Local
+Para inicializar la API y conectarla con la base de datos:
+1. Asegurarse de tener un servidor PostgreSQL configurado, o usar el que provea la variable `DATABASE_URL` en el archivo `.env`.
+2. Desde la terminal en `IBRO-ERP-API`, ejecuta `npm install` si hay nuevas dependencias.
+3. Actualizar la capa de base de datos corriendo `npx prisma generate` y `npx prisma db push` para alinear tu base local con el esquema actual.
+4. Levantar el servicio en modo observador (hot-reload): `npm run dev`. El backend utilizará el puerto 3000 por defecto.
 
-## 2. Flujo de Archivos Restringidos
-* Al subir un archivo al endpoint de Inventario, la petición es interceptada por un middleware de Multer.
-* Multer inspecciona el `mimetype`. Si detecta un `.exe` u otra extensión prohibida, el middleware rechaza la subida inmediatamente, abortando el proceso antes de que llegue al controlador o toque el disco de manera definitiva.
+## 2. Modificación o Adición de Modelos (Prisma)
+Cuando un nuevo requerimiento solicite alterar un flujo de negocio que requiere persistencia (Por ejemplo, añadir un nuevo tipo de campo a "Cotización"):
+1. Modifica el archivo `prisma/schema.prisma` agregando el campo necesario.
+2. Detén el servidor local.
+3. Corre `npx prisma db push` para empujar el cambio de esquema a la base de datos subyacente.
+4. Actualiza los endpoints correspondientes en `src/index.js` para asegurar que procesan (y validan vía Zod) este nuevo campo adecuadamente.
 
-## 3. Flujo de Recuperación de Contraseñas Segura
-* Cliente solicita recuperación (`POST /forgot-password`).
-* Controlador busca si el usuario existe (Prisma). Genera un token JWT temporal y arma un enlace web de un solo uso.
-* El servicio de Email (Resend) intenta enviar el enlace.
-* Si Resend responde OK, el servidor responde con status 200 genérico ("Revisa tu correo").
-* Si Resend falla, el servidor elimina el token y lanza un error 500 genérico ("Error del servidor, inténtelo más tarde"), sin exponer tokens jamás en el payload de respuesta.
+## 3. Subidas de Archivos (Uploads)
+Si estás manipulando endpoints que manejan archivos, recuerda usar las instancias de middleware configuradas (ej. `upload.array('files')`). Valida siempre:
+- **Límite de tamaño**: Evita vulnerabilidades de saturación de disco.
+- **MIME type (fileFilter)**: Asegúrate que archivos ejecutables o peligrosos (.exe, .sh, archivos extraños) sean bloqueados y solo se admitan PDF, Documentos o Imágenes controladas.
+
+## 4. Tareas en Segundo Plano
+Para agregar tareas que deban correr cada cierto tiempo (limpiezas, envíos de reportes), edita `src/cron/backup.js` utilizando la sintaxis de cron POSIX de `node-cron`.
