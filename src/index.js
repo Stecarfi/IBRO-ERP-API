@@ -1122,16 +1122,19 @@ app.post('/api/db/sync', async (req, res) => {
 
       // Upsert
       for (const item of diff.ventas.upserted || []) {
-        // Encontrar Cliente por su documento (docCli)
-        const client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
-        // Encontrar Producto por su idProd o su referencia
-        const product = await prisma.inventario.findFirst({
-          where: { OR: [{ id: item.idProd }, { ref: item.producto }] }
-        });
+        // Encontrar Cliente priorizando ID (si existe) y luego documento
+        let client = null;
+        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
+        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        
+        // Encontrar Producto priorizando ID y luego referencias
+        let product = null;
+        if (item.productoId) product = await prisma.inventario.findUnique({ where: { id: item.productoId } });
+        if (!product && item.idProd) product = await prisma.inventario.findUnique({ where: { id: item.idProd } });
+        if (!product && item.producto) product = await prisma.inventario.findFirst({ where: { ref: item.producto } });
 
         if (!client || !product) {
-          console.error(`Sync Venta ${item.id} fallida: Cliente (${item.docCli}) o Producto (${item.idProd}) no encontrado.`);
-          continue;
+          throw new Error(`Sync Venta ${item.id} fallida: Cliente (${item.clienteId || item.docCli}) o Producto (${item.productoId || item.idProd}) no encontrado.`);
         }
 
         const data = {
@@ -1174,22 +1177,24 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('cotizacion', diff.cotizaciones.deleted || []);
 
       for (const item of diff.cotizaciones.upserted || []) {
-        const client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
-        // Since idProd might be a dummy or manual value, we fall back safely
-        let product = await prisma.inventario.findFirst({
-          where: { OR: [{ id: item.idProd }, { ref: item.producto }] }
-        });
+        // Encontrar Cliente priorizando ID (si existe) y luego documento
+        let client = null;
+        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
+        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+
+        // Encontrar Producto priorizando ID y luego referencias
+        let product = null;
+        if (item.productoId) product = await prisma.inventario.findUnique({ where: { id: item.productoId } });
+        if (!product && item.idProd) product = await prisma.inventario.findUnique({ where: { id: item.idProd } });
+        if (!product && item.producto) product = await prisma.inventario.findFirst({ where: { ref: item.producto } });
 
         // Backwards compatibility fallback if product is not found (e.g. legacy or manual product)
         if (!product) {
-          // Find first product in DB to link, or create a dummy relation if needed.
-          // In most database environments we need to satisfy foreign key constraint.
           product = await prisma.inventario.findFirst();
         }
 
         if (!client || !product) {
-          console.error(`Sync Cotizacion ${item.id} fallida: Cliente o Producto no encontrado.`);
-          continue;
+          throw new Error(`Sync Cotizacion ${item.id} fallida: Cliente o Producto no encontrado.`);
         }
 
         const data = {
@@ -1248,10 +1253,13 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('pQR', diff.pqrs.deleted || []);
 
       for (const item of diff.pqrs.upserted || []) {
-        const client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        // Encontrar Cliente priorizando ID (si existe) y luego documento
+        let client = null;
+        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
+        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        
         if (!client) {
-          console.error(`Sync PQR ${item.id} fallida: Cliente con doc ${item.docCli} no encontrado.`);
-          continue;
+          throw new Error(`Sync PQR ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
         }
 
         const data = {
@@ -1293,10 +1301,13 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('servicio', diff.servicios.deleted || []);
 
       for (const item of diff.servicios.upserted || []) {
-        const client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        // Encontrar Cliente priorizando ID (si existe) y luego documento
+        let client = null;
+        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
+        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        
         if (!client) {
-          console.error(`Sync Servicio ${item.id} fallida: Cliente con doc ${item.docCli} no encontrado.`);
-          continue;
+          throw new Error(`Sync Servicio ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
         }
 
         const data = {
