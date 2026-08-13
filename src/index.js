@@ -1122,16 +1122,22 @@ app.post('/api/db/sync', async (req, res) => {
 
       // Upsert
       for (const item of diff.ventas.upserted || []) {
-        // Encontrar Cliente priorizando ID (si existe) y luego documento
-        let client = null;
-        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
-        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        // Encontrar Cliente (1 sola petición a BD)
+        const clientConditions = [];
+        if (item.clienteId) clientConditions.push({ id: item.clienteId });
+        if (item.docCli) clientConditions.push({ doc: item.docCli });
+        const client = clientConditions.length > 0 
+          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
+          : null;
         
-        // Encontrar Producto priorizando ID y luego referencias
-        let product = null;
-        if (item.productoId) product = await prisma.inventario.findUnique({ where: { id: item.productoId } });
-        if (!product && item.idProd) product = await prisma.inventario.findUnique({ where: { id: item.idProd } });
-        if (!product && item.producto) product = await prisma.inventario.findFirst({ where: { ref: item.producto } });
+        // Encontrar Producto (1 sola petición a BD)
+        const productConditions = [];
+        if (item.productoId) productConditions.push({ id: item.productoId });
+        if (item.idProd) productConditions.push({ id: item.idProd });
+        if (item.producto) productConditions.push({ ref: item.producto });
+        const product = productConditions.length > 0 
+          ? await prisma.inventario.findFirst({ where: { OR: productConditions } }) 
+          : null;
 
         if (!client || !product) {
           throw new Error(`Sync Venta ${item.id} fallida: Cliente (${item.clienteId || item.docCli}) o Producto (${item.productoId || item.idProd}) no encontrado.`);
@@ -1177,16 +1183,22 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('cotizacion', diff.cotizaciones.deleted || []);
 
       for (const item of diff.cotizaciones.upserted || []) {
-        // Encontrar Cliente priorizando ID (si existe) y luego documento
-        let client = null;
-        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
-        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        // Encontrar Cliente (1 sola petición a BD)
+        const clientConditions = [];
+        if (item.clienteId) clientConditions.push({ id: item.clienteId });
+        if (item.docCli) clientConditions.push({ doc: item.docCli });
+        const client = clientConditions.length > 0 
+          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
+          : null;
 
-        // Encontrar Producto priorizando ID y luego referencias
-        let product = null;
-        if (item.productoId) product = await prisma.inventario.findUnique({ where: { id: item.productoId } });
-        if (!product && item.idProd) product = await prisma.inventario.findUnique({ where: { id: item.idProd } });
-        if (!product && item.producto) product = await prisma.inventario.findFirst({ where: { ref: item.producto } });
+        // Encontrar Producto (1 sola petición a BD)
+        const productConditions = [];
+        if (item.productoId) productConditions.push({ id: item.productoId });
+        if (item.idProd) productConditions.push({ id: item.idProd });
+        if (item.producto) productConditions.push({ ref: item.producto });
+        let product = productConditions.length > 0 
+          ? await prisma.inventario.findFirst({ where: { OR: productConditions } }) 
+          : null;
 
         // Backwards compatibility fallback if product is not found (e.g. legacy or manual product)
         if (!product) {
@@ -1253,10 +1265,13 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('pQR', diff.pqrs.deleted || []);
 
       for (const item of diff.pqrs.upserted || []) {
-        // Encontrar Cliente priorizando ID (si existe) y luego documento
-        let client = null;
-        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
-        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        // Encontrar Cliente (1 sola petición a BD)
+        const clientConditions = [];
+        if (item.clienteId) clientConditions.push({ id: item.clienteId });
+        if (item.docCli) clientConditions.push({ doc: item.docCli });
+        const client = clientConditions.length > 0 
+          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
+          : null;
         
         if (!client) {
           throw new Error(`Sync PQR ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
@@ -1301,10 +1316,13 @@ app.post('/api/db/sync', async (req, res) => {
       await flatDelete('servicio', diff.servicios.deleted || []);
 
       for (const item of diff.servicios.upserted || []) {
-        // Encontrar Cliente priorizando ID (si existe) y luego documento
-        let client = null;
-        if (item.clienteId) client = await prisma.cliente.findUnique({ where: { id: item.clienteId } });
-        if (!client && item.docCli) client = await prisma.cliente.findUnique({ where: { doc: item.docCli } });
+        // Encontrar Cliente (1 sola petición a BD)
+        const clientConditions = [];
+        if (item.clienteId) clientConditions.push({ id: item.clienteId });
+        if (item.docCli) clientConditions.push({ doc: item.docCli });
+        const client = clientConditions.length > 0 
+          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
+          : null;
         
         if (!client) {
           throw new Error(`Sync Servicio ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
