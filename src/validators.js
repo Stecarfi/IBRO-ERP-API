@@ -33,20 +33,17 @@ function validateSyncPayload(diff) {
   }
 
   // 2. Validación profunda para tablas críticas
-  const { updated } = diff;
-  if (updated) {
-    if (updated.clientes) {
-      updated.clientes.forEach(c => {
-        const res = clienteSchema.safeParse(c);
-        if (!res.success) throw new Error(`Validación de Cliente fallida: ${res.error.errors[0].message}`);
-      });
-    }
-    if (updated.inventario) {
-      updated.inventario.forEach(i => {
-        const res = inventarioSchema.safeParse(i);
-        if (!res.success) throw new Error(`Validación de Inventario fallida: ${res.error.errors[0].message}`);
-      });
-    }
+  if (diff.clientes && diff.clientes.upserted) {
+    diff.clientes.upserted.forEach(c => {
+      const res = clienteSchema.safeParse(c);
+      if (!res.success) throw new Error(`Validación de Cliente fallida: ${res.error.errors[0].message}`);
+    });
+  }
+  if (diff.inventario && diff.inventario.upserted) {
+    diff.inventario.upserted.forEach(i => {
+      const res = inventarioSchema.safeParse(i);
+      if (!res.success) throw new Error(`Validación de Inventario fallida: ${res.error.errors[0].message}`);
+    });
   }
 
   return true;
