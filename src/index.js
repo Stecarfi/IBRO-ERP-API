@@ -1494,6 +1494,9 @@ app.post('/api/db/sync', async (req, res) => {
 
     broadcastUpdate(updateType);
     // 🛡️ Trazabilidad de Auditoría
+    // NOTA: Se deshabilita el log genérico del backend porque el frontend 
+    // ya genera logs específicos (logAudit) mucho más descriptivos.
+    /*
     const actorUser = user || 'Sistema';
     for (const table of allTables) {
       if (diff[table]?.upserted && diff[table].upserted.length > 0) {
@@ -1519,6 +1522,7 @@ app.post('/api/db/sync', async (req, res) => {
         });
       }
     }
+    */
 
     res.json({ success: true, timestamp: Date.now() });
   } catch (error) {
