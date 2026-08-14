@@ -24,7 +24,7 @@ setupCronJobs();
 
 // Middleware de Autenticación
 const authenticateToken = (req, res, next) => {
-  const token = req.cookies?.token;
+  const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
   if (!token) return res.status(401).json({ error: 'Acceso denegado. No hay token proporcionado.' });
 
   jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
@@ -272,6 +272,11 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     }
 
     if (dbUser.isLocked) {
+      console.log(`\n======================================================`);
+      console.log(`[ALERTA] Usuario ya está bloqueado: ${dbUser.user}`);
+      console.log(`URL PARA DESBLOQUEAR INMEDIATAMENTE:`);
+      console.log(`https://ibro-api.onrender.com/api/emergency-unlock/${encodeURIComponent(dbUser.user)}`);
+      console.log(`======================================================\n`);
       return res.status(403).json({ error: 'Cuenta bloqueada por seguridad. Revisa tu correo electrónico para desbloquearla.' });
     }
 
@@ -350,7 +355,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
       });
 
-      return res.json({ success: true, user: dbUser });
+      return res.json({ success: true, user: dbUser, token, refreshToken });
     } else {
       // Incrementar intentos fallidos
       const newAttempts = dbUser.failedLoginAttempts + 1;
@@ -450,7 +455,7 @@ app.post('/api/refresh', async (req, res) => {
       maxAge: 15 * 60 * 1000
     });
 
-    res.json({ success: true });
+    res.json({ success: true, token });
   } catch (error) {
     console.error('Refresh token error:', error);
     const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none' };
