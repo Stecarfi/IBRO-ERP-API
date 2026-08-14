@@ -500,3 +500,20 @@ model InformesConfig {
   fechaCorte        String @default("HOY")
   diasTranscurridos Int    @default(0)
 }
+
+// 20. Cuentas de Cobro
+model CuentasCobro {
+  id          String   @id
+  ciudad      String?
+  fecha       String?
+  cuenta      String?
+  nombre      String?
+  cedula      String?
+  correo      String?
+  concepto    String?
+  items       String?  @db.Text
+  nequi       String?
+  titular     String?
+  estado      String?
+  total       Float?   @default(0)
+}

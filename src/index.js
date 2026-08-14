@@ -885,6 +885,23 @@ app.get('/api/db', async (req, res) => {
     const auditoria = auditoriaDesc.reverse();
     const notificacionesDesc = await prisma.notificacion.findMany({ orderBy: { id: 'desc' }, take: 100 });
     const notificaciones = notificacionesDesc.reverse();
+    const cuentasCobroRaw = await prisma.cuentasCobro.findMany({ orderBy: { fecha: 'asc' } });
+    const cuentasCobro = cuentasCobroRaw.map(c => ({
+      id: c.id,
+      ciudad: c.ciudad || '',
+      fecha: c.fecha || '',
+      cuenta: c.cuenta || '',
+      nombre: c.nombre || '',
+      cedula: c.cedula || '',
+      correo: c.correo || '',
+      concepto: c.concepto || '',
+      items: c.items ? JSON.parse(c.items) : [],
+      nequi: c.nequi || '',
+      titular: c.titular || '',
+      estado: c.estado || '',
+      total: c.total || 0
+    }));
+
     const comisionistasRaw = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
     const comisionistas = comisionistasRaw.map(c => ({
       id: c.id,
@@ -946,6 +963,7 @@ app.get('/api/db', async (req, res) => {
       auditoria,
       notificaciones,
       comisionistas,
+      cuentasCobro,
       config: appConfig,
       whatsappConfig,
       pendingResets
@@ -1433,6 +1451,33 @@ app.post('/api/db/sync', async (req, res) => {
     if (diff.comisionistas) {
       await flatUpsert('comisionista', diff.comisionistas.upserted || []);
       await flatDelete('comisionista', diff.comisionistas.deleted || []);
+    }
+
+    // 20. Cuentas de Cobro
+    if (diff.cuentasCobro) {
+      await flatDelete('cuentasCobro', diff.cuentasCobro.deleted || []);
+      for (const item of diff.cuentasCobro.upserted || []) {
+        const data = {
+          ciudad: item.ciudad || null,
+          fecha: item.fecha || null,
+          cuenta: item.cuenta || null,
+          nombre: item.nombre || null,
+          cedula: item.cedula || null,
+          correo: item.correo || null,
+          concepto: item.concepto || null,
+          items: item.items ? JSON.stringify(item.items) : null,
+          nequi: item.nequi || null,
+          titular: item.titular || null,
+          estado: item.estado || null,
+          total: item.total ? parseFloat(item.total) : 0,
+        };
+
+        await prisma.cuentasCobro.upsert({
+          where: { id: item.id },
+          update: data,
+          create: { id: item.id, ...data },
+        });
+      }
     }
 
     // 17. PendingResets
