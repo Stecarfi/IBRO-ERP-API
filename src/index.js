@@ -231,6 +231,20 @@ app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// GET /api/emergency-unlock/:user - Ruta temporal de emergencia para desbloquear la cuenta
+app.get('/api/emergency-unlock/:user', async (req, res) => {
+  try {
+    const { user } = req.params;
+    await prisma.user.updateMany({
+      where: { user: { equals: user, mode: 'insensitive' } },
+      data: { isLocked: false, failedLoginAttempts: 0 }
+    });
+    res.send(`<h1>Cuenta de ${user} desbloqueada con éxito!</h1><p>Ya puedes intentar iniciar sesión de nuevo.</p>`);
+  } catch (error) {
+    res.status(500).send(`Error al desbloquear: ${error.message}`);
+  }
+});
+
 // POST /api/login: Autenticación de usuario con bcrypt
 app.post('/api/login', loginLimiter, async (req, res) => {
   // Validación Paranoica con Zod
@@ -324,15 +338,15 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 
       res.cookie('token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         maxAge: 15 * 60 * 1000 // 15 min
       });
 
       res.cookie('refreshToken', refreshToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
       });
 
@@ -370,6 +384,11 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       });
 
       if (isNowLocked) {
+        console.log(`\n======================================================`);
+        console.log(`[ALERTA] Usuario bloqueado: ${dbUser.user}`);
+        console.log(`URL PARA DESBLOQUEAR INMEDIATAMENTE:`);
+        console.log(`https://ibro-api.onrender.com/api/emergency-unlock/${encodeURIComponent(dbUser.user)}`);
+        console.log(`======================================================\n`);
         return res.status(403).json({ error: 'Cuenta bloqueada por demasiados intentos fallidos. Revisa tu correo.' });
       }
 
@@ -397,8 +416,9 @@ app.post('/api/logout', async (req, res) => {
     }
   }
 
-  res.clearCookie('token');
-  res.clearCookie('refreshToken');
+  const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none' };
+  res.clearCookie('token', cookieOpts);
+  res.clearCookie('refreshToken', cookieOpts);
   res.json({ success: true });
 });
 
@@ -425,16 +445,17 @@ app.post('/api/refresh', async (req, res) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: true,
+      sameSite: 'none',
       maxAge: 15 * 60 * 1000
     });
 
     res.json({ success: true });
   } catch (error) {
     console.error('Refresh token error:', error);
-    res.clearCookie('token');
-    res.clearCookie('refreshToken');
+    const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none' };
+    res.clearCookie('token', cookieOpts);
+    res.clearCookie('refreshToken', cookieOpts);
     res.status(403).json({ error: 'Refresh token expired' });
   }
 });
