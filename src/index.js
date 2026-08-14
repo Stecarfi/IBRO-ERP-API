@@ -940,6 +940,22 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       }
     };
 
+    const capacitacionesRaw = await prisma.capacitacion.findMany({ orderBy: { fecha: 'desc' } });
+    const capacitaciones = capacitacionesRaw.map(c => ({
+      id: c.id,
+      tema: c.tema,
+      descripcion: c.descripcion || '',
+      fecha: c.fecha,
+      hora: c.hora,
+      obligatoria: c.obligatoria,
+      creador: c.creador,
+      videoLink: c.videoLink || '',
+      materiales: c.materiales ? JSON.parse(c.materiales) : [],
+      asistentes: c.asistentes ? JSON.parse(c.asistentes) : [],
+      estado: c.estado,
+      lockedBy: c.lockedBy
+    }));
+
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
 
     res.json({
@@ -961,6 +977,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       notificaciones,
       comisionistas,
       cuentasCobro,
+      capacitaciones,
       config: appConfig,
       whatsappConfig,
       pendingResets

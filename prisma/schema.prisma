@@ -517,3 +517,19 @@ model CuentasCobro {
   estado      String?
   total       Float?   @default(0)
 }
+
+// 21. Capacitaciones en Ventas
+model Capacitacion {
+  id            String  @id
+  tema          String
+  descripcion   String? @db.Text
+  fecha         String
+  hora          String
+  obligatoria   Boolean @default(true)
+  creador       String
+  videoLink     String?
+  materiales    String? @db.Text // JSON para adjuntos
+  asistentes    String? @db.Text // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
+  estado        String  @default("Programada") // Programada, En Curso, Finalizada
+  lockedBy      String?
+}
