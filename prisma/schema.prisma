@@ -521,6 +521,7 @@ model CuentasCobro {
 // 21. Capacitaciones en Ventas
 model Capacitacion {
   id            String  @id
+  tipo          String  @default("En Vivo") // "En Vivo", "Autodidactico"
   tema          String
   descripcion   String? @db.Text
   fecha         String
