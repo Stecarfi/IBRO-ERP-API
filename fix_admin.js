@@ -1,12 +1,11 @@
 const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
 const bcrypt = require('bcryptjs');
+const prisma = new PrismaClient();
 
-async function main() {
-  console.log('=== TEMPORARY PRODUCTION PASSWORD AND PERMISSIONS RESET ===');
+async function run() {
   const hashedPassword = bcrypt.hashSync('admin', 10);
   
-  // 1. Garantizar que el Rol 1 (Administrador Master) tiene TODOS los permisos absolutos
+  // Update Role 1 to have all permissions possible
   const sysModules = [
     'dashboard', 'chat', 'whatsapp_comercial', 'clientes', 'cotizaciones', 'ventas',
     'inventario', 'servicios', 'pqrs', 'registro_ventas', 'comisionistas', 'solicitudes',
@@ -41,9 +40,7 @@ async function main() {
       permissions: JSON.stringify({ isSuperAdmin: true, fullAccess: true })
     }
   });
-  console.log('Role 1 (Administrador Master) updated with ALL permissions.');
 
-  // 2. Garantizar que stecarfi05 existe, está desbloqueado y tiene el Rol 1
   const existingUser = await prisma.user.findFirst({
     where: { 
       user: { 
@@ -54,7 +51,6 @@ async function main() {
   });
 
   if (existingUser) {
-    // Si existe, actualizar y asegurar nombre, contraseña y permisos
     await prisma.user.update({
       where: { id: existingUser.id },
       data: {
@@ -66,15 +62,14 @@ async function main() {
         failedLoginAttempts: 0
       }
     });
-    console.log(`Updated existing user record (id: ${existingUser.id}) to username 'stecarfi05' with ALL permissions.`);
+    console.log('Updated existing user Stecarfi05 successfully.');
   } else {
-    // Si no existe, crearlo desde cero
-    const newUser = await prisma.user.create({
+    await prisma.user.create({
       data: {
-        id: Date.now().toString(),
+        id: 'user_master_1',
         nombre: 'Stephanie',
         apellido: 'Carrasquilla',
-        cedula: '222',
+        cedula: 'MASTER',
         correo: 'djuridica@obelixsa.com',
         cargo: 'Administrador Master',
         user: 'stecarfi05',
@@ -84,16 +79,8 @@ async function main() {
         failedLoginAttempts: 0
       }
     });
-    console.log(`Created new user 'stecarfi05' from scratch (id: ${newUser.id}) with ALL permissions.`);
+    console.log('Created new user Stecarfi05 successfully.');
   }
-  
-  console.log('=== PASSWORD AND PERMISSIONS RESET SUCCESSFUL ===');
 }
 
-main()
-  .catch(err => {
-    console.error('Error during password and permissions reset:', err);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+run().catch(console.error).finally(() => prisma.$disconnect());
