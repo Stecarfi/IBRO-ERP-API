@@ -1,7 +1,7 @@
 const prisma = require('../prisma');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { sendResetEmail } = require('./emailService');
+const { sendResetEmail } = require('../emailService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'ibro_fallback_secret_2026';
 

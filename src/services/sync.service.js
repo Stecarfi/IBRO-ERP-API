@@ -1,7 +1,7 @@
 const prisma = require('../prisma');
 
 class SyncService {
-async getDb() {
+  async getDb() {
     const users = await prisma.user.findMany({
       select: {
         id: true, nombre: true, apellido: true, cedula: true, tipoDoc: true,
@@ -86,7 +86,7 @@ async getDb() {
       usuarioAsignado: p.usuarioAsignado
     }));
 
-    // Mapear Servicios Técnicos
+    // Mapear Servicios T├®cnicos
     const serviciosRaw = await prisma.servicio.findMany({
       include: { cliente: true },
       orderBy: { id: 'asc' }
@@ -278,7 +278,7 @@ async getDb() {
     const whatsappConfig = config ? { phone: config.phone, status: config.status } : { phone: '', status: 'Activo' };
     const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
     
-    // Configuración general combinada
+    // Configuraci├│n general combinada
     const appConfig = {
       whatsapp: whatsappConfig || { phone: '', status: 'Activo' },
       informes: informesConfig || { 
@@ -311,93 +311,14 @@ async getDb() {
     }));
 
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
-
-    res.json({
-      users,
-      roles,
-      clientes,
-      inventario,
-      ventas,
-      pqrs,
-      servicios,
-      solicitudes,
-      procesosDisciplinarios,
-      evaluaciones,
-      anuncios,
-      cotizaciones,
-      chatGroups,
-      chat,
-      auditoria,
-      notificaciones,
-      comisionistas,
-      cuentasCobro,
-      capacitaciones,
-      config: appConfig,
-      whatsappConfig,
-      pendingResets
-    });
-  } catch (error) {
-    console.error('Error fetching database:', error);
-    res.status(500).json({ error: 'Error al cargar la base de datos', details: error.message });
-  }
-});
-
-// POST /api/location/update: Reportar ubicación en tiempo real
-app.post('/api/location/update', authenticateToken, async (req, res) => {
-  const { user, lat, lng } = req.body;
-  if (!user || lat === undefined || lng === undefined) {
-    return res.status(400).json({ error: 'Faltan datos de ubicación' });
-  }
-
-  try {
-    await prisma.user.updateMany({
-      where: { user: { equals: user, mode: 'insensitive' } },
-      data: {
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
-        lastLocationUpdate: Date.now()
-      }
-    });
     return {
       users, roles, clientes, inventario, ventas, pqrs, servicios,
       solicitudes, procesosDisciplinarios, evaluaciones, anuncios,
-      cotizaciones, chatGroups, chat, auditoria, notificaciones, cuentasCobro, comisionistas, informesConfig, capacitaciones
+      cotizaciones, chatGroups, chat, auditoria, notificaciones, cuentasCobro, comisionistas, informesConfig, capacitaciones, pendingResets, config: appConfig, whatsappConfig
     };
-}
-
-async sync(diff, user) {
-        lat: true,
-        lng: true,
-        lastLocationUpdate: true
-      },
-      where: {
-        lat: { not: null },
-        lng: { not: null }
-      }
-    });
-    res.json(users);
-  } catch (error) {
-    console.error('Error obteniendo ubicaciones:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-// POST /api/db/sync: Procesa el diff incremental del cliente
-app.post('/api/db/sync', authenticateToken, async (req, res) => {
-  const { diff, user } = req.body;
-  if (!diff) {
-    return res.status(400).json({ error: 'No diff payload provided' });
   }
 
-  try {
-    // 🛡️ Zod Global: Validación Estricta
-    validateSyncPayload(diff);
-  } catch (validationError) {
-    console.error('Zod Validation Blocked Request:', validationError.message);
-    return res.status(400).json({ error: validationError.message });
-  }
-
-  try {
+  async sync(diff, user) {
     await prisma.$transaction(async (tx) => {
       // Helper para upserts en tablas planas directas
       const flatUpsert = async (table, items) => {
@@ -408,7 +329,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           // Ya permitimos que foto se guarde y sincronice
         }
 
-        // Evitar conflictos por llaves únicas (como doc en Clientes o user en Usuarios)
+        // Evitar conflictos por llaves ├║nicas (como doc en Clientes o user en Usuarios)
         if (table === 'cliente' && item.doc) {
           const existing = await tx.cliente.findUnique({ where: { doc: item.doc } });
           if (existing) {
@@ -446,12 +367,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         }
       }
 
-      // Optimistic Concurrency Control (OCC) - Prevención Anti-Sobrescritura
+      // Optimistic Concurrency Control (OCC) - Prevenci├│n Anti-Sobrescritura
       try {
         const existingRecord = await tx[table].findUnique({ where: { id: item.id } });
         if (existingRecord && existingRecord.lockedBy && existingRecord.lockedBy !== user) {
-          console.warn(`[OCC BLOCK] Usuario '${user}' intentó sobrescribir '${table}' ID '${item.id}' que está bloqueado por '${existingRecord.lockedBy}'. Sincronización denegada para este registro.`);
-          continue; // Saltar la actualización para no corromper datos del otro asesor
+          console.warn(`[OCC BLOCK] Usuario '${user}' intent├│ sobrescribir '${table}' ID '${item.id}' que est├í bloqueado por '${existingRecord.lockedBy}'. Sincronizaci├│n denegada para este registro.`);
+          continue; // Saltar la actualizaci├│n para no corromper datos del otro asesor
         }
       } catch (e) {
         // Ignorar si la tabla no soporta findUnique por ID u otras razones
@@ -509,14 +430,14 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
     // --- FASE 2: Tablas Relacionales (Dependen de Clientes y Productos) ---
 
-    // 5. Ventas / Facturación
+    // 5. Ventas / Facturaci├│n
     if (diff.ventas) {
       // Eliminar primero
       await flatDelete('venta', diff.ventas.deleted || []);
 
       // Upsert
       for (const item of diff.ventas.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
+        // Encontrar Cliente (1 sola petici├│n a BD)
         const clientConditions = [];
         if (item.clienteId) clientConditions.push({ id: item.clienteId });
         if (item.docCli) clientConditions.push({ doc: item.docCli });
@@ -524,7 +445,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
           : null;
         
-        // Encontrar Producto (1 sola petición a BD)
+        // Encontrar Producto (1 sola petici├│n a BD)
         const productConditions = [];
         if (item.productoId) productConditions.push({ id: item.productoId });
         if (item.idProd) productConditions.push({ id: item.idProd });
@@ -577,7 +498,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       await flatDelete('cotizacion', diff.cotizaciones.deleted || []);
 
       for (const item of diff.cotizaciones.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
+        // Encontrar Cliente (1 sola petici├│n a BD)
         const clientConditions = [];
         if (item.clienteId) clientConditions.push({ id: item.clienteId });
         if (item.docCli) clientConditions.push({ doc: item.docCli });
@@ -585,7 +506,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
           : null;
 
-        // Encontrar Producto (1 sola petición a BD)
+        // Encontrar Producto (1 sola petici├│n a BD)
         const productConditions = [];
         if (item.productoId) productConditions.push({ id: item.productoId });
         if (item.idProd) productConditions.push({ id: item.idProd });
@@ -659,7 +580,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       await flatDelete('pQR', diff.pqrs.deleted || []);
 
       for (const item of diff.pqrs.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
+        // Encontrar Cliente (1 sola petici├│n a BD)
         const clientConditions = [];
         if (item.clienteId) clientConditions.push({ id: item.clienteId });
         if (item.docCli) clientConditions.push({ doc: item.docCli });
@@ -705,12 +626,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       }
     }
 
-    // 8. Servicios Técnicos
+    // 8. Servicios T├®cnicos
     if (diff.servicios) {
       await flatDelete('servicio', diff.servicios.deleted || []);
 
       for (const item of diff.servicios.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
+        // Encontrar Cliente (1 sola petici├│n a BD)
         const clientConditions = [];
         if (item.clienteId) clientConditions.push({ id: item.clienteId });
         if (item.docCli) clientConditions.push({ doc: item.docCli });
@@ -796,7 +717,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       await flatDelete('chatGroup', diff.chatGroups.deleted || []);
     }
 
-    // 14. Auditoría
+    // 14. Auditor├¡a
     if (diff.auditoria) {
       await flatUpsert('auditoria', diff.auditoria.upserted || []);
       await flatDelete('auditoria', diff.auditoria.deleted || []);
@@ -847,7 +768,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       await flatDelete('pendingReset', diff.pendingResets.deleted || []);
     }
 
-    // 18. Configuración Global (WhatsApp e Informes)
+    // 18. Configuraci├│n Global (WhatsApp e Informes)
     if (diff.config && diff.config.value) {
       const configVal = diff.config.value;
       
@@ -889,121 +810,11 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       }
     }
 
-    // Fin de la transacción
+    // Fin de la transacci├│n
     }, {
       timeout: 30000 // 30s timeout para sincronizaciones grandes
     });
-
-    // Determinar si SOLO se actualizó el chat (para evitar bloqueos en el frontend)
-    let updateType = 'DB_UPDATE';
-    const allTables = Object.keys(diff || {});
-    
-    // Si la solicitud modificó/eliminó algo, y TODAS las tablas modificadas son 'chat'
-    if (allTables.length > 0 && allTables.every(t => t === 'chat')) {
-      updateType = 'CHAT_UPDATE';
-    }
-
-    broadcastUpdate(updateType);
-    // 🛡️ Trazabilidad de Auditoría
-    // NOTA: Se deshabilita el log genérico del backend porque el frontend 
-    // ya genera logs específicos (logAudit) mucho más descriptivos.
-    /*
-    const actorUser = user || 'Sistema';
-    for (const table of allTables) {
-      if (diff[table]?.upserted && diff[table].upserted.length > 0) {
-        await prisma.auditoria.create({
-          data: {
-            user: actorUser,
-            fecha: new Date().toISOString(),
-            action: 'UPDATE/INSERT',
-            modulo: table,
-            recordDetails: JSON.stringify(diff[table].upserted.map(i => i.id || i.doc || 'unknown'))
-          }
-        });
-      }
-      if (diff[table]?.deleted && diff[table].deleted.length > 0) {
-        await prisma.auditoria.create({
-          data: {
-            user: actorUser,
-            fecha: new Date().toISOString(),
-            action: 'DELETE',
-            modulo: table,
-            recordDetails: JSON.stringify(diff[table].deleted)
-          }
-        });
-      }
-    }
-    */
-
-    res.json({ success: true, timestamp: Date.now() });
-  } catch (error) {
-    console.error('Error syncing database:', error);
-    res.status(500).json({ error: 'Error al sincronizar la base de datos', details: error.message });
   }
-});
-
-const PORT = process.env.PORT || 3000;
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
-
-function broadcastUpdate(type = 'DB_UPDATE') {
-  io.emit('db_update', { type, timestamp: Date.now() });
 }
 
-const onlineUsers = new Map(); // socket.id -> username
-
-function broadcastOnlineUsers() {
-    const uniqueUsers = Array.from(new Set(onlineUsers.values()));
-    io.emit('online_users', uniqueUsers);
-}
-
-io.on('connection', (socket) => {
-  console.log(`[Socket.io] Client connected: ${socket.id}`);
-  
-  // Enviar lista actual al nuevo cliente
-  socket.emit('online_users', Array.from(new Set(onlineUsers.values())));
-
-  socket.on('join_chat', async (data) => {
-    if (data && data.user) {
-      socket.join(data.user);
-      onlineUsers.set(socket.id, data.user);
-      broadcastOnlineUsers();
-      console.log(`User ${data.user} joined personal room`);
-      try {
-        await prisma.user.updateMany({
-          where: { user: data.user },
-          data: { isOnline: true }
-        });
-        broadcastUpdate('DB_UPDATE');
-      } catch (err) {
-        console.error("Error setting isOnline true:", err);
-      }
-    }
-  });
-
-  socket.on('join_group', (groupId) => {
-     socket.join(groupId);
-     console.log(`Socket joined group ${groupId}`);
-  });
-
-  socket.on('send_message', (messageData) => {
-    if (messageData.to === 'Todos') {
-        socket.broadcast.emit('receive_message', messageData);
-    } else if (messageData.to && messageData.to.startsWith('group_')) {
-        socket.to(messageData.to).emit('receive_message', messageData);
-    } else if (messageData.to) {
-        socket.to(messageData.to).emit('receive_message', messageData);
-    }
-  });
-
-  socket.on('send_nudge', (data) => {
-     if (data.to) {
-         if (data.to === 'Todos') socket.broadcast.emit('receive_nudge', data);
-}
-}
 module.exports = new SyncService();
