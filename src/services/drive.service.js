@@ -13,10 +13,12 @@ class DriveService {
 
     init() {
         try {
-            const credentialsBase64 = process.env.GOOGLE_CREDENTIALS_BASE64;
+            const clientId = process.env.GOOGLE_CLIENT_ID;
+            const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+            const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
             
-            if (!credentialsBase64) {
-                console.warn('[DRIVE SERVICE] GOOGLE_CREDENTIALS_BASE64 no está configurado. La subida a Drive no funcionará.');
+            if (!clientId || !clientSecret || !refreshToken) {
+                console.warn('[DRIVE SERVICE] Faltan variables de entorno GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET o GOOGLE_REFRESH_TOKEN. La subida a Drive no funcionará.');
                 return;
             }
 
@@ -25,18 +27,19 @@ class DriveService {
                 return;
             }
 
-            // Decodificar Base64 a JSON
-            const credentialsJson = Buffer.from(credentialsBase64, 'base64').toString('utf-8');
-            const credentials = JSON.parse(credentialsJson);
+            // Autenticación con OAuth2 usando Refresh Token
+            const oauth2Client = new google.auth.OAuth2(
+                clientId,
+                clientSecret,
+                'https://developers.google.com/oauthplayground' // Redirect URI
+            );
 
-            // Autenticación con Google Auth usando las credenciales del Service Account
-            const auth = new google.auth.GoogleAuth({
-                credentials,
-                scopes: ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
+            oauth2Client.setCredentials({
+                refresh_token: refreshToken
             });
 
-            this.drive = google.drive({ version: 'v3', auth });
-            console.log('[DRIVE SERVICE] Servicio de Google Drive inicializado correctamente.');
+            this.drive = google.drive({ version: 'v3', auth: oauth2Client });
+            console.log('[DRIVE SERVICE] Servicio de Google Drive (OAuth2) inicializado correctamente.');
         } catch (error) {
             console.error('[DRIVE SERVICE] Error al inicializar Google Drive:', error);
         }
