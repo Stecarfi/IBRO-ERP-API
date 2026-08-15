@@ -99,14 +99,14 @@ class DriveService {
                 console.warn(`[DRIVE SERVICE] No se pudo hacer público el archivo ${fileId} automáticamente. Si la carpeta es pública, ignorar. Error:`, permError.message);
             }
 
-            // Extraer de nuevo los detalles para obtener el webViewLink si la creación de permisos afectó
-            const finalFile = await this.drive.files.get({
+            // Extraer de nuevo los detalles para asegurar que se guardaron los permisos
+            await this.drive.files.get({
                 fileId: fileId,
-                fields: 'webViewLink, webContentLink'
+                fields: 'id'
             });
 
-            // webViewLink es ideal para previsualizar (por ejemplo, avatares o PDFs)
-            return finalFile.data.webViewLink;
+            // Retornamos un enlace "Raw" directo que funciona perfecto en etiquetas <img> de HTML/React
+            return `https://drive.google.com/uc?export=view&id=${fileId}`;
         } catch (error) {
             console.error('[DRIVE SERVICE] Error durante la subida:', error);
             throw error;
