@@ -25,10 +25,16 @@ setupCronJobs();
 // Middleware de Autenticación
 const authenticateToken = (req, res, next) => {
   const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
-  if (!token) return res.status(401).json({ error: 'Acceso denegado. No hay token proporcionado.' });
+  if (!token) {
+    console.error(`[AUTH ERROR] No token provided. Request to: ${req.originalUrl}. Headers auth: ${req.headers['authorization']}, Cookies: ${JSON.stringify(req.cookies)}`);
+    return res.status(401).json({ error: 'Acceso denegado. No hay token proporcionado.' });
+  }
 
   jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
-    if (err) return res.status(403).json({ error: 'Token expirado o inválido.' });
+    if (err) {
+      console.error(`[AUTH ERROR] Invalid token: ${err.message}`);
+      return res.status(403).json({ error: 'Token expirado o inválido.' });
+    }
     req.user = user;
     next();
   });
@@ -39,7 +45,8 @@ app.use(cors({
     origin: function(origin, callback) {
         callback(null, true);
     },
-    credentials: true
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
 }));
 
 // 🛡️ Rate Limiting Global (Anti-DDoS)
