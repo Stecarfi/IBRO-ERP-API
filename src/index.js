@@ -11,6 +11,7 @@ const { z } = require('zod');
 const { validateSyncPayload } = require('./validators');
 const { askGemini, geminiLogs } = require('./geminiService');
 const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('./emailService');
+const driveService = require('./services/drive.service');
 
 const path = require('path');
 const app = express();
@@ -76,15 +77,7 @@ if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadsDir)
-    },
-    filename: function (req, file, cb) {
-        const ext = path.extname(file.originalname);
-        cb(null, crypto.randomUUID() + ext)
-    }
-});
+const storage = multer.memoryStorage(); // Cambiado a memory storage para subir a Google Drive
 const upload = multer({ 
     storage: storage,
     fileFilter: function (req, file, cb) {
@@ -100,10 +93,11 @@ app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async
     try {
         const username = req.body.username;
         if (!username) return res.status(400).json({ error: 'Username required' });
+        if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
         
-        // Eliminar foto vieja de la memoria/disco
+        // Eliminar foto vieja de la memoria/disco (solo si es un archivo local heredado)
         const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-        if (user && user.foto) {
+        if (user && user.foto && !user.foto.includes('drive.google.com')) {
             try {
                 const oldFileName = path.basename(user.foto);
                 const oldFilePath = path.join(uploadsDir, oldFileName);
@@ -115,10 +109,8 @@ app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async
             }
         }
         
-        // Retornar nueva URL
-        const isProd = req.get('host').includes('onrender.com');
-        const protocol = isProd ? 'https' : req.protocol;
-        const newUrl = `${protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+        // Subir buffer a Google Drive
+        const newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
         
         // Guardar URL real en la base de datos
         await prisma.user.updateMany({
@@ -149,14 +141,16 @@ const uploadEvidence = multer({
 
 app.post('/api/upload-evidence', authenticateToken, uploadEvidence.array('evidencias', 10), async (req, res) => {
     try {
-        const isProd = req.get('host').includes('onrender.com');
-        const protocol = isProd ? 'https' : req.protocol;
-        
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
-        const urls = req.files.map(file => `${protocol}://${req.get('host')}/uploads/${file.filename}`);
+        const urls = [];
+        for (const file of req.files) {
+            const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+            urls.push(driveUrl);
+        }
+
         res.json({ urls });
     } catch (error) {
         console.error(error);
@@ -170,7 +164,7 @@ app.delete('/api/remove-avatar', authenticateToken, async (req, res) => {
         if (!username) return res.status(400).json({ error: 'Username required' });
         
         const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-        if (user && user.foto) {
+        if (user && user.foto && !user.foto.includes('drive.google.com')) {
             try {
                 const oldFileName = path.basename(user.foto);
                 const oldFilePath = path.join(uploadsDir, oldFileName);
@@ -195,16 +189,20 @@ app.delete('/api/remove-avatar', authenticateToken, async (req, res) => {
 // Endpoint genérico de subida de archivos (Evidencias de PQRS, Solicitudes, etc.)
 app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req, res) => {
     try {
-        const uploadedFiles = req.files.map(file => {
-            const isProd = req.get('host').includes('onrender.com');
-            const protocol = isProd ? 'https' : req.protocol;
-            return {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+
+        const uploadedFiles = [];
+        for (const file of req.files) {
+            const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+            uploadedFiles.push({
                 name: file.originalname,
                 type: file.mimetype,
                 size: file.size,
-                url: `${protocol}://${req.get('host')}/uploads/${file.filename}`
-            };
-        });
+                url: driveUrl
+            });
+        }
         res.json({ success: true, files: uploadedFiles });
     } catch (error) {
         console.error('Error uploading generic files:', error);

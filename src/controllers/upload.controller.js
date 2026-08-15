@@ -2,16 +2,18 @@ const fs = require('fs');
 const path = require('path');
 const prisma = require('../prisma');
 const { uploadsDir } = require('../middlewares/upload.middleware');
+const driveService = require('../services/drive.service');
 
 class UploadController {
     async uploadAvatar(req, res) {
         try {
             const username = req.body.username;
             if (!username) return res.status(400).json({ error: 'Username required' });
+            if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
             
-            // Eliminar foto vieja
+            // Eliminar foto vieja (si era un archivo local heredado)
             const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-            if (user && user.foto) {
+            if (user && user.foto && !user.foto.includes('drive.google.com')) {
                 try {
                     const oldFileName = path.basename(user.foto);
                     const oldFilePath = path.join(uploadsDir, oldFileName);
@@ -23,9 +25,8 @@ class UploadController {
                 }
             }
             
-            const isProd = req.get('host').includes('onrender.com');
-            const protocol = isProd ? 'https' : req.protocol;
-            const newUrl = `${protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+            // Subir a Google Drive
+            const newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
             
             await prisma.user.updateMany({
                 where: { user: { equals: username, mode: 'insensitive' } },
@@ -45,7 +46,7 @@ class UploadController {
             if (!username) return res.status(400).json({ error: 'Username required' });
             
             const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-            if (user && user.foto) {
+            if (user && user.foto && !user.foto.includes('drive.google.com')) {
                 try {
                     const oldFileName = path.basename(user.foto);
                     const oldFilePath = path.join(uploadsDir, oldFileName);
@@ -69,14 +70,16 @@ class UploadController {
 
     async uploadEvidence(req, res) {
         try {
-            const isProd = req.get('host').includes('onrender.com');
-            const protocol = isProd ? 'https' : req.protocol;
-            
             if (!req.files || req.files.length === 0) {
                 return res.status(400).json({ error: 'No files uploaded' });
             }
 
-            const urls = req.files.map(file => `${protocol}://${req.get('host')}/uploads/${file.filename}`);
+            const urls = [];
+            for (const file of req.files) {
+                const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                urls.push(driveUrl);
+            }
+
             res.json({ urls });
         } catch (error) {
             console.error(error);
@@ -86,16 +89,21 @@ class UploadController {
 
     async uploadGeneric(req, res) {
         try {
-            const uploadedFiles = req.files.map(file => {
-                const isProd = req.get('host').includes('onrender.com');
-                const protocol = isProd ? 'https' : req.protocol;
-                return {
+            if (!req.files || req.files.length === 0) {
+                return res.status(400).json({ error: 'No files uploaded' });
+            }
+
+            const uploadedFiles = [];
+            for (const file of req.files) {
+                const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                uploadedFiles.push({
                     name: file.originalname,
                     type: file.mimetype,
                     size: file.size,
-                    url: `${protocol}://${req.get('host')}/uploads/${file.filename}`
-                };
-            });
+                    url: driveUrl
+                });
+            }
+
             res.json({ success: true, files: uploadedFiles });
         } catch (error) {
             console.error('Error uploading generic files:', error);

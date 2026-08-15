@@ -8,15 +8,7 @@ if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadsDir);
-    },
-    filename: function (req, file, cb) {
-        const ext = path.extname(file.originalname);
-        cb(null, crypto.randomUUID() + ext);
-    }
-});
+const storage = multer.memoryStorage(); // Cambiado a memory storage para subir directo a Drive
 
 const uploadAvatar = multer({ 
     storage: storage,
