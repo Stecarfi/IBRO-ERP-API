@@ -105,8 +105,8 @@ class DriveService {
                 fields: 'id'
             });
 
-            // Retornamos un enlace "Raw" directo que funciona perfecto en etiquetas <img> de HTML/React
-            return `https://drive.google.com/uc?export=view&id=${fileId}`;
+            // Retornamos un enlace thumbnail que funciona perfecto en etiquetas <img> de HTML/React
+            return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
         } catch (error) {
             console.error('[DRIVE SERVICE] Error durante la subida:', error);
             throw error;
