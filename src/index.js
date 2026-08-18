@@ -751,7 +751,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       radicado: p.radicado,
       hechos: p.hechos,
       solicitudes: p.solicitudes,
-      evidencias: p.evidencias,
+      evidencias: p.evidencias && p.evidencias.trim() !== '' ? p.evidencias : '[]',
       aplicaGarantia: p.aplicaGarantia,
       tratamientoGarantia: p.tratamientoGarantia,
       terminoLegal: p.terminoLegal,
@@ -759,7 +759,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       inventarioId: p.inventarioId,
       ventaId: p.ventaId,
       cotizacionId: p.cotizacionId,
-      trazabilidad: p.trazabilidad,
+      trazabilidad: p.trazabilidad && p.trazabilidad.trim() !== '' ? p.trazabilidad : '[]',
       usuarioAsignado: p.usuarioAsignado
     }));
 
@@ -792,8 +792,8 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       ventaId: s.ventaId,
       cotizacionId: s.cotizacionId,
       etapaActual: s.etapaActual,
-      evidencias: s.evidencias,
-      trazabilidad: s.trazabilidad,
+      evidencias: s.evidencias && s.evidencias.trim() !== '' ? s.evidencias : '[]',
+      trazabilidad: s.trazabilidad && s.trazabilidad.trim() !== '' ? s.trazabilidad : '[]',
       aplicaGarantia: s.aplicaGarantia,
       costoServicio: s.costoServicio
     }));
@@ -1088,6 +1088,41 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       const flatUpsert = async (table, items) => {
         for (const item of items) {
           const { ...data } = item;
+
+          // Forzar tipos numéricos para Prisma
+          if (table === 'inventario') {
+            if (data.cant !== undefined) data.cant = parseInt(data.cant) || 0;
+            if (data.pedido !== undefined) data.pedido = parseInt(data.pedido) || 0;
+            if (data.precio !== undefined) data.precio = parseFloat(data.precio) || 0;
+            if (data.precio_publico !== undefined && data.precio_publico !== null) data.precio_publico = parseFloat(data.precio_publico) || null;
+            if (data.precio_tecnico !== undefined && data.precio_tecnico !== null) data.precio_tecnico = parseFloat(data.precio_tecnico) || null;
+            if (data.precio_mayorista !== undefined && data.precio_mayorista !== null) data.precio_mayorista = parseFloat(data.precio_mayorista) || null;
+            if (data.precio_costo !== undefined && data.precio_costo !== null) data.precio_costo = parseFloat(data.precio_costo) || null;
+            if (data.vendidas !== undefined) data.vendidas = parseInt(data.vendidas) || 0;
+          } else if (table === 'cliente') {
+            if (data.condicionesPagoDias !== undefined && data.condicionesPagoDias !== null) data.condicionesPagoDias = parseInt(data.condicionesPagoDias) || null;
+            if (data.porcentajeAutorizado !== undefined && data.porcentajeAutorizado !== null) data.porcentajeAutorizado = parseFloat(data.porcentajeAutorizado) || null;
+            if (data.adjuntos !== undefined && data.adjuntos !== null && typeof data.adjuntos !== 'string') {
+               data.adjuntos = JSON.stringify(data.adjuntos);
+            }
+          } else if (table === 'comisionista') {
+            if (data.valor_venta !== undefined && data.valor_venta !== null) data.valor_venta = parseFloat(data.valor_venta) || null;
+            if (data.pct_comision !== undefined && data.pct_comision !== null) data.pct_comision = parseFloat(data.pct_comision) || null;
+            if (data.porcentaje !== undefined && data.porcentaje !== null) data.porcentaje = parseFloat(data.porcentaje) || null;
+          } else if (table === 'user') {
+            if (data.meta_u !== undefined) data.meta_u = parseFloat(data.meta_u) || 0;
+            if (data.ejec_u !== undefined) data.ejec_u = parseFloat(data.ejec_u) || 0;
+            if (data.meta_p !== undefined) data.meta_p = parseFloat(data.meta_p) || 0;
+            if (data.ejec_p !== undefined) data.ejec_p = parseFloat(data.ejec_p) || 0;
+          } else if (table === 'evaluacion') {
+            if (data.scores && typeof data.scores === 'string') {
+              try { data.scores = JSON.parse(data.scores); } catch (e) { data.scores = {}; }
+            }
+          } else if (table === 'procesoDisciplinario') {
+            if (data.etapa !== undefined) data.etapa = parseInt(data.etapa) || 1;
+            if (data.diasSuspension !== undefined) data.diasSuspension = parseInt(data.diasSuspension) || 0;
+            if (data.timestampEtapa !== undefined) data.timestampEtapa = parseFloat(data.timestampEtapa) || 0;
+          }
 
         if (table === 'user') {
           // Ya permitimos que foto se guarde y sincronice
