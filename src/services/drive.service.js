@@ -112,6 +112,38 @@ class DriveService {
             throw error;
         }
     }
+
+    /**
+     * Sube un documento a Google Drive y retorna el enlace de vista previa (webViewLink)
+     */
+    async uploadDocument(buffer, originalName, mimeType) {
+        if (!this.drive) throw new Error('El servicio de Google Drive no está inicializado.');
+        
+        const bufferStream = new stream.PassThrough();
+        bufferStream.end(buffer);
+        const safeName = `${Date.now()}-${originalName}`;
+        const fileMetadata = { name: safeName, parents: [this.folderId] };
+        const media = { mimeType: mimeType, body: bufferStream };
+
+        try {
+            const response = await this.drive.files.create({
+                resource: fileMetadata,
+                media: media,
+                fields: 'id, webViewLink'
+            });
+            const fileId = response.data.id;
+            try {
+                await this.drive.permissions.create({
+                    fileId: fileId,
+                    requestBody: { role: 'reader', type: 'anyone' }
+                });
+            } catch (e) {}
+            return response.data.webViewLink;
+        } catch (error) {
+            console.error('[DRIVE SERVICE] Error durante la subida de documento:', error);
+            throw error;
+        }
+    }
 }
 
 module.exports = new DriveService();

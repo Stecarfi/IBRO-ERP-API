@@ -34,8 +34,22 @@ const uploadEvidence = multer({
     }
 });
 
+const uploadCourseMaterial = multer({
+    storage: storage,
+    fileFilter: function (req, file, cb) {
+        if (file.mimetype === 'application/pdf' ||
+            file.mimetype === 'application/vnd.ms-powerpoint' ||
+            file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+            cb(null, true);
+        } else {
+            cb(new Error('Formato no válido. Solo se permiten archivos PDF y PowerPoint.'));
+        }
+    }
+});
+
 module.exports = {
     uploadAvatar,
     uploadEvidence,
+    uploadCourseMaterial,
     uploadsDir
 };

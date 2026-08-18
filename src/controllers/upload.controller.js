@@ -110,6 +110,25 @@ class UploadController {
             res.status(500).json({ error: error.message || 'Error uploading files' });
         }
     }
+
+    async uploadCourseMaterial(req, res) {
+        try {
+            if (!req.files || req.files.length === 0) {
+                return res.status(400).json({ error: 'No files uploaded' });
+            }
+
+            const urls = [];
+            for (const file of req.files) {
+                const driveUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
+                urls.push(driveUrl);
+            }
+
+            res.json({ urls });
+        } catch (error) {
+            console.error(error);
+            res.status(500).json({ error: 'Error uploading course material' });
+        }
+    }
 }
 
 module.exports = new UploadController();

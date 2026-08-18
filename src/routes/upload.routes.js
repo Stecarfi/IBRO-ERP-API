@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const uploadController = require('../controllers/upload.controller');
 const authenticateToken = require('../middlewares/auth.middleware');
-const { uploadAvatar, uploadEvidence } = require('../middlewares/upload.middleware');
+const { uploadAvatar, uploadEvidence, uploadCourseMaterial } = require('../middlewares/upload.middleware');
 const multer = require('multer');
 
 // Reutilizamos el storage de middlewares para las cargas genéricas
@@ -34,5 +34,6 @@ router.post('/upload-avatar', authenticateToken, uploadAvatar.single('avatar'), 
 router.delete('/remove-avatar', authenticateToken, uploadController.removeAvatar);
 router.post('/upload-evidence', authenticateToken, uploadEvidence.array('evidencias', 10), uploadController.uploadEvidence);
 router.post('/upload', authenticateToken, uploadGeneric.array('files', 5), uploadController.uploadGeneric);
+router.post('/upload-course-material', authenticateToken, uploadCourseMaterial.array('materiales', 5), uploadController.uploadCourseMaterial);
 
 module.exports = router;
