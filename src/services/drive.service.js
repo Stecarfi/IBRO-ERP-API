@@ -144,6 +144,20 @@ class DriveService {
             throw error;
         }
     }
+
+    /**
+     * Elimina un archivo de Google Drive
+     * @param {string} fileId - El ID del archivo en Google Drive
+     */
+    async deleteFile(fileId) {
+        if (!this.drive) throw new Error('El servicio de Google Drive no está inicializado.');
+        try {
+            await this.drive.files.delete({ fileId: fileId });
+            console.log(`[DRIVE SERVICE] Archivo eliminado con éxito. ID: ${fileId}`);
+        } catch (error) {
+            console.error(`[DRIVE SERVICE] Error al eliminar el archivo ${fileId}:`, error.message);
+        }
+    }
 }
 
 module.exports = new DriveService();

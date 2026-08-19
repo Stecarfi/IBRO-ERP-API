@@ -11,17 +11,34 @@ class UploadController {
             if (!username) return res.status(400).json({ error: 'Username required' });
             if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
             
-            // Eliminar foto vieja (si era un archivo local heredado)
+            // Eliminar foto vieja
             const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-            if (user && user.foto && !user.foto.includes('drive.google.com')) {
-                try {
-                    const oldFileName = path.basename(user.foto);
-                    const oldFilePath = path.join(uploadsDir, oldFileName);
-                    if (fs.existsSync(oldFilePath)) {
-                        fs.unlinkSync(oldFilePath);
+            if (user && user.foto) {
+                if (user.foto.includes('drive.google.com')) {
+                    try {
+                        let fileId = null;
+                        const match1 = user.foto.match(/[?&]id=([^&]+)/);
+                        if (match1) fileId = match1[1];
+                        else {
+                            const match2 = user.foto.match(/\/d\/([a-zA-Z0-9_-]+)/);
+                            if (match2) fileId = match2[1];
+                        }
+                        if (fileId) {
+                            await driveService.deleteFile(fileId);
+                        }
+                    } catch (e) {
+                        console.error('Error deleting old avatar from Drive:', e);
                     }
-                } catch (e) {
-                    console.error('Error deleting old avatar:', e);
+                } else {
+                    try {
+                        const oldFileName = path.basename(user.foto);
+                        const oldFilePath = path.join(uploadsDir, oldFileName);
+                        if (fs.existsSync(oldFilePath)) {
+                            fs.unlinkSync(oldFilePath);
+                        }
+                    } catch (e) {
+                        console.error('Error deleting old avatar:', e);
+                    }
                 }
             }
             
@@ -46,15 +63,32 @@ class UploadController {
             if (!username) return res.status(400).json({ error: 'Username required' });
             
             const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-            if (user && user.foto && !user.foto.includes('drive.google.com')) {
-                try {
-                    const oldFileName = path.basename(user.foto);
-                    const oldFilePath = path.join(uploadsDir, oldFileName);
-                    if (fs.existsSync(oldFilePath)) {
-                        fs.unlinkSync(oldFilePath);
+            if (user && user.foto) {
+                if (user.foto.includes('drive.google.com')) {
+                    try {
+                        let fileId = null;
+                        const match1 = user.foto.match(/[?&]id=([^&]+)/);
+                        if (match1) fileId = match1[1];
+                        else {
+                            const match2 = user.foto.match(/\/d\/([a-zA-Z0-9_-]+)/);
+                            if (match2) fileId = match2[1];
+                        }
+                        if (fileId) {
+                            await driveService.deleteFile(fileId);
+                        }
+                    } catch (e) {
+                        console.error('Error deleting avatar from Drive:', e);
                     }
-                } catch (e) {
-                    console.error('Error deleting avatar:', e);
+                } else {
+                    try {
+                        const oldFileName = path.basename(user.foto);
+                        const oldFilePath = path.join(uploadsDir, oldFileName);
+                        if (fs.existsSync(oldFilePath)) {
+                            fs.unlinkSync(oldFilePath);
+                        }
+                    } catch (e) {
+                        console.error('Error deleting avatar:', e);
+                    }
                 }
             }
             
