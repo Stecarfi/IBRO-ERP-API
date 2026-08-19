@@ -99,14 +99,18 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
   // Enviar el prompt inyectando las instrucciones del sistema y el contexto de la base de datos en tiempo real al mensaje final del usuario
   const fullPrompt = `${systemInstruction}\n\n${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
 
+  // Mapear modelo obsoleto gemini-pro a gemini-1.5-flash para evitar error 404
+  if (selectedModel === 'gemini-pro') {
+    selectedModel = 'gemini-1.5-flash';
+  }
+
   // Lista de modelos a intentar en orden de preferencia
   const modelsToTry = selectedModel ? [selectedModel] : [
     "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
     "gemini-2.5-flash",
-    "gemini-1.5-pro",
-    "gemini-pro"
+    "gemini-1.5-pro"
   ];
 
   const apiVersions = ["v1", "v1beta"];
