@@ -50,7 +50,11 @@ class SyncService {
       vendedorCargo: v.vendedorCargo,
       vendedorEmail: v.vendedorEmail,
       vendedorMovil: v.vendedorMovil,
-      vendedorCodigoAsesor: v.vendedorCodigoAsesor
+      vendedorCodigoAsesor: v.vendedorCodigoAsesor,
+      estadoComision: v.estadoComision,
+      fechaComision: v.fechaComision,
+      equipos: v.equipos ? JSON.parse(v.equipos) : [],
+      materiales: v.materiales ? JSON.parse(v.materiales) : []
     }));
 
     // Mapear PQRS
@@ -430,22 +434,45 @@ class SyncService {
 
     // --- FASE 2: Tablas Relacionales (Dependen de Clientes y Productos) ---
 
-    // 5. Ventas / Facturaci├│n
+    const findOrCreateClient = async (item) => {
+      let client = null;
+      if (item.clienteId) {
+        client = await tx.cliente.findUnique({ where: { id: item.clienteId } });
+      }
+      if (!client && item.docCli) {
+        client = await tx.cliente.findUnique({ where: { doc: item.docCli } });
+      }
+      if (!client && (item.docCli || item.cliente || item.clienteNombre)) {
+        const doc = item.docCli || `GEN-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+        client = await tx.cliente.upsert({
+          where: { doc: doc },
+          update: {},
+          create: {
+            id: Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9),
+            doc_tipo: 'CC',
+            doc: doc,
+            nom: item.clienteNombre || item.cliente || 'Cliente Genérico',
+            tipo_cliente: 'Nuevo',
+            tel: item.clienteTelefono || item.clienteMovil || item.tel || '0',
+            correo: item.clienteEmail || item.correo || 'correo@ejemplo.com',
+            direccion: item.clienteDireccion || ''
+          }
+        });
+      }
+      if (!client) client = await tx.cliente.findFirst();
+      return client;
+    };
+
+    // 5. Ventas / Facturación
     if (diff.ventas) {
       // Eliminar primero
       await flatDelete('venta', diff.ventas.deleted || []);
 
       // Upsert
       for (const item of diff.ventas.upserted || []) {
-        // Encontrar Cliente (1 sola petici├│n a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
+        const client = await findOrCreateClient(item);
         
-        // Encontrar Producto (1 sola petici├│n a BD)
+        // Encontrar Producto (1 sola petición a BD)
         const productConditions = [];
         if (item.productoId) productConditions.push({ id: item.productoId });
         if (item.idProd) productConditions.push({ id: item.idProd });
@@ -482,7 +509,11 @@ class SyncService {
           vendedorCargo: item.vendedorCargo || null,
           vendedorEmail: item.vendedorEmail || null,
           vendedorMovil: item.vendedorMovil || null,
-          vendedorCodigoAsesor: item.vendedorCodigoAsesor || null
+          vendedorCodigoAsesor: item.vendedorCodigoAsesor || null,
+          estadoComision: item.estadoComision || null,
+          fechaComision: item.fechaComision || null,
+          equipos: item.equipos ? (typeof item.equipos === 'string' ? item.equipos : JSON.stringify(item.equipos)) : null,
+          materiales: item.materiales ? (typeof item.materiales === 'string' ? item.materiales : JSON.stringify(item.materiales)) : null
         };
 
         await tx.venta.upsert({
@@ -498,13 +529,7 @@ class SyncService {
       await flatDelete('cotizacion', diff.cotizaciones.deleted || []);
 
       for (const item of diff.cotizaciones.upserted || []) {
-        // Encontrar Cliente (1 sola petici├│n a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
+        const client = await findOrCreateClient(item);
 
         // Encontrar Producto (1 sola petici├│n a BD)
         const productConditions = [];
@@ -580,13 +605,7 @@ class SyncService {
       await flatDelete('pQR', diff.pqrs.deleted || []);
 
       for (const item of diff.pqrs.upserted || []) {
-        // Encontrar Cliente (1 sola petici├│n a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
+        const client = await findOrCreateClient(item);
         
         if (!client) {
           throw new Error(`Sync PQR ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
@@ -631,13 +650,7 @@ class SyncService {
       await flatDelete('servicio', diff.servicios.deleted || []);
 
       for (const item of diff.servicios.upserted || []) {
-        // Encontrar Cliente (1 sola petici├│n a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
+        const client = await findOrCreateClient(item);
         
         if (!client) {
           throw new Error(`Sync Servicio ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
@@ -766,6 +779,12 @@ class SyncService {
     if (diff.pendingResets) {
       await flatUpsert('pendingReset', diff.pendingResets.upserted || []);
       await flatDelete('pendingReset', diff.pendingResets.deleted || []);
+    }
+
+    // 21. Capacitaciones
+    if (diff.capacitaciones) {
+      await flatUpsert('capacitacion', diff.capacitaciones.upserted || []);
+      await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
     }
 
     // 18. Configuraci├│n Global (WhatsApp e Informes)
