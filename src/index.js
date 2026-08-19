@@ -210,6 +210,41 @@ app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req,
     }
 });
 
+const uploadCourseMaterial = multer({
+    storage: storage,
+    fileFilter: function (req, file, cb) {
+        if (file.mimetype.includes('pdf') ||
+            file.mimetype.includes('powerpoint') ||
+            file.mimetype.includes('presentation') ||
+            file.mimetype.includes('document') ||
+            file.mimetype.includes('msword') ||
+            file.mimetype.includes('application/')) {
+            cb(null, true);
+        } else {
+            cb(null, true); 
+        }
+    }
+});
+
+app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.array('materiales', 5), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+
+        const urls = [];
+        for (const file of req.files) {
+            const driveUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
+            urls.push(driveUrl);
+        }
+
+        res.json({ urls });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error uploading course material' });
+    }
+});
+
 // Exponer archivos estáticos de la carpeta de uploads
 app.use('/uploads', express.static(uploadsDir));
 // Mantener la ruta de avatares temporalmente para compatibilidad
