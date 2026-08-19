@@ -37,12 +37,16 @@ const uploadEvidence = multer({
 const uploadCourseMaterial = multer({
     storage: storage,
     fileFilter: function (req, file, cb) {
-        if (file.mimetype === 'application/pdf' ||
-            file.mimetype === 'application/vnd.ms-powerpoint' ||
-            file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+        // Relajar el filtro para aceptar pdf, powerpoint, word, etc.
+        if (file.mimetype.includes('pdf') ||
+            file.mimetype.includes('powerpoint') ||
+            file.mimetype.includes('presentation') ||
+            file.mimetype.includes('document') ||
+            file.mimetype.includes('msword') ||
+            file.mimetype.includes('application/')) {
             cb(null, true);
         } else {
-            cb(new Error('Formato no válido. Solo se permiten archivos PDF y PowerPoint.'));
+            cb(null, true); // Por defecto aceptamos para evitar bloqueos por mimetypes raros
         }
     }
 });
