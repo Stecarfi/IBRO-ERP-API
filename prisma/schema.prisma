@@ -531,6 +531,7 @@ model Capacitacion {
   videoLink     String?
   materiales    String? @db.Text // JSON para adjuntos
   asistentes    String? @db.Text // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
+  evaluacion    String? @db.Text // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
   estado        String  @default("Programada") // Programada, En Curso, Finalizada
   lockedBy      String?
 }

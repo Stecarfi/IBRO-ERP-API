@@ -1018,6 +1018,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       videoLink: c.videoLink || '',
       materiales: c.materiales ? JSON.parse(c.materiales) : [],
       asistentes: c.asistentes ? JSON.parse(c.asistentes) : [],
+      evaluacion: c.evaluacion ? JSON.parse(c.evaluacion) : null,
       estado: c.estado,
       lockedBy: c.lockedBy
     }));
@@ -1157,6 +1158,10 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.etapa !== undefined) data.etapa = parseInt(data.etapa) || 1;
             if (data.diasSuspension !== undefined) data.diasSuspension = parseInt(data.diasSuspension) || 0;
             if (data.timestampEtapa !== undefined) data.timestampEtapa = parseFloat(data.timestampEtapa) || 0;
+          } else if (table === 'capacitacion') {
+            if (data.materiales !== undefined && typeof data.materiales !== 'string') data.materiales = JSON.stringify(data.materiales);
+            if (data.asistentes !== undefined && typeof data.asistentes !== 'string') data.asistentes = JSON.stringify(data.asistentes);
+            if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') data.evaluacion = JSON.stringify(data.evaluacion);
           }
 
         if (table === 'user') {
@@ -1600,6 +1605,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
     if (diff.pendingResets) {
       await flatUpsert('pendingReset', diff.pendingResets.upserted || []);
       await flatDelete('pendingReset', diff.pendingResets.deleted || []);
+    }
+
+    // 21. Capacitaciones
+    if (diff.capacitaciones) {
+      await flatUpsert('capacitacion', diff.capacitaciones.upserted || []);
+      await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
     }
 
     // 18. Configuración Global (WhatsApp e Informes)
