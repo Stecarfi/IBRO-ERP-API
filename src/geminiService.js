@@ -114,11 +114,11 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
       ).map(m => m.name.replace("models/", ""));
 
       if (supported.length > 0) {
-        if (supported.includes("gemini-1.5-flash")) finalModelToUse = "gemini-1.5-flash";
-        else if (supported.includes("gemini-1.5-pro")) finalModelToUse = "gemini-1.5-pro";
-        else if (supported.includes("antigravity-preview-05-2026")) finalModelToUse = "antigravity-preview-05-2026";
-        else if (supported.includes("deep-research-preview-04-2026")) finalModelToUse = "deep-research-preview-04-2026";
-        else finalModelToUse = supported[0];
+        if (supported.includes("gemini-2.5-flash")) finalModelToUse = "gemini-2.5-flash";
+        else if (supported.includes("gemini-1.5-flash")) finalModelToUse = "gemini-1.5-flash";
+        else if (supported.includes("gemini-3.5-flash")) finalModelToUse = "gemini-3.5-flash";
+        else if (supported.includes("gemini-2.5-pro")) finalModelToUse = "gemini-2.5-pro";
+        else finalModelToUse = supported.find(m => !m.includes("antigravity") && !m.includes("deep-research")) || supported[0];
       }
     } else {
       const errText = await listRes.text();
