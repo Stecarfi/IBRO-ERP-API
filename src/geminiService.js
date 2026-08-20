@@ -101,28 +101,30 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
 
   let availableModelsInfo = [];
   let errorListing = "";
+  let finalModelToUse = "gemini-1.5-flash"; // Default fallback
+
   try {
-    const listResult = await genAI.listModels();
-    availableModelsInfo = listResult.models || listResult;
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      availableModelsInfo = listData.models || [];
+      
+      const supported = availableModelsInfo.filter(m => 
+        m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+      ).map(m => m.name.replace("models/", ""));
+
+      if (supported.length > 0) {
+        if (supported.includes("gemini-1.5-flash")) finalModelToUse = "gemini-1.5-flash";
+        else if (supported.includes("gemini-1.5-pro")) finalModelToUse = "gemini-1.5-pro";
+        else if (supported.includes("gemini-1.0-pro")) finalModelToUse = "gemini-1.0-pro";
+        else finalModelToUse = supported[0];
+      }
+    } else {
+      const errText = await listRes.text();
+      errorListing = `HTTP ${listRes.status}: ${errText}`;
+    }
   } catch (err) {
     errorListing = err.message;
-  }
-
-  let finalModelToUse = "gemini-1.5-flash"; // Default fallback
-  
-  if (availableModelsInfo && availableModelsInfo.length > 0) {
-    // Find supported models that can generate content
-    const supported = availableModelsInfo.filter(m => 
-      m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
-    ).map(m => m.name.replace("models/", ""));
-
-    if (supported.length > 0) {
-      // Prefer gemini-1.5-flash, then gemini-1.5-pro, then gemini-1.0-pro, then anything else
-      if (supported.includes("gemini-1.5-flash")) finalModelToUse = "gemini-1.5-flash";
-      else if (supported.includes("gemini-1.5-pro")) finalModelToUse = "gemini-1.5-pro";
-      else if (supported.includes("gemini-1.0-pro")) finalModelToUse = "gemini-1.0-pro";
-      else finalModelToUse = supported[0];
-    }
   }
 
   // Si el usuario solicitó uno explícitamente y está disponible, lo usamos
@@ -148,10 +150,11 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
     // Generar reporte detallado
     let report = `No se pudo generar respuesta con el modelo ${finalModelToUse}. Detalle: ${err.message}\n\n`;
     if (errorListing) {
-      report += `Además, no se pudo obtener la lista de modelos disponibles: ${errorListing}\n`;
+      report += `Además, falló la consulta manual de modelos: ${errorListing}\n`;
     } else {
       const names = availableModelsInfo.map(m => m.name.replace("models/", "")).join(", ");
-      report += `Modelos disponibles para tu API Key: ${names || "Ninguno"}\n`;
+      report += `Modelos que SÍ soporta tu API Key actualmente: ${names || "Ninguno"}\n`;
+      report += `\nNota: Si no ves gemini-1.5-flash en la lista, es posible que tu cuenta de Google AI Studio o la región de tu API Key no tenga acceso a este modelo.`;
     }
     
     if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
