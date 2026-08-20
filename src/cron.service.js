@@ -21,7 +21,7 @@ const initCronJobs = () => {
                     if (now >= scheduledDate) {
                         c.estado = 'Activo';
                         updated = true;
-                        console.log(\`[Cron] Comunicado \${c.id} publicado automáticamente.\`);
+                        console.log(`[Cron] Comunicado ${c.id} publicado automáticamente.`);
                     }
                 }
             });
