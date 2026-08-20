@@ -310,6 +310,7 @@ class SyncService {
       videoLink: c.videoLink || '',
       materiales: c.materiales ? JSON.parse(c.materiales) : [],
       asistentes: c.asistentes ? JSON.parse(c.asistentes) : [],
+      evaluacion: c.evaluacion ? JSON.parse(c.evaluacion) : null,
       estado: c.estado,
       lockedBy: c.lockedBy
     }));
@@ -783,8 +784,30 @@ class SyncService {
 
     // 21. Capacitaciones
     if (diff.capacitaciones) {
-      await flatUpsert('capacitacion', diff.capacitaciones.upserted || []);
       await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
+      for (const item of diff.capacitaciones.upserted || []) {
+        const data = {
+          tipo: item.tipo,
+          tema: item.tema,
+          descripcion: item.descripcion,
+          fecha: item.fecha,
+          hora: item.hora,
+          obligatoria: item.obligatoria,
+          creador: item.creador,
+          videoLink: item.videoLink,
+          materiales: item.materiales ? JSON.stringify(item.materiales) : null,
+          asistentes: item.asistentes ? JSON.stringify(item.asistentes) : null,
+          evaluacion: item.evaluacion ? JSON.stringify(item.evaluacion) : null,
+          estado: item.estado,
+          lockedBy: item.lockedBy
+        };
+
+        await tx.capacitacion.upsert({
+          where: { id: item.id },
+          update: data,
+          create: { id: item.id, ...data },
+        });
+      }
     }
 
     // 18. Configuraci├│n Global (WhatsApp e Informes)
