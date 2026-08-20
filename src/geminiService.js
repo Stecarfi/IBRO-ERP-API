@@ -99,45 +99,67 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
   // Enviar el prompt inyectando las instrucciones del sistema y el contexto de la base de datos en tiempo real al mensaje final del usuario
   const fullPrompt = `${systemInstruction}\n\n${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
 
-  // Mapear modelo obsoleto gemini-pro a gemini-1.5-flash para evitar error 404
-  if (selectedModel === 'gemini-pro') {
-    selectedModel = 'gemini-1.5-flash';
+  let availableModelsInfo = [];
+  let errorListing = "";
+  try {
+    const listResult = await genAI.listModels();
+    availableModelsInfo = listResult.models || listResult;
+  } catch (err) {
+    errorListing = err.message;
   }
 
-  // Lista de modelos a intentar en orden de preferencia
-  const modelsToTry = selectedModel ? [selectedModel] : [
-    "gemini-1.5-flash",
-    "gemini-1.5-pro"
-  ];
+  let finalModelToUse = "gemini-1.5-flash"; // Default fallback
+  
+  if (availableModelsInfo && availableModelsInfo.length > 0) {
+    // Find supported models that can generate content
+    const supported = availableModelsInfo.filter(m => 
+      m.supportedGenerationMethods && m.supportedGenerationMethods.includes("generateContent")
+    ).map(m => m.name.replace("models/", ""));
 
-  const apiVersions = ["v1", "v1beta"];
-
-  let errors = [];
-  for (const apiVersion of apiVersions) {
-    for (const modelName of modelsToTry) {
-      try {
-        addLog(`[GEMINI] Intentando iniciar chat con modelo ${modelName} y versión ${apiVersion}`);
-        const model = genAI.getGenerativeModel({
-          model: modelName
-        }, { apiVersion: apiVersion });
-        const chat = model.startChat({
-          history: formattedHistory,
-        });
-        const result = await chat.sendMessage(fullPrompt);
-        const response = await result.response;
-        addLog(`[GEMINI SUCCESS] ¡Conectado con éxito al modelo ${modelName} con versión ${apiVersion}!`);
-        return response.text();
-      } catch (err) {
-        addLog(`[GEMINI ERROR] Falló el modelo ${modelName} con versión ${apiVersion}: ${err.message}`);
-        errors.push(`[${modelName} - ${apiVersion}]: ${err.message}`);
-        if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
-          throw new Error("Clave de API de Gemini inválida. Por favor, verifica tu clave en el panel de Google AI Studio.");
-        }
-      }
+    if (supported.length > 0) {
+      // Prefer gemini-1.5-flash, then gemini-1.5-pro, then gemini-1.0-pro, then anything else
+      if (supported.includes("gemini-1.5-flash")) finalModelToUse = "gemini-1.5-flash";
+      else if (supported.includes("gemini-1.5-pro")) finalModelToUse = "gemini-1.5-pro";
+      else if (supported.includes("gemini-1.0-pro")) finalModelToUse = "gemini-1.0-pro";
+      else finalModelToUse = supported[0];
     }
   }
 
-  throw new Error("Todos los modelos fallaron:\n" + errors.join('\n'));
+  // Si el usuario solicitó uno explícitamente y está disponible, lo usamos
+  if (selectedModel && availableModelsInfo.some(m => m.name.includes(selectedModel))) {
+    finalModelToUse = selectedModel;
+  }
+
+  try {
+    addLog(`[GEMINI] Intentando iniciar chat con modelo AUTO-DETECTADO: ${finalModelToUse}`);
+    const model = genAI.getGenerativeModel({
+      model: finalModelToUse
+    });
+    const chat = model.startChat({
+      history: formattedHistory,
+    });
+    const result = await chat.sendMessage(fullPrompt);
+    const response = await result.response;
+    addLog(`[GEMINI SUCCESS] ¡Conectado con éxito al modelo ${finalModelToUse}!`);
+    return response.text();
+  } catch (err) {
+    addLog(`[GEMINI ERROR] Falló el modelo ${finalModelToUse}: ${err.message}`);
+    
+    // Generar reporte detallado
+    let report = `No se pudo generar respuesta con el modelo ${finalModelToUse}. Detalle: ${err.message}\n\n`;
+    if (errorListing) {
+      report += `Además, no se pudo obtener la lista de modelos disponibles: ${errorListing}\n`;
+    } else {
+      const names = availableModelsInfo.map(m => m.name.replace("models/", "")).join(", ");
+      report += `Modelos disponibles para tu API Key: ${names || "Ninguno"}\n`;
+    }
+    
+    if (err.message.includes("API key not valid") || err.message.includes("API_KEY_INVALID")) {
+      throw new Error("Clave de API de Gemini inválida. Por favor, verifica tu clave en el panel de Google AI Studio.");
+    }
+    
+    throw new Error(report);
+  }
 }
 
 module.exports = {
