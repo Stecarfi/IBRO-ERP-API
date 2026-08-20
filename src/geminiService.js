@@ -64,7 +64,7 @@ ${salesList || '- No hay ventas recientes.'}
   }
 }
 
-async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
+async function askGemini(userPrompt, chatHistory = [], selectedModel = null, isJsonMode = false) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '') {
     throw new Error("Clave de API no configurada. Por favor agrega tu GEMINI_API_KEY en el archivo .env del backend.");
@@ -72,7 +72,7 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
   addLog(`[GEMINI DEBUG] Usando API KEY activa. Prefijo: ${apiKey.substring(0, 6)}... Sufijo: ${apiKey.substring(apiKey.length - 4)}`);
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const context = await getCompanyContext();
+  const context = isJsonMode ? "" : await getCompanyContext();
   
   // Mapear y sanitizar el historial al formato compatible con el SDK de Gemini
   let formattedHistory = (chatHistory || []).map(msg => ({
@@ -97,7 +97,9 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
   formattedHistory = cleanHistory;
 
   // Enviar el prompt inyectando las instrucciones del sistema y el contexto de la base de datos en tiempo real al mensaje final del usuario
-  const fullPrompt = `${systemInstruction}\n\n${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
+  const fullPrompt = isJsonMode 
+    ? userPrompt 
+    : `${systemInstruction}\n\n${context}\n\nPregunta/Instrucción del usuario:\n${userPrompt}`;
 
   let availableModelsInfo = [];
   let errorListing = "";
@@ -136,7 +138,8 @@ async function askGemini(userPrompt, chatHistory = [], selectedModel = null) {
   try {
     addLog(`[GEMINI] Intentando iniciar chat con modelo AUTO-DETECTADO: ${finalModelToUse}`);
     const model = genAI.getGenerativeModel({
-      model: finalModelToUse
+      model: finalModelToUse,
+      ...(isJsonMode && { generationConfig: { responseMimeType: "application/json" } })
     });
     const chat = model.startChat({
       history: formattedHistory,

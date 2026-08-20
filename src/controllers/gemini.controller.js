@@ -43,13 +43,13 @@ class GeminiController {
     }
 
     async chat(req, res) {
-        const { prompt, history, model } = req.body;
+        const { prompt, history, model, isJsonMode } = req.body;
         if (!prompt) {
             return res.status(400).json({ error: 'Falta el parámetro "prompt"' });
         }
 
         try {
-            const aiResponse = await askGemini(prompt, history || [], model || null);
+            const aiResponse = await askGemini(prompt, history || [], model || null, isJsonMode);
             res.json({ response: aiResponse });
         } catch (error) {
             console.error('Gemini chat error:', error.message);
