@@ -1354,9 +1354,9 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.diasSuspension !== undefined) data.diasSuspension = parseInt(data.diasSuspension) || 0;
             if (data.timestampEtapa !== undefined) data.timestampEtapa = parseFloat(data.timestampEtapa) || 0;
           } else if (table === 'capacitacion') {
-            if (data.materiales !== undefined && typeof data.materiales !== 'string') /* no op for Json */
-            if (data.asistentes !== undefined && typeof data.asistentes !== 'string') /* no op for Json */
-            if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') /* no op for Json */
+            if (data.materiales !== undefined && typeof data.materiales !== 'string') {}
+            if (data.asistentes !== undefined && typeof data.asistentes !== 'string') {}
+            if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') {}
           }
 
         if (table === 'user') {
