@@ -1320,6 +1320,16 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         for (const item of items) {
           const { ...data } = item;
 
+          // Pre-cleaning: Remove any nested arrays/objects that aren't native Json fields to prevent Prisma crashes
+          const allowedJsonFields = ['permissions', 'adjuntos', 'equipos', 'materiales', 'evidencias', 'trazabilidad', 'scores', 'integrantes', 'shadowingData', 'items', 'asistentes', 'evaluacion'];
+          for (const key in data) {
+            if (data[key] !== null && typeof data[key] === 'object' && !(data[key] instanceof Date)) {
+              if (!allowedJsonFields.includes(key)) {
+                delete data[key];
+              }
+            }
+          }
+
           // Forzar tipos numéricos para Prisma
           if (table === 'inventario') {
             if (data.cant !== undefined) data.cant = parseInt(data.cant) || 0;
