@@ -734,22 +734,37 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     
     // Mapear Ventas (incluyendo Cliente y Producto)
     const ventasRaw = await prisma.venta.findMany({
-      include: { cliente: true, producto: true },
-      orderBy: { id: 'asc' }
+      take: 50,
+      include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
+      orderBy: { id: 'desc' }
     });
+    ventasRaw.reverse();
     const ventas = ventasRaw.map(v => ({
       id: v.id,
       fecha: v.fecha,
       fechaIso: v.fechaIso,
       venceGarantiaIso: v.venceGarantiaIso,
       mesesGarantia: v.mesesGarantia,
-      vendedor: v.vendedor,
+      vendedor: v.vendedor?.user || '',
+      vendedorId: v.vendedorId,
       docCli: v.cliente.doc,
       cliente: v.cliente.nom,
-      idProd: v.productoId,
-      producto: v.producto.ref,
-      cant: v.cant,
-      desc: v.desc,
+      items: v.items.map(i => ({
+        productoId: i.productoId,
+        producto: i.producto.ref,
+        cant: i.cant,
+        desc: i.desc,
+        precioUnitario: i.precioUnitario,
+        serialEquipo: i.serialEquipo
+      })),
+      // Legacy flat fields for retro-compatibility (first item)
+      idProd: v.items[0]?.productoId || null,
+      producto: v.items[0]?.producto?.ref || null,
+      cant: v.items.reduce((acc, i) => acc + i.cant, 0),
+      desc: v.items.reduce((acc, i) => acc + i.desc, 0),
+      precioUnitario: v.items[0]?.precioUnitario || null,
+      serialEquipo: v.items[0]?.serialEquipo || null,
+      
       metodoPago: v.metodoPago,
       total: v.total,
       comisionistaId: v.comisionistaId,
@@ -757,9 +772,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       comisionistaPct: v.comisionistaPct,
       comisionistaValor: v.comisionistaValor,
       tipo_precio: v.tipo_precio,
-      precioUnitario: v.precioUnitario,
       lockedBy: v.lockedBy,
-      serialEquipo: v.serialEquipo,
       vendedorNombre: v.vendedorNombre,
       vendedorCargo: v.vendedorCargo,
       vendedorEmail: v.vendedorEmail,
@@ -781,7 +794,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       tipo: p.tipo,
       detalle: p.detalle,
       evidencia: p.evidencia,
-      fileData: p.fileData,
+      fileUrl: p.fileUrl,
       estado: p.estado,
       satisfecho: p.satisfecho,
       lockedBy: p.lockedBy,
@@ -844,7 +857,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       tipo: s.tipo,
       detalle: s.detalle || '',
       evidencia: s.evidencia || null,
-      fileData: s.fileData || null,
+      fileUrl: s.fileUrl || null,
       estado: s.estado,
       lockedBy: s.lockedBy || null,
       comentario: s.comentario || '',
@@ -885,20 +898,32 @@ app.get('/api/db', authenticateToken, async (req, res) => {
 
     // Mapear Cotizaciones
     const cotizacionesRaw = await prisma.cotizacion.findMany({
-      include: { cliente: true, producto: true },
+      include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
       orderBy: { id: 'asc' }
     });
     const cotizaciones = cotizacionesRaw.map(c => ({
       id: c.id,
       numCotizacion: c.numCotizacion,
       fecha: c.fecha,
-      vendedor: c.vendedor,
+      vendedor: c.vendedor?.user || '',
+      vendedorId: c.vendedorId,
       docCli: c.cliente.doc,
       cliente: c.cliente.nom,
-      idProd: c.productoId,
-      producto: c.producto.ref,
-      cant: c.cant,
-      desc: c.desc,
+      
+      items: c.items.map(i => ({
+        productoId: i.productoId,
+        producto: i.producto.ref,
+        cant: i.cant,
+        desc: i.desc,
+        precioUnitario: i.precioUnitario
+      })),
+      // Legacy flat fields for retro-compatibility (first item)
+      idProd: c.items[0]?.productoId || null,
+      producto: c.items[0]?.producto?.ref || null,
+      cant: c.items.reduce((acc, i) => acc + i.cant, 0),
+      desc: c.items.reduce((acc, i) => acc + i.desc, 0),
+      precioUnitario: c.items[0]?.precioUnitario || null,
+      
       total: c.total,
       comisionistaId: c.comisionistaId,
       comisionistaNombre: c.comisionistaNombre,
@@ -924,10 +949,9 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       vendedorCodigoAsesor: c.vendedorCodigoAsesor,
       vigencia: c.vigencia,
       ivaTipo: c.ivaTipo,
-      equipos: c.equipos ? JSON.parse(c.equipos) : [],
-      materiales: c.materiales ? JSON.parse(c.materiales) : [],
+      equipos: c.equipos || [],
+      materiales: c.materiales || [],
       tipo_precio: c.tipo_precio,
-      precioUnitario: c.precioUnitario,
       fechaSeguimiento: c.fechaSeguimiento,
       estadoSeguimiento: c.estadoSeguimiento,
       motivoSeguimiento: c.motivoSeguimiento,
@@ -941,7 +965,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       descripcion: g.descripcion || '',
       createdBy: g.createdBy,
       fecha: g.fecha,
-      integrantes: g.integrantes ? JSON.parse(g.integrantes) : []
+      integrantes: g.integrantes || []
     }));
 
     const chatDesc = await prisma.chat.findMany({ orderBy: { timestamp: 'desc' }, take: 150 });
@@ -960,7 +984,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       cedula: c.cedula || '',
       correo: c.correo || '',
       concepto: c.concepto || '',
-      items: c.items ? JSON.parse(c.items) : [],
+      items: c.items || [],
       nequi: c.nequi || '',
       titular: c.titular || '',
       estado: c.estado || '',
@@ -1018,9 +1042,9 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       obligatoria: c.obligatoria,
       creador: c.creador,
       videoLink: c.videoLink || '',
-      materiales: c.materiales ? JSON.parse(c.materiales) : [],
-      asistentes: c.asistentes ? JSON.parse(c.asistentes) : [],
-      evaluacion: c.evaluacion ? JSON.parse(c.evaluacion) : null,
+      materiales: c.materiales || [],
+      asistentes: c.asistentes || [],
+      evaluacion: c.evaluacion || null,
       estado: c.estado,
       lockedBy: c.lockedBy
     }));
@@ -1105,6 +1129,175 @@ app.get('/api/location/users', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/paginated/:model
+app.get('/api/paginated/:model', authenticateToken, async (req, res) => {
+  const model = req.params.model;
+  const take = parseInt(req.query.take) || 50;
+  const skip = parseInt(req.query.skip) || 0;
+
+  try {
+    let result = [];
+    if (model === 'ventas') {
+      const raw = await prisma.venta.findMany({
+        skip, take,
+        include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
+        orderBy: { id: 'desc' }
+      });
+      raw.reverse();
+      result = raw.map(v => ({
+        id: v.id,
+        fecha: v.fecha,
+        fechaIso: v.fechaIso,
+        venceGarantiaIso: v.venceGarantiaIso,
+        mesesGarantia: v.mesesGarantia,
+        vendedor: v.vendedor?.user || '',
+        vendedorId: v.vendedorId,
+        docCli: v.cliente.doc,
+        cliente: v.cliente.nom,
+        items: v.items.map(i => ({
+          productoId: i.productoId,
+          producto: i.producto.ref,
+          cant: i.cant,
+          desc: i.desc,
+          precioUnitario: i.precioUnitario,
+          serialEquipo: i.serialEquipo
+        })),
+        idProd: v.items[0]?.productoId || null,
+        producto: v.items[0]?.producto?.ref || null,
+        cant: v.items.reduce((acc, i) => acc + i.cant, 0),
+        desc: v.items.reduce((acc, i) => acc + i.desc, 0),
+        precioUnitario: v.items[0]?.precioUnitario || null,
+        serialEquipo: v.items[0]?.serialEquipo || null,
+        metodoPago: v.metodoPago,
+        total: v.total,
+        comisionistaId: v.comisionistaId,
+        comisionistaNombre: v.comisionistaNombre,
+        comisionistaPct: v.comisionistaPct,
+        comisionistaValor: v.comisionistaValor,
+        facturado: v.facturado,
+        observacion: v.observacion,
+        estadoAprobacion: v.estadoAprobacion,
+        estadoFacturacion: v.estadoFacturacion,
+        lockedBy: v.lockedBy,
+        lockedAt: v.lockedAt,
+        numPedido: v.numPedido,
+        clienteNombre: v.clienteNombre,
+        clienteDireccion: v.clienteDireccion,
+        clienteCiudadDpto: v.clienteCiudadDpto,
+        clientePais: v.clientePais,
+        clienteTelefono: v.clienteTelefono,
+        clienteMovil: v.clienteMovil,
+        clienteEmail: v.clienteEmail,
+        clienteNit: v.clienteNit,
+        contacto: v.contacto,
+        condicionesComerciales: v.condicionesComerciales,
+        detallePagoMixto: v.detallePagoMixto,
+        tiempoEntrega: v.tiempoEntrega,
+        direccionEntrega: v.direccionEntrega,
+        fechaEntrega: v.fechaEntrega,
+        horaEntrega: v.horaEntrega,
+        vigencia: v.vigencia,
+        garantia: v.garantia,
+        tipoGarantia: v.tipoGarantia,
+        tiempoGarantia: v.tiempoGarantia,
+        tiempoGarantiaDefecto: v.tiempoGarantiaDefecto,
+        ivaTipo: v.ivaTipo,
+        priceTier: v.priceTier,
+        vendedorNombre: v.vendedorNombre,
+        vendedorCargo: v.vendedorCargo,
+        vendedorEmail: v.vendedorEmail,
+        vendedorMovil: v.vendedorMovil,
+        vendedorCodigoAsesor: v.vendedorCodigoAsesor,
+        equipos: v.equipos,
+        materiales: v.materiales,
+        cuentasBancarias: v.cuentasBancarias
+      }));
+    } else if (model === 'cotizaciones') {
+      const raw = await prisma.cotizacion.findMany({
+        skip, take,
+        include: { items: { include: { producto: true } }, vendedor: true },
+        orderBy: { id: 'desc' }
+      });
+      raw.reverse();
+      result = raw.map(c => ({
+        id: c.id,
+        fecha: c.fecha,
+        fechaIso: c.fechaIso,
+        vendedor: c.vendedor?.user || '',
+        vendedorId: c.vendedorId,
+        cliente: c.cliente,
+        items: c.items.map(i => ({
+          productoId: i.productoId,
+          producto: i.producto.ref,
+          cant: i.cant,
+          desc: i.desc,
+          precioUnitario: i.precioUnitario
+        })),
+        idProd: c.items[0]?.productoId || null,
+        producto: c.items[0]?.producto?.ref || null,
+        cant: c.items.reduce((acc, i) => acc + i.cant, 0),
+        desc: c.items.reduce((acc, i) => acc + i.desc, 0),
+        precioUnitario: c.items[0]?.precioUnitario || null,
+        metodoPago: c.metodoPago,
+        total: c.total,
+        observacion: c.observacion,
+        estado: c.estado,
+        lockedBy: c.lockedBy,
+        lockedAt: c.lockedAt,
+        numCotizacion: c.numCotizacion,
+        clienteNombre: c.clienteNombre,
+        clienteDireccion: c.clienteDireccion,
+        clienteCiudadDpto: c.clienteCiudadDpto,
+        clientePais: c.clientePais,
+        clienteTelefono: c.clienteTelefono,
+        clienteMovil: c.clienteMovil,
+        clienteEmail: c.clienteEmail,
+        clienteNit: c.clienteNit,
+        contacto: c.contacto,
+        condicionesComerciales: c.condicionesComerciales,
+        detallePagoMixto: c.detallePagoMixto,
+        tiempoEntrega: c.tiempoEntrega,
+        direccionEntrega: c.direccionEntrega,
+        fechaEntrega: c.fechaEntrega,
+        horaEntrega: c.horaEntrega,
+        vigencia: c.vigencia,
+        garantia: c.garantia,
+        tipoGarantia: c.tipoGarantia,
+        tiempoGarantia: c.tiempoGarantia,
+        tiempoGarantiaDefecto: c.tiempoGarantiaDefecto,
+        ivaTipo: c.ivaTipo,
+        priceTier: c.priceTier,
+        vendedorNombre: c.vendedorNombre,
+        vendedorCargo: c.vendedorCargo,
+        vendedorEmail: c.vendedorEmail,
+        vendedorMovil: c.vendedorMovil,
+        vendedorCodigoAsesor: c.vendedorCodigoAsesor,
+        equipos: c.equipos,
+        materiales: c.materiales,
+        cuentasBancarias: c.cuentasBancarias
+      }));
+    } else if (model === 'chat') {
+      result = await prisma.chat.findMany({ skip, take, orderBy: { timestamp: 'desc' } });
+      result.reverse();
+    } else if (model === 'pqrs') {
+      result = await prisma.pQR.findMany({ skip, take, orderBy: { id: 'desc' } });
+      result.reverse();
+    } else if (model === 'facturas') {
+      result = await prisma.cuentasCobro.findMany({ skip, take, orderBy: { id: 'desc' } });
+      result.reverse();
+    } else if (model === 'chatGroups') {
+      result = await prisma.chatGroup.findMany({ skip, take, orderBy: { id: 'desc' } });
+      result.reverse();
+    } else {
+      return res.status(400).json({ error: 'Model not supported for pagination' });
+    }
+    res.json({ [model]: result });
+  } catch (err) {
+    console.error('Error in /api/paginated:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // POST /api/db/sync: Procesa el diff incremental del cliente
 app.post('/api/db/sync', authenticateToken, async (req, res) => {
   const { diff, user } = req.body;
@@ -1141,7 +1334,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.condicionesPagoDias !== undefined && data.condicionesPagoDias !== null) data.condicionesPagoDias = parseInt(data.condicionesPagoDias) || null;
             if (data.porcentajeAutorizado !== undefined && data.porcentajeAutorizado !== null) data.porcentajeAutorizado = parseFloat(data.porcentajeAutorizado) || null;
             if (data.adjuntos !== undefined && data.adjuntos !== null && typeof data.adjuntos !== 'string') {
-               data.adjuntos = JSON.stringify(data.adjuntos);
+               /* no op for Json */
             }
           } else if (table === 'comisionista') {
             if (data.valor_venta !== undefined && data.valor_venta !== null) data.valor_venta = parseFloat(data.valor_venta) || null;
@@ -1154,16 +1347,16 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.ejec_p !== undefined) data.ejec_p = parseFloat(data.ejec_p) || 0;
           } else if (table === 'evaluacion') {
             if (data.scores && typeof data.scores === 'string') {
-              try { data.scores = JSON.parse(data.scores); } catch (e) { data.scores = {}; }
+              
             }
           } else if (table === 'procesoDisciplinario') {
             if (data.etapa !== undefined) data.etapa = parseInt(data.etapa) || 1;
             if (data.diasSuspension !== undefined) data.diasSuspension = parseInt(data.diasSuspension) || 0;
             if (data.timestampEtapa !== undefined) data.timestampEtapa = parseFloat(data.timestampEtapa) || 0;
           } else if (table === 'capacitacion') {
-            if (data.materiales !== undefined && typeof data.materiales !== 'string') data.materiales = JSON.stringify(data.materiales);
-            if (data.asistentes !== undefined && typeof data.asistentes !== 'string') data.asistentes = JSON.stringify(data.asistentes);
-            if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') data.evaluacion = JSON.stringify(data.evaluacion);
+            if (data.materiales !== undefined && typeof data.materiales !== 'string') /* no op for Json */
+            if (data.asistentes !== undefined && typeof data.asistentes !== 'string') /* no op for Json */
+            if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') /* no op for Json */
           }
 
         if (table === 'user') {
@@ -1398,8 +1591,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           vendedorCodigoAsesor: item.vendedorCodigoAsesor || null,
           vigencia: item.vigencia ? parseInt(item.vigencia) : 10,
           ivaTipo: item.ivaTipo || "exento",
-          equipos: item.equipos ? JSON.stringify(item.equipos) : null,
-          materiales: item.materiales ? JSON.stringify(item.materiales) : null,
+          equipos: item.equipos || null,
+          materiales: item.materiales || null,
           tipo_precio: item.tipo_precio || null,
           precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           fechaSeguimiento: item.fechaSeguimiento || null,
@@ -1440,7 +1633,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           tipo: item.tipo,
           detalle: item.detalle,
           evidencia: item.evidencia || null,
-          fileData: item.fileData || null,
+          fileUrl: item.fileUrl || null,
           estado: item.estado,
           satisfecho: item.satisfecho,
           lockedBy: item.lockedBy || null,
@@ -1588,7 +1781,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           cedula: item.cedula || null,
           correo: item.correo || null,
           concepto: item.concepto || null,
-          items: item.items ? JSON.stringify(item.items) : null,
+          items: item.items || null,
           nequi: item.nequi || null,
           titular: item.titular || null,
           estado: item.estado || null,
@@ -1671,7 +1864,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       updateType = 'CHAT_UPDATE';
     }
 
-    broadcastUpdate(updateType);
+    broadcastUpdate(updateType, diff);
     // 🛡️ Trazabilidad de Auditoría
     // NOTA: Se deshabilita el log genérico del backend porque el frontend 
     // ya genera logs específicos (logAudit) mucho más descriptivos.
@@ -1722,8 +1915,8 @@ const io = new Server(server, {
   }
 });
 
-function broadcastUpdate(type = 'DB_UPDATE') {
-  io.emit('db_update', { type, timestamp: Date.now() });
+function broadcastUpdate(type = 'DB_UPDATE', diff = null) {
+  io.emit('db_update', { type, diff, timestamp: Date.now() });
 }
 
 const onlineUsers = new Map(); // socket.id -> username

@@ -7,7 +7,7 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// 1. Roles (Mantiene la estructura plana heredada y añade RBAC JSON)
+// 1. Roles
 model Role {
   id                 String   @id
   name               String
@@ -19,57 +19,80 @@ model Role {
   viewTechPrice      Boolean  @default(false)
   viewWholesalePrice Boolean  @default(false)
   viewCostPrice      Boolean  @default(false)
-  permissions        String?  @db.Text // JSON con la estructura de permisos granulares por módulo
+  permissions        Json? // JSON con la estructura de permisos granulares por módulo
+
+  users User[]
 }
 
 // 2. Usuarios
 model User {
-  id            String   @id
+  id            String  @id
   nombre        String
   apellido      String
   cedula        String
-  tipoDoc       String?  @default("CC")
+  tipoDoc       String? @default("CC")
   correo        String
   cargo         String
   telefono      String?
   observaciones String?
-  user          String   @unique
+  user          String  @unique
   pass          String
   roleId        String
-  meta_u        Float    @default(0)
-  ejec_u        Float    @default(0)
-  meta_p        Float    @default(0)
-  ejec_p        Float    @default(0)
-  soundsEnabled Boolean? @default(true)
-  cumpleanos    String?
-  habeasDataAccepted Boolean? @default(false)
-  refreshToken  String?
-  
+  role          Role    @relation(fields: [roleId], references: [id])
+
+  meta_u             Float     @default(0)
+  ejec_u             Float     @default(0)
+  meta_p             Float     @default(0)
+  ejec_p             Float     @default(0)
+  soundsEnabled      Boolean?  @default(true)
+  cumpleanos         DateTime?
+  habeasDataAccepted Boolean?  @default(false)
+  refreshToken       String?
+
   // Anti-Brute Force
-  failedLoginAttempts Int @default(0)
+  failedLoginAttempts Int     @default(0)
   isLocked            Boolean @default(false)
-  
+
   // Auditoría de Sesión
-  lastLogin           String?
-  isOnline            Boolean @default(false)
-  
+  lastLogin DateTime?
+  isOnline  Boolean   @default(false)
+
   // Archivos multimedia
-  foto                String?
+  foto String?
 
   // Módulo de Ubicación
-  lat                 Float?
-  lng                 Float?
-  lastLocationUpdate  Float?
+  lat                Float?
+  lng                Float?
+  lastLocationUpdate Float?
 
   // Datos Adicionales
-  codigoAsesor        String?
+  codigoAsesor String?
+
+  // Relaciones Inversas
+  ventas                Venta[]
+  pqrs                  PQR[]                  @relation("PQRUsuario")
+  servicios             Servicio[]             @relation("ServicioTecnico")
+  solicitudes           Solicitud[]            @relation("SolicitudAsesor")
+  procesosAsesor        ProcesoDisciplinario[] @relation("ProcesoAsesor")
+  procesosJefe          ProcesoDisciplinario[] @relation("ProcesoJefe")
+  evaluacionesHechas    Evaluacion[]           @relation("EvaluacionEvaluador")
+  evaluacionesRecibidas Evaluacion[]           @relation("EvaluacionEvaluado")
+  cotizaciones          Cotizacion[]           @relation("CotizacionVendedor")
+  chatsSent             Chat[]                 @relation("ChatSender")
+  chatsReceived         Chat[]                 @relation("ChatReceiver")
+  chatGroupsCreated     ChatGroup[]            @relation("GroupCreator")
+  auditorias            Auditoria[]
+  notificaciones        Notificacion[]
+  comisionistas         Comisionista[]
+  pendingResets         PendingReset[]
+  capacitacionesCreadas Capacitacion[]         @relation("CapacitacionCreador")
 }
 
 // 3. Clientes
 model Cliente {
-  id                 String   @id
+  id                 String  @id
   doc_tipo           String
-  doc                String   @unique
+  doc                String  @unique
   nom                String
   tipo_cliente       String
   tel                String
@@ -77,287 +100,326 @@ model Cliente {
   direccion          String?
   owner              String?
   lockedBy           String?
-  habeasDataAccepted Boolean  @default(false)
+  habeasDataAccepted Boolean @default(false)
 
   // Campos del formato vinculación Clientes
-  numVinculacion      String?
-  fechaVinculacion    String?
-  motivoEncuesta      String?
-  transfA             String?
-  asesorCodigo        String?
-  asesorNombre        String?
-  codigoCliente       String?
-  personaTipo         String?
-  digitoVerificacion  String?
-  sociedadTipo        String?
-  barrio              String?
-  ciudad              String?
-  departamento        String?
-  establecimientoNombre String?
-  correoFacturacion   String?
-  contactoComercial   String?
-  cargoContacto       String?
-  correoComercial     String?
-  celularContacto     String?
-  condicionesPago     String?
-  condicionesPagoDias Int?
-  documentosEntregados String?
-  ameritaSeguimiento  Boolean?
-  formaPago           String?
-  formaPagoContado    String?
-  formaPagoContadoCual String?
-  formaContacto       String?
-  formaContactoOtra   String?
-  transaccionDetalles String?
-  asesorTransaccion   String?
-  porcentajeAutorizado Float?
+  numVinculacion           String?
+  fechaVinculacion         DateTime?
+  motivoEncuesta           String?
+  transfA                  String?
+  asesorCodigo             String?
+  asesorNombre             String?
+  codigoCliente            String?
+  personaTipo              String?
+  digitoVerificacion       String?
+  sociedadTipo             String?
+  barrio                   String?
+  ciudad                   String?
+  departamento             String?
+  establecimientoNombre    String?
+  correoFacturacion        String?
+  contactoComercial        String?
+  cargoContacto            String?
+  correoComercial          String?
+  celularContacto          String?
+  condicionesPago          String?
+  condicionesPagoDias      Int?
+  documentosEntregados     String?
+  ameritaSeguimiento       Boolean?
+  formaPago                String?
+  formaPagoContado         String?
+  formaPagoContadoCual     String?
+  formaContacto            String?
+  formaContactoOtra        String?
+  transaccionDetalles      String?
+  asesorTransaccion        String?
+  porcentajeAutorizado     Float?
   observacionesTransaccion String?
-  firmaNombre         String?
-  firmaCedula         String?
-  firmaFecha          String?
-  descripcion         String?
-  adjuntos            String?  @db.Text
+  firmaNombre              String?
+  firmaCedula              String?
+  firmaFecha               DateTime?
+  descripcion              String?
+  adjuntos                 Json?
 
   // Relaciones inversas
-  ventas             Venta[]
-  cotizaciones       Cotizacion[]
-  pqrs               PQR[]
-  servicios          Servicio[]
+  ventas       Venta[]
+  cotizaciones Cotizacion[]
+  pqrs         PQR[]
+  servicios    Servicio[]
+
+  @@index([doc])
+  @@index([nom])
 }
 
 // 4. Inventario (Productos)
 model Inventario {
-  id              String  @id
-  cod             String
-  ref             String
-  nom             String
-  marca           String
-  clasif          String
-  subclasif       String
-  tech            String
-  btu             String
-  volt            String
-  cant            Int
-  pedido          Int
-  precio          Float
-  precio_publico  Float?
-  precio_tecnico  Float?
+  id               String  @id
+  cod              String  @unique
+  ref              String
+  nom              String
+  marca            String
+  clasif           String
+  subclasif        String
+  tech             String
+  btu              String
+  volt             String
+  cant             Int
+  pedido           Int
+  precio           Float
+  precio_publico   Float?
+  precio_tecnico   Float?
   precio_mayorista Float?
-  precio_costo    Float?
-  vendidas        Int     @default(0)
-  lockedBy        String?
+  precio_costo     Float?
+  vendidas         Int     @default(0)
+  lockedBy         String?
 
   // Relaciones inversas
-  ventas          Venta[]
-  cotizaciones    Cotizacion[]
+  ventaItems      VentaItem[]
+  cotizacionItems CotizacionItem[]
+  pqrs            PQR[]
+  servicios       Servicio[]
 }
 
 // 5. Ventas / Facturación
 model Venta {
-  id                String     @id
-  fecha             String
-  fechaIso          String
-  venceGarantiaIso  String
-  mesesGarantia     Int
-  vendedor          String
-  
-  // Relación con Cliente (Normalizado)
-  clienteId         String
-  cliente           Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  
-  // Relación con Producto/Inventario (Normalizado)
-  productoId        String
-  producto          Inventario @relation(fields: [productoId], references: [id], onDelete: Cascade)
-  
-  cant              Int
-  desc              Float
-  metodoPago        String
-  total             Float
-  comisionistaId    String?
-  comisionistaNombre String?
-  comisionistaPct   Float?
-  comisionistaValor Float?
-  estadoComision    String?
-  fechaComision     String?
-  tipo_precio       String?
-  precioUnitario    Float?
-  lockedBy          String?
-  serialEquipo      String?
+  id               String   @id
+  fecha            DateTime
+  fechaIso         DateTime
+  venceGarantiaIso DateTime
+  mesesGarantia    Int
 
-  // Nuevos campos para datos del vendedor
-  vendedorNombre        String?
-  vendedorCargo         String?
-  vendedorEmail         String?
-  vendedorMovil         String?
-  vendedorCodigoAsesor  String?
-  equipos               String?
-  materiales            String?
+  vendedorId String
+  vendedor   User   @relation(fields: [vendedorId], references: [id])
+
+  // Relación con Cliente (Normalizado)
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  // Relación a múltiples productos
+  items VentaItem[]
+
+  metodoPago         String
+  total              Float
+  comisionistaId     String?
+  comisionista       Comisionista? @relation(fields: [comisionistaId], references: [id])
+  comisionistaNombre String?
+  comisionistaPct    Float?
+  comisionistaValor  Float?
+  estadoComision     String?
+  fechaComision      DateTime?
+  tipo_precio        String?
+  lockedBy           String?
+
+  // Datos desnormalizados del vendedor (Mantenidos por ahora para retrocompatibilidad parcial)
+  vendedorNombre       String?
+  vendedorCargo        String?
+  vendedorEmail        String?
+  vendedorMovil        String?
+  vendedorCodigoAsesor String?
+  equipos              Json?
+  materiales           Json?
+
+  pqrs      PQR[]
+  servicios Servicio[]
+}
+
+model VentaItem {
+  id             String     @id @default(uuid())
+  ventaId        String
+  venta          Venta      @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  productoId     String
+  producto       Inventario @relation(fields: [productoId], references: [id])
+  cant           Int
+  precioUnitario Float
+  desc           Float
+  serialEquipo   String?
 }
 
 // 6. PQRS
 model PQR {
-  id                  String   @id
-  fecha               String
-  limiteIso           String
-  
+  id        String   @id
+  fecha     DateTime
+  limiteIso DateTime
+
   // Relación con Cliente (Normalizado)
-  clienteId           String
-  cliente             Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  
-  tipo                String
-  detalle             String
-  evidencia           String?
-  fileData            String?  @db.Text
-  estado              String
-  satisfecho          String
-  lockedBy            String?
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  tipo       String
+  detalle    String
+  evidencia  String?
+  fileUrl    String? // Reemplaza a fileData String @db.Text
+  estado     String
+  satisfecho String
+  lockedBy   String?
 
   // Campos adicionales para el rediseño
   radicado            String?
-  hechos              String?  @db.Text
-  solicitudes         String?  @db.Text
-  evidencias          String?  @db.Text // JSON list of files
-  aplicaGarantia      Boolean? @default(false)
+  hechos              String?   @db.Text
+  solicitudes         String?   @db.Text
+  evidencias          Json? // Reemplaza String @db.Text
+  aplicaGarantia      Boolean?  @default(false)
   tratamientoGarantia String?
   terminoLegal        String?
-  fechaCierre         String?
-  inventarioId        String?
-  ventaId             String?
-  cotizacionId        String?
-  trazabilidad        String?  @db.Text // JSON list of history
-  usuarioAsignado     String?
+  fechaCierre         DateTime?
+
+  inventarioId String?
+  inventario   Inventario? @relation(fields: [inventarioId], references: [id])
+  ventaId      String?
+  venta        Venta?      @relation(fields: [ventaId], references: [id])
+  cotizacionId String?
+  cotizacion   Cotizacion? @relation(fields: [cotizacionId], references: [id])
+
+  trazabilidad Json? // Reemplaza String @db.Text
+
+  usuarioAsignadoId String?
+  usuarioAsignado   User?   @relation("PQRUsuario", fields: [usuarioAsignadoId], references: [id])
 }
 
 // 7. Servicios Técnicos
 model Servicio {
-  id             String  @id
-  
+  id String @id
+
   // Relación con Cliente (Normalizado)
-  clienteId      String
-  cliente        Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  
-  fechaProg      String
-  tipo           String
-  obs            String
-  estado         String
-  obsAdmin       String?
-  lockedBy       String?
-  
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  fechaProg DateTime
+  tipo      String
+  obs       String
+  estado    String
+  obsAdmin  String?
+  lockedBy  String?
+
   // Campos de React
-  tecnico        String?
+  tecnicoId      String?
+  tecnico        User?     @relation("ServicioTecnico", fields: [tecnicoId], references: [id])
   equipoDetalle  String?
-  obsRecepcion   String? @db.Text
-  obsDiagnostico String? @db.Text
-  obsCotizacion  String? @db.Text
-  obsEjecucion   String? @db.Text
-  obsCalidad     String? @db.Text
-  fechaCreacion  String?
-  fechaIso       String?
+  obsRecepcion   String?   @db.Text
+  obsDiagnostico String?   @db.Text
+  obsCotizacion  String?   @db.Text
+  obsEjecucion   String?   @db.Text
+  obsCalidad     String?   @db.Text
+  fechaCreacion  DateTime?
+  fechaIso       DateTime?
 
   // Campos adicionales para el rediseño
-  radicado       String?
-  inventarioId   String?
-  ventaId        String?
-  cotizacionId   String?
+  radicado String?
+
+  inventarioId String?
+  inventario   Inventario? @relation(fields: [inventarioId], references: [id])
+  ventaId      String?
+  venta        Venta?      @relation(fields: [ventaId], references: [id])
+  cotizacionId String?
+  cotizacion   Cotizacion? @relation(fields: [cotizacionId], references: [id])
+
   etapaActual    String?
-  evidencias     String? @db.Text // JSON list of files
-  trazabilidad   String? @db.Text // JSON list of history
+  evidencias     Json? // Reemplaza String @db.Text
+  trazabilidad   Json? // Reemplaza String @db.Text
   aplicaGarantia Boolean? @default(false)
   costoServicio  Float?   @default(0)
 }
 
 // 8. Solicitudes Laborales (Empleados)
 model Solicitud {
-  id            String  @id
-  fecha         String
-  asesor        String
-  nombreAsesor  String?
-  tipo          String
-  detalle       String?
-  evidencia     String?
-  fileData      String? @db.Text
-  estado        String
-  lockedBy      String?
-  
+  id           String   @id
+  fecha        DateTime
+  asesorId     String
+  asesor       User     @relation("SolicitudAsesor", fields: [asesorId], references: [id])
+  nombreAsesor String?
+  tipo         String
+  detalle      String?
+  evidencia    String?
+  fileUrl      String? // Reemplaza fileData String @db.Text
+  estado       String
+  lockedBy     String?
+
   // Campos de React
-  comentario    String? @db.Text
-  fechaRadicado String?
+  comentario    String?   @db.Text
+  fechaRadicado DateTime?
 }
 
 // 9. Procesos Disciplinarios
 model ProcesoDisciplinario {
-  id               String  @id
-  fecha            String
-  asesor           String
-  jefe             String?
+  id    String   @id
+  fecha DateTime
+
+  asesorId String
+  asesor   User    @relation("ProcesoAsesor", fields: [asesorId], references: [id])
+  jefeId   String?
+  jefe     User?   @relation("ProcesoJefe", fields: [jefeId], references: [id])
+
   falta            String
   obs              String
   etapa            Int
   descargo         String?
   sancion          String?
-  diasSuspension   Int     @default(0)
-  renunciaTerminos Boolean @default(false)
-  timestampEtapa   Float
+  diasSuspension   Int      @default(0)
+  renunciaTerminos Boolean  @default(false)
+  timestampEtapa   DateTime
   lockedBy         String?
 }
 
 // 10. Evaluaciones de Desempeño
 model Evaluacion {
-  id             String  @id
-  fecha          String
-  evaluador      String?
-  evaluado       String?
+  id    String   @id
+  fecha DateTime
+
+  evaluadorId String?
+  evaluador   User?   @relation("EvaluacionEvaluador", fields: [evaluadorId], references: [id])
+  evaluadoId  String?
+  evaluado    User?   @relation("EvaluacionEvaluado", fields: [evaluadoId], references: [id])
+
   evaluadoNombre String?
   tipo           String?
   obs            String?
-  scores         Json?   // Guarda el objeto {metas, ppto, atencion, quejas, resp, ventas}
+  scores         Json? // Guarda el objeto {metas, ppto, atencion, quejas, resp, ventas}
   lockedBy       String?
-  
+
   // Campos de React
-  empleado       String?
-  metajobs       Int?
-  asistencia     Int?
-  objetivos      Int?
-  promedio       Float?
+  empleado   String?
+  metajobs   Int?
+  asistencia Int?
+  objetivos  Int?
+  promedio   Float?
 }
 
 // 11. Comunicados Oficiales
 model Anuncio {
-  id        String  @id
-  fecha     String?
-  titulo    String
-  mensaje   String?
-  lockedBy  String?
-  
+  id       String    @id
+  fecha    DateTime?
+  titulo   String
+  mensaje  String?
+  lockedBy String?
+
   // Campos de React
-  contenido String? @db.Text
-  expiresAt String?
-  expired   Boolean? @default(false)
+  contenido String?   @db.Text
+  expiresAt DateTime?
+  expired   Boolean?  @default(false)
 }
 
 // 12. Cotizaciones
 model Cotizacion {
-  id                String     @id
-  numCotizacion     String?
-  fecha             String
-  vendedor          String
-  
+  id            String   @id
+  numCotizacion String?
+  fecha         DateTime
+
+  vendedorId String
+  vendedor   User   @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
+
   // Relación con Cliente (Normalizado)
-  clienteId         String
-  cliente           Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  
-  // Relación con Producto/Inventario (Normalizado)
-  productoId        String
-  producto          Inventario @relation(fields: [productoId], references: [id], onDelete: Cascade)
-  
-  cant              Int
-  desc              Float
-  total             Float
-  comisionistaId    String?
+  clienteId String
+  cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+
+  // Relación a múltiples productos
+  items CotizacionItem[]
+
+  total              Float
+  comisionistaId     String?
   comisionistaNombre String?
-  comisionistaPct   Float?
-  comisionistaValor Float?
-  lockedBy          String?
+  comisionistaPct    Float?
+  comisionistaValor  Float?
+  lockedBy           String?
 
   // Nuevos campos para soporte de múltiples ítems y propuesta
   contacto          String?
@@ -372,87 +434,114 @@ model Cotizacion {
   firmanteMovil     String?
   garantia          String?
   observacion       String?
-  vigencia          Int?       @default(10)
-  ivaTipo           String?    @default("exento")
-  equipos           String?    // JSON stringified array of equipments
-  materiales        String?    // JSON stringified array of materials
-  tipo_precio        String?
-  precioUnitario     Float?
-  fechaSeguimiento   String?
-  estadoSeguimiento  String?
-  motivoSeguimiento  String?
-  motivoNoCompra     String?
+  vigencia          Int?      @default(10)
+  ivaTipo           String?   @default("exento")
+  equipos           Json? // JSON en vez de String
+  materiales        Json? // JSON en vez de String
+  tipo_precio       String?
+  fechaSeguimiento  DateTime?
+  estadoSeguimiento String?
+  motivoSeguimiento String?
+  motivoNoCompra    String?
 
   // Nuevos campos para datos del vendedor
-  vendedorNombre        String?
-  vendedorCargo         String?
-  vendedorEmail         String?
-  vendedorMovil         String?
-  vendedorCodigoAsesor  String?
+  vendedorNombre       String?
+  vendedorCargo        String?
+  vendedorEmail        String?
+  vendedorMovil        String?
+  vendedorCodigoAsesor String?
+
+  pqrs      PQR[]
+  servicios Servicio[]
+}
+
+model CotizacionItem {
+  id             String     @id @default(uuid())
+  cotizacionId   String
+  cotizacion     Cotizacion @relation(fields: [cotizacionId], references: [id], onDelete: Cascade)
+  productoId     String
+  producto       Inventario @relation(fields: [productoId], references: [id])
+  cant           Int
+  precioUnitario Float
+  desc           Float
 }
 
 // 13. Chat Interno
 model Chat {
-  id          String   @id
-  timestamp   Float
-  fecha       String
-  user        String
-  nombre      String
-  to          String
+  id        String   @id
+  timestamp DateTime @default(now())
+  fecha     DateTime
+
+  senderId String
+  sender   User   @relation("ChatSender", fields: [senderId], references: [id])
+  nombre   String
+
+  receiverId String?
+  receiver   User?   @relation("ChatReceiver", fields: [receiverId], references: [id])
+
   text        String?
   senderTabId String?
-  isNudge     Boolean  @default(false)
-  isSticker   Boolean  @default(false)
-  stickerId   String?
-  stickerData String?  @db.Text
-  isAudio     Boolean  @default(false)
-  audioData   String?  @db.Text
-  isFile      Boolean  @default(false)
-  fileData    String?  @db.Text
-  fileName    String?
-  fileType    String?
-  isMeeting   Boolean  @default(false)
-  meetingId   String?
-  readAt      Float?
-  isDeleted   Boolean  @default(false)
-  isEdited    Boolean  @default(false)
+  isNudge     Boolean @default(false)
+
+  isSticker  Boolean @default(false)
+  stickerId  String?
+  stickerUrl String? // Reemplaza stickerData String @db.Text
+
+  isAudio  Boolean @default(false)
+  audioUrl String? // Reemplaza audioData String @db.Text
+
+  isFile   Boolean @default(false)
+  fileUrl  String? // Reemplaza fileData String @db.Text
+  fileName String?
+  fileType String?
+
+  isMeeting Boolean   @default(false)
+  meetingId String?
+  readAt    DateTime?
+  isDeleted Boolean   @default(false)
+  isEdited  Boolean   @default(false)
 }
 
 // 13.5 Grupos de Chat
 model ChatGroup {
-  id          String   @id
+  id          String  @id
   nombre      String
   descripcion String?
-  createdBy   String
-  fecha       String
-  integrantes String   // JSON stringified array of usernames
+
+  createdById String
+  createdBy   User   @relation("GroupCreator", fields: [createdById], references: [id])
+
+  fecha       DateTime
+  integrantes Json // JSON array of user IDs/usernames
 }
 
 // 14. Auditoría Interna
 model Auditoria {
-  id            String  @id @default(uuid())
-  user          String
-  fecha         String
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  fecha         DateTime
   action        String
   modulo        String
   recordDetails String?
-  shadowingData String?  @db.Text
+  shadowingData Json? // Mejorado de String @db.Text a Json
   hash          String?
 }
 
 // 15. Notificaciones
 model Notificacion {
-  id           String  @id
-  para         String
+  id           String   @id
+  paraId       String
+  para         User     @relation(fields: [paraId], references: [id])
   mensaje      String
-  fecha        String
-  leida        Boolean @default(false)
+  fecha        DateTime
+  leida        Boolean  @default(false)
   targetModule String?
 }
 
 // 16. Comisionistas y Técnicos
 model Comisionista {
-  id             String  @id
+  id             String    @id
   tipo           String?
   nombre         String
   cedula         String?
@@ -462,14 +551,18 @@ model Comisionista {
   cliente_remite String?
   valor_venta    Float?
   pct_comision   Float?
-  fecha          String?
-  owner          String?
-  lockedBy       String?
-  
+  fecha          DateTime?
+
+  ownerId  String?
+  owner    User?   @relation(fields: [ownerId], references: [id])
+  lockedBy String?
+
   // Campos de React
-  doc            String?
-  tel            String?
-  porcentaje     Float?
+  doc        String?
+  tel        String?
+  porcentaje Float?
+
+  ventas Venta[]
 }
 
 // 17. WhatsApp Configuración (Objeto único)
@@ -481,10 +574,11 @@ model WhatsappConfig {
 
 // 18. Restablecimientos de contraseña pendientes
 model PendingReset {
-  id     String @id @default(uuid())
-  user   String
+  id     String   @id @default(uuid())
+  userId String
+  user   User     @relation(fields: [userId], references: [id])
   token  String
-  expire Float
+  expire DateTime
 }
 
 // 19. Configuracion de Informes (Valores editables)
@@ -503,35 +597,38 @@ model InformesConfig {
 
 // 20. Cuentas de Cobro
 model CuentasCobro {
-  id          String   @id
-  ciudad      String?
-  fecha       String?
-  cuenta      String?
-  nombre      String?
-  cedula      String?
-  correo      String?
-  concepto    String?
-  items       String?  @db.Text
-  nequi       String?
-  titular     String?
-  estado      String?
-  total       Float?   @default(0)
+  id       String    @id
+  ciudad   String?
+  fecha    DateTime?
+  cuenta   String?
+  nombre   String?
+  cedula   String?
+  correo   String?
+  concepto String?
+  items    Json? // Reemplazado de String @db.Text
+  nequi    String?
+  titular  String?
+  estado   String?
+  total    Float?    @default(0)
 }
 
 // 21. Capacitaciones en Ventas
 model Capacitacion {
-  id            String  @id
-  tipo          String  @default("En Vivo") // "En Vivo", "Autodidactico"
-  tema          String
-  descripcion   String? @db.Text
-  fecha         String
-  hora          String
-  obligatoria   Boolean @default(true)
-  creador       String
-  videoLink     String?
-  materiales    String? @db.Text // JSON para adjuntos
-  asistentes    String? @db.Text // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
-  evaluacion    String? @db.Text // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
-  estado        String  @default("Programada") // Programada, En Curso, Finalizada
-  lockedBy      String?
+  id          String   @id
+  tipo        String   @default("En Vivo") // "En Vivo", "Autodidactico"
+  tema        String
+  descripcion String?  @db.Text
+  fecha       DateTime
+  hora        String
+  obligatoria Boolean  @default(true)
+
+  creadorId String
+  creador   User   @relation("CapacitacionCreador", fields: [creadorId], references: [id])
+
+  videoLink  String?
+  materiales Json? // JSON para adjuntos
+  asistentes Json? // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
+  evaluacion Json? // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
+  estado     String  @default("Programada") // Programada, En Curso, Finalizada
+  lockedBy   String?
 }
