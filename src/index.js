@@ -1357,6 +1357,17 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.materiales !== undefined && typeof data.materiales !== 'string') {}
             if (data.asistentes !== undefined && typeof data.asistentes !== 'string') {}
             if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') {}
+          } else if (table === 'auditoria') {
+            if (data.user && typeof data.user === 'string') {
+              const dbU = await tx.user.findFirst({ where: { user: data.user } });
+              if (dbU) {
+                data.userId = dbU.id;
+              }
+              delete data.user;
+            }
+            if (data.fecha && typeof data.fecha === 'string') {
+              data.fecha = new Date(data.fecha);
+            }
           }
 
         if (table === 'user') {
