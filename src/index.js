@@ -373,8 +373,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       // Registrar auditoría
       await prisma.auditoria.create({
         data: {
-          user: dbUser.user,
-          fecha: nowIso,
+          userId: dbUser.id,
+          fecha: new Date(),
           action: 'LOGIN',
           modulo: 'Autenticación',
           recordDetails: 'Inicio de sesión exitoso'
@@ -674,8 +674,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
     await prisma.auditoria.create({
       data: {
         id: Date.now().toString() + Math.random().toString().slice(-4),
-        user: dbUser.user,
-        fecha: new Date().toLocaleString('es-ES'),
+        userId: dbUser.id,
+        fecha: new Date(),
         action: 'Modificar',
         modulo: 'Usuario',
         recordDetails: `Cambio de contraseña para usuario [${dbUser.user}] mediante enlace de correo`

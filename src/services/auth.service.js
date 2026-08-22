@@ -81,8 +81,8 @@ class AuthService {
 
         await prisma.auditoria.create({
             data: {
-                user: dbUser.user,
-                fecha: nowIso,
+                userId: dbUser.id,
+                fecha: new Date(),
                 action: 'LOGIN',
                 modulo: 'Autenticación',
                 recordDetails: 'Inicio de sesión exitoso'
