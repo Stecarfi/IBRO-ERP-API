@@ -28,6 +28,11 @@ setupCronJobs();
 // Middleware de Autenticación
 const authenticateToken = (req, res, next) => {
   const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
+  
+  // LOGS DE DIAGNÓSTICO TEMPORAL
+  console.log("AUTH HEADER:", req.headers['authorization'] || 'N/A');
+  console.log("TOKEN:", token || 'N/A');
+
   if (!token) {
     console.error(`[AUTH ERROR] No token provided. Request to: ${req.originalUrl}. Headers auth: ${req.headers['authorization']}, Cookies: ${JSON.stringify(req.cookies)}`);
     return res.status(401).json({ error: 'Acceso denegado. No hay token proporcionado.' });
@@ -39,6 +44,7 @@ const authenticateToken = (req, res, next) => {
       return res.status(403).json({ error: 'Token expirado o inválido.' });
     }
     req.user = user;
+    console.log("USER:", req.user);
     next();
   });
 };
@@ -1936,8 +1942,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
     res.json({ success: true, timestamp: Date.now() });
   } catch (error) {
-    console.error('Error syncing database:', error);
-    res.status(500).json({ error: 'Error al sincronizar la base de datos', details: error.message });
+    console.error("SYNC ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      stack: error.stack
+    });
   }
 });
 
