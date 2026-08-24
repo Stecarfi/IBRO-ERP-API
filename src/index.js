@@ -1386,9 +1386,18 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') {}
           } else if (table === 'auditoria') {
             if (data.user && typeof data.user === 'string') {
-              const dbU = await tx.user.findFirst({ where: { user: data.user } });
+              let usernameToSearch = data.user;
+              const match = data.user.match(/\(([^)]+)\)$/);
+              if (match && match[1]) {
+                usernameToSearch = match[1];
+              }
+
+              const dbU = await tx.user.findFirst({ where: { user: usernameToSearch } });
               if (dbU) {
                 data.userId = dbU.id;
+              } else {
+                const fallbackUser = await tx.user.findFirst({ orderBy: { id: 'asc' } });
+                data.userId = fallbackUser?.id || "1";
               }
               delete data.user;
             }
