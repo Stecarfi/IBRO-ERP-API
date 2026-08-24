@@ -53,8 +53,8 @@ class SyncService {
       vendedorCodigoAsesor: v.vendedorCodigoAsesor,
       estadoComision: v.estadoComision,
       fechaComision: v.fechaComision,
-      equipos: v.equipos ? JSON.parse(v.equipos) : [],
-      materiales: v.materiales ? JSON.parse(v.materiales) : []
+      equipos: v.equipos ? (typeof v.equipos === 'string' ? JSON.parse(v.equipos) : v.equipos) : [],
+      materiales: v.materiales ? (typeof v.materiales === 'string' ? JSON.parse(v.materiales) : v.materiales) : []
     }));
 
     // Mapear PQRS
@@ -214,8 +214,8 @@ class SyncService {
       vendedorCodigoAsesor: c.vendedorCodigoAsesor,
       vigencia: c.vigencia,
       ivaTipo: c.ivaTipo,
-      equipos: c.equipos ? JSON.parse(c.equipos) : [],
-      materiales: c.materiales ? JSON.parse(c.materiales) : [],
+      equipos: c.equipos ? (typeof c.equipos === 'string' ? JSON.parse(c.equipos) : c.equipos) : [],
+      materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
       tipo_precio: c.tipo_precio,
       precioUnitario: c.precioUnitario,
       fechaSeguimiento: c.fechaSeguimiento,
@@ -231,7 +231,7 @@ class SyncService {
       descripcion: g.descripcion || '',
       createdBy: g.createdBy,
       fecha: g.fecha,
-      integrantes: g.integrantes ? JSON.parse(g.integrantes) : []
+      integrantes: g.integrantes ? (typeof g.integrantes === 'string' ? JSON.parse(g.integrantes) : g.integrantes) : []
     }));
 
     const chatDesc = await prisma.chat.findMany({ orderBy: { timestamp: 'desc' }, take: 150 });
@@ -250,7 +250,7 @@ class SyncService {
       cedula: c.cedula || '',
       correo: c.correo || '',
       concepto: c.concepto || '',
-      items: c.items ? JSON.parse(c.items) : [],
+      items: c.items ? (typeof c.items === 'string' ? JSON.parse(c.items) : c.items) : [],
       nequi: c.nequi || '',
       titular: c.titular || '',
       estado: c.estado || '',
@@ -308,9 +308,9 @@ class SyncService {
       obligatoria: c.obligatoria,
       creador: c.creador,
       videoLink: c.videoLink || '',
-      materiales: c.materiales ? JSON.parse(c.materiales) : [],
-      asistentes: c.asistentes ? JSON.parse(c.asistentes) : [],
-      evaluacion: c.evaluacion ? JSON.parse(c.evaluacion) : null,
+      materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
+      asistentes: c.asistentes ? (typeof c.asistentes === 'string' ? JSON.parse(c.asistentes) : c.asistentes) : [],
+      evaluacion: c.evaluacion ? (typeof c.evaluacion === 'string' ? JSON.parse(c.evaluacion) : c.evaluacion) : null,
       estado: c.estado,
       lockedBy: c.lockedBy
     }));
@@ -487,9 +487,9 @@ class SyncService {
         }
 
         const data = {
-          fecha: item.fecha,
-          fechaIso: item.fechaIso,
-          venceGarantiaIso: item.venceGarantiaIso,
+          fecha: item.fecha ? new Date(item.fecha) : new Date(),
+          fechaIso: item.fechaIso ? new Date(item.fechaIso) : new Date(),
+          venceGarantiaIso: item.venceGarantiaIso ? new Date(item.venceGarantiaIso) : new Date(),
           mesesGarantia: parseInt(item.mesesGarantia) || 0,
           vendedor: item.vendedor,
           clienteId: client.id,
@@ -552,7 +552,7 @@ class SyncService {
 
         const data = {
           numCotizacion: item.numCotizacion || null,
-          fecha: item.fecha,
+          fecha: item.fecha ? new Date(item.fecha) : new Date(),
           vendedor: item.vendedor,
           clienteId: client.id,
           productoId: product.id,
@@ -613,8 +613,8 @@ class SyncService {
         }
 
         const data = {
-          fecha: item.fecha,
-          limiteIso: item.limiteIso,
+          fecha: item.fecha ? new Date(item.fecha) : new Date(),
+          limiteIso: item.limiteIso ? new Date(item.limiteIso) : new Date(),
           clienteId: client.id,
           tipo: item.tipo,
           detalle: item.detalle,
@@ -659,7 +659,7 @@ class SyncService {
 
         const data = {
           clienteId: client.id,
-          fechaProg: item.fechaProg,
+          fechaProg: item.fechaProg ? new Date(item.fechaProg) : new Date(),
           tipo: item.tipo,
           obs: item.obs,
           estado: item.estado,
@@ -790,7 +790,7 @@ class SyncService {
           tipo: item.tipo,
           tema: item.tema,
           descripcion: item.descripcion,
-          fecha: item.fecha,
+          fecha: item.fecha ? new Date(item.fecha) : new Date(),
           hora: item.hora,
           obligatoria: item.obligatoria,
           creador: item.creador,

@@ -5,7 +5,7 @@ const { z } = require('zod');
 
 const clienteSchema = z.object({
   id: z.string().uuid().or(z.string().min(1)),
-  doc: z.string().min(1),
+  doc: z.string().optional().nullable(),
   nom: z.string().min(1),
   tipo_cliente: z.string(),
   tel: z.string().optional().nullable(),
