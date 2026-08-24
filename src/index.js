@@ -1406,10 +1406,27 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
               if (!isNaN(d)) {
                 data.fecha = d;
               } else {
-                data.fecha = new Date(); // Fallback for localized invalid strings
+                data.fecha = new Date();
               }
             } else {
               data.fecha = new Date();
+            }
+          } else if (table === 'anuncio') {
+            if (data.expiresAt) {
+              const d = new Date(data.expiresAt);
+              data.expiresAt = isNaN(d) ? null : d;
+            }
+            if (data.fecha) {
+               // Manejar formato "dd/mm/yyyy" (como 24/8/2026) que arroja frontend
+               if (typeof data.fecha === 'string' && data.fecha.includes('/')) {
+                  const parts = data.fecha.split('/');
+                  if (parts.length === 3) {
+                     // Asume dd/mm/yyyy
+                     data.fecha = new Date(parts[2], parts[1] - 1, parts[0]);
+                  }
+               }
+               const d = new Date(data.fecha);
+               data.fecha = isNaN(d) ? new Date() : d;
             }
           }
 
@@ -1546,7 +1563,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         const finalVendedorId = item.vendedorId || (vUser ? vUser.id : null);
 
         if (!client || !product || !finalVendedorId) {
-          throw new Error(`Sync Venta ${item.id} fallida: Cliente, Producto o Vendedor no encontrado.`);
+          console.warn(`Sync Venta ${item.id} omitida: Cliente, Producto o Vendedor no encontrado.`);
+          continue;
         }
 
         const data = {
@@ -1633,7 +1651,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         const finalVendedorId = item.vendedorId || (vUser ? vUser.id : null);
 
         if (!client || !product || !finalVendedorId) {
-          throw new Error(`Sync Cotizacion ${item.id} fallida: Cliente, Producto o Vendedor no encontrado.`);
+          console.warn(`Sync Cotizacion ${item.id} omitida: Cliente, Producto o Vendedor no encontrado.`);
+          continue;
         }
 
         const data = {
@@ -1718,7 +1737,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           : null;
         
         if (!client) {
-          throw new Error(`Sync PQR ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
+          console.warn(`Sync PQR ${item.id} omitida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
+          continue;
         }
 
         const data = {
@@ -1769,7 +1789,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           : null;
         
         if (!client) {
-          throw new Error(`Sync Servicio ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
+          console.warn(`Sync Servicio ${item.id} omitida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
+          continue;
         }
 
         const data = {
