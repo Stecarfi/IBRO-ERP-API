@@ -41,7 +41,8 @@ const authenticateToken = (req, res, next) => {
   jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
     if (err) {
       console.error(`[AUTH ERROR] Invalid token: ${err.message}`);
-      return res.status(403).json({ error: 'Token expirado o inválido.' });
+      // Se cambia 403 a 401 para expiración de sesión, para que el frontend maneje mejor el refresh
+      return res.status(401).json({ error: 'Token expirado o inválido.' });
     }
     req.user = user;
     console.log("USER:", req.user);
@@ -1532,8 +1533,11 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           ? await tx.inventario.findFirst({ where: { OR: productConditions } }) 
           : null;
 
-        if (!client || !product) {
-          throw new Error(`Sync Venta ${item.id} fallida: Cliente (${item.clienteId || item.docCli}) o Producto (${item.productoId || item.idProd}) no encontrado.`);
+        const vUser = await tx.user.findFirst({ where: { user: item.vendedor } });
+        const finalVendedorId = item.vendedorId || (vUser ? vUser.id : null);
+
+        if (!client || !product || !finalVendedorId) {
+          throw new Error(`Sync Venta ${item.id} fallida: Cliente, Producto o Vendedor no encontrado.`);
         }
 
         const data = {
@@ -1541,11 +1545,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           fechaIso: item.fechaIso,
           venceGarantiaIso: item.venceGarantiaIso,
           mesesGarantia: parseInt(item.mesesGarantia) || 0,
-          vendedor: item.vendedor,
+          vendedorId: finalVendedorId,
           clienteId: client.id,
-          productoId: product.id,
-          cant: parseInt(item.cant) || 0,
-          desc: parseFloat(item.desc) || 0,
           metodoPago: item.metodoPago || 'Efectivo',
           total: parseFloat(item.total) || 0,
           comisionistaId: item.comisionistaId || null,
@@ -1553,9 +1554,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           comisionistaPct: item.comisionistaPct ? parseFloat(item.comisionistaPct) : null,
           comisionistaValor: item.comisionistaValor ? parseFloat(item.comisionistaValor) : null,
           tipo_precio: item.tipo_precio || null,
-          precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           lockedBy: item.lockedBy || null,
-          serialEquipo: item.serialEquipo || null,
           vendedorNombre: item.vendedorNombre || null,
           vendedorCargo: item.vendedorCargo || null,
           vendedorEmail: item.vendedorEmail || null,
@@ -1568,6 +1567,29 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           update: data,
           create: { id: item.id, ...data },
         });
+
+        // Sincronizar Items de Venta (Backward Compatibility)
+        await tx.ventaItem.deleteMany({ where: { ventaId: item.id } });
+        const itemsToCreate = (item.items && item.items.length > 0) ? item.items : [{
+            productoId: product.id,
+            cant: parseInt(item.cant) || 0,
+            precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : 0,
+            desc: parseFloat(item.desc) || 0,
+            serialEquipo: item.serialEquipo || null
+        }];
+
+        for (const i of itemsToCreate) {
+             await tx.ventaItem.create({
+                 data: {
+                     ventaId: item.id,
+                     productoId: i.productoId || product.id,
+                     cant: parseInt(i.cant) || 0,
+                     precioUnitario: i.precioUnitario ? parseFloat(i.precioUnitario) : 0,
+                     desc: parseFloat(i.desc) || 0,
+                     serialEquipo: i.serialEquipo || null
+                 }
+             });
+        }
       }
     }
 
@@ -1598,18 +1620,18 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           product = await tx.inventario.findFirst();
         }
 
-        if (!client || !product) {
-          throw new Error(`Sync Cotizacion ${item.id} fallida: Cliente o Producto no encontrado.`);
+        const vUser = await tx.user.findFirst({ where: { user: item.vendedor } });
+        const finalVendedorId = item.vendedorId || (vUser ? vUser.id : null);
+
+        if (!client || !product || !finalVendedorId) {
+          throw new Error(`Sync Cotizacion ${item.id} fallida: Cliente, Producto o Vendedor no encontrado.`);
         }
 
         const data = {
           numCotizacion: item.numCotizacion || null,
           fecha: item.fecha,
-          vendedor: item.vendedor,
+          vendedorId: finalVendedorId,
           clienteId: client.id,
-          productoId: product.id,
-          cant: parseInt(item.cant) || 0,
-          desc: parseFloat(item.desc) || 0,
           total: parseFloat(item.total) || 0,
           comisionistaId: item.comisionistaId || null,
           comisionistaNombre: item.comisionistaNombre || null,
@@ -1638,7 +1660,6 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           equipos: item.equipos || null,
           materiales: item.materiales || null,
           tipo_precio: item.tipo_precio || null,
-          precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           fechaSeguimiento: item.fechaSeguimiento || null,
           estadoSeguimiento: item.estadoSeguimiento || null,
           motivoSeguimiento: item.motivoSeguimiento || null,
@@ -1650,6 +1671,27 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           update: data,
           create: { id: item.id, ...data },
         });
+
+        // Sincronizar Items de Cotizacion
+        await tx.cotizacionItem.deleteMany({ where: { cotizacionId: item.id } });
+        const cItemsToCreate = (item.items && item.items.length > 0) ? item.items : [{
+            productoId: product.id,
+            cant: parseInt(item.cant) || 0,
+            precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : 0,
+            desc: parseFloat(item.desc) || 0
+        }];
+
+        for (const i of cItemsToCreate) {
+             await tx.cotizacionItem.create({
+                 data: {
+                     cotizacionId: item.id,
+                     productoId: i.productoId || product.id,
+                     cant: parseInt(i.cant) || 0,
+                     precioUnitario: i.precioUnitario ? parseFloat(i.precioUnitario) : 0,
+                     desc: parseFloat(i.desc) || 0
+                 }
+             });
+        }
       }
     }
 
