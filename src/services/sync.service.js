@@ -334,7 +334,7 @@ class SyncService {
           // Ya permitimos que foto se guarde y sincronice
         }
 
-        // Evitar conflictos por llaves ├║nicas (como doc en Clientes o user en Usuarios)
+        // Evitar conflictos por llaves únicas (como doc en Clientes o user en Usuarios)
         if (table === 'cliente' && item.doc) {
           const existing = await tx.cliente.findUnique({ where: { doc: item.doc } });
           if (existing) {
@@ -344,6 +344,26 @@ class SyncService {
               data
             });
             continue;
+          }
+        }
+
+        if (table === 'auditoria') {
+          if (data.user && typeof data.user === 'string') {
+            const dbU = await tx.user.findFirst({ where: { user: data.user } });
+            if (dbU) {
+              data.userId = dbU.id;
+            }
+            delete data.user;
+          }
+          if (data.fecha) {
+            const d = new Date(data.fecha);
+            if (!isNaN(d)) {
+              data.fecha = d;
+            } else {
+              data.fecha = new Date(); // Fallback for localized invalid strings
+            }
+          } else {
+            data.fecha = new Date();
           }
         }
 
