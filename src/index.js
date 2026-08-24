@@ -1385,8 +1385,15 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
               }
               delete data.user;
             }
-            if (data.fecha && typeof data.fecha === 'string') {
-              data.fecha = new Date(data.fecha);
+            if (data.fecha) {
+              const d = new Date(data.fecha);
+              if (!isNaN(d)) {
+                data.fecha = d;
+              } else {
+                data.fecha = new Date(); // Fallback for localized invalid strings
+              }
+            } else {
+              data.fecha = new Date();
             }
           }
 
