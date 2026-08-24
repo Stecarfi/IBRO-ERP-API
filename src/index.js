@@ -1355,6 +1355,16 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             if (data.ejec_u !== undefined) data.ejec_u = parseFloat(data.ejec_u) || 0;
             if (data.meta_p !== undefined) data.meta_p = parseFloat(data.meta_p) || 0;
             if (data.ejec_p !== undefined) data.ejec_p = parseFloat(data.ejec_p) || 0;
+            if (data.cumpleanos && typeof data.cumpleanos === 'string') {
+              const d = new Date(data.cumpleanos);
+              if (!isNaN(d)) {
+                data.cumpleanos = d.toISOString();
+              } else {
+                data.cumpleanos = null;
+              }
+            } else if (data.cumpleanos === "") {
+              data.cumpleanos = null;
+            }
           } else if (table === 'evaluacion') {
             if (data.scores && typeof data.scores === 'string') {
               
