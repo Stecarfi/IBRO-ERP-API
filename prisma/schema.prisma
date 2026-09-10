@@ -623,6 +623,7 @@ model CuentasCobro {
   titular  String?
   estado   String?
   total    Float?    @default(0)
+  tecnicos Json? // Técnicos participantes asociados a la cuenta de cobro
 }
 
 // 21. Capacitaciones en Ventas

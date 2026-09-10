@@ -434,7 +434,8 @@ class SyncService {
       nequi: c.nequi || '',
       titular: c.titular || '',
       estado: c.estado || '',
-      total: c.total || 0
+      total: c.total || 0,
+      tecnicos: c.tecnicos ? (typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : c.tecnicos) : []
     }));
 
     const comisionistasRaw = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
@@ -1099,6 +1100,7 @@ class SyncService {
           titular: item.titular || null,
           estado: item.estado || null,
           total: item.total ? parseFloat(item.total) : 0,
+          tecnicos: item.tecnicos ? (typeof item.tecnicos === 'string' ? item.tecnicos : JSON.stringify(item.tecnicos)) : null,
         };
 
         const cleanCuentaData = sanitizeBackendForPrisma('cuentasCobro', data);

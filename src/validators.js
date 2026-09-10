@@ -179,7 +179,7 @@ const PRISMA_ALLOWED_FIELDS = {
 
   cuentasCobro: [
     'id', 'ciudad', 'fecha', 'cuenta', 'num', 'nombre', 'comisionista', 'cedula', 'correo',
-    'concepto', 'items', 'nequi', 'titular', 'estado', 'total'
+    'concepto', 'items', 'nequi', 'titular', 'estado', 'total', 'tecnicos'
   ],
 
   chat: [
@@ -589,6 +589,7 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.nombre = cleaned.nombre || cleaned.comisionista || item.nombre || item.comisionista ? String(cleaned.nombre || cleaned.comisionista || item.nombre || item.comisionista) : 'Contratista';
     cleaned.total = parseFloat(cleaned.total !== undefined ? cleaned.total : item.total) || 0;
     cleaned.items = safeJson(cleaned.items !== undefined ? cleaned.items : item.items, []);
+    cleaned.tecnicos = safeJson(cleaned.tecnicos !== undefined ? cleaned.tecnicos : item.tecnicos, []);
     delete cleaned.num;
     delete cleaned.comisionista;
   } else if (modelKey === 'chat') {

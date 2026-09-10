@@ -1320,7 +1320,8 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       nequi: c.nequi || '',
       titular: c.titular || '',
       estado: c.estado || '',
-      total: c.total || 0
+      total: c.total || 0,
+      tecnicos: typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : (c.tecnicos || [])
     }));
 
     const comisionistasRaw = await prisma.comisionista.findMany({
@@ -1757,7 +1758,8 @@ app.get('/api/paginated/:model', authenticateToken, async (req, res) => {
         nequi: c.nequi || '',
         titular: c.titular || '',
         estado: c.estado || '',
-        total: c.total || 0
+        total: c.total || 0,
+        tecnicos: typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : (c.tecnicos || [])
       }));
     } else if (model === 'servicios') {
       const servRows = await prisma.servicio.findMany({
