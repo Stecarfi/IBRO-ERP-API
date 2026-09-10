@@ -1079,8 +1079,15 @@ class SyncService {
 
     // 16. Comisionistas
     if (diff.comisionistas) {
+      if (diff.comisionistas.deleted && diff.comisionistas.deleted.length > 0) {
+        const comIds = diff.comisionistas.deleted.map(id => id.toString());
+        await tx.venta.updateMany({
+          where: { comisionistaId: { in: comIds } },
+          data: { comisionistaId: null }
+        });
+        await flatDelete('comisionista', comIds);
+      }
       await flatUpsert('comisionista', diff.comisionistas.upserted || []);
-      await flatDelete('comisionista', diff.comisionistas.deleted || []);
     }
 
     // 20. Cuentas de Cobro
