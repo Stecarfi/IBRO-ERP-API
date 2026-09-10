@@ -3033,8 +3033,9 @@ io.on('connection', (socket) => {
       return;
     }
 
-    socket.to(toTarget).emit('receive_message', messageData);
-    socket.to(toTarget.toLowerCase()).emit('receive_message', messageData);
+    const targetRooms = new Set();
+    targetRooms.add(toTarget);
+    targetRooms.add(toTarget.toLowerCase());
 
     try {
       const group = await prisma.chatGroup.findFirst({
@@ -3045,13 +3046,23 @@ io.on('connection', (socket) => {
         members.forEach(item => {
           const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
           if (uName && String(uName).toLowerCase() !== String(messageData.user || '').toLowerCase()) {
-            socket.to(uName).emit('receive_message', messageData);
-            socket.to(String(uName).toLowerCase()).emit('receive_message', messageData);
+            targetRooms.add(String(uName).trim());
+            targetRooms.add(String(uName).trim().toLowerCase());
           }
         });
       }
     } catch (e) {
       console.error('[send_message] Group routing error:', e.message);
+    }
+
+    if (messageData.user) {
+      targetRooms.delete(String(messageData.user).trim());
+      targetRooms.delete(String(messageData.user).trim().toLowerCase());
+    }
+
+    const uniqueRooms = Array.from(targetRooms).filter(Boolean);
+    if (uniqueRooms.length > 0) {
+      socket.to(uniqueRooms).emit('receive_message', messageData);
     }
   });
 
@@ -3063,8 +3074,9 @@ io.on('connection', (socket) => {
       return;
     }
 
-    socket.to(toTarget).emit('receive_nudge', data);
-    socket.to(toTarget.toLowerCase()).emit('receive_nudge', data);
+    const targetRooms = new Set();
+    targetRooms.add(toTarget);
+    targetRooms.add(toTarget.toLowerCase());
 
     try {
       const group = await prisma.chatGroup.findFirst({
@@ -3075,13 +3087,23 @@ io.on('connection', (socket) => {
         members.forEach(item => {
           const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
           if (uName && String(uName).toLowerCase() !== String(data.user || '').toLowerCase()) {
-            socket.to(uName).emit('receive_nudge', data);
-            socket.to(String(uName).toLowerCase()).emit('receive_nudge', data);
+            targetRooms.add(String(uName).trim());
+            targetRooms.add(String(uName).trim().toLowerCase());
           }
         });
       }
     } catch (e) {
       console.error('[send_nudge] Group routing error:', e.message);
+    }
+
+    if (data.user) {
+      targetRooms.delete(String(data.user).trim());
+      targetRooms.delete(String(data.user).trim().toLowerCase());
+    }
+
+    const uniqueRooms = Array.from(targetRooms).filter(Boolean);
+    if (uniqueRooms.length > 0) {
+      socket.to(uniqueRooms).emit('receive_nudge', data);
     }
   });
 
