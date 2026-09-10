@@ -11,4 +11,18 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const optionalAuthenticateToken = (req, res, next) => {
+    const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
+    if (!token) return next();
+
+    jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
+        if (!err) req.user = user;
+        next();
+    });
+};
+
+authenticateToken.optional = optionalAuthenticateToken;
+authenticateToken.authenticateToken = authenticateToken;
+authenticateToken.optionalAuthenticateToken = optionalAuthenticateToken;
+
 module.exports = authenticateToken;

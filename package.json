@@ -1,8 +1,9 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "Servicios Core y API REST para IBRO ERP",
   "main": "index.js",
+  "private": true,
   "scripts": {
     "start": "npx prisma generate && npx prisma db push && node src/temp-reset.js && node src/index.js",
     "dev": "nodemon src/index.js",
@@ -10,9 +11,9 @@
     "migrate": "npx prisma generate && npx prisma db push",
     "build": "prisma generate"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["erp", "ibro", "backend"],
+  "author": "STEPHANIE CARRASQUILLA FIGUEROA IDENTIFICADA CON CC 1.050.952.327 DE TURBACO BOLIVAR",
+  "license": "UNLICENSED",
   "type": "commonjs",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

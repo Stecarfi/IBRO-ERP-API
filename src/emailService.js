@@ -20,23 +20,24 @@ const getTransporter = () => {
 async function sendRecoveryEmail(email, name, resetLink) {
   const subject = 'Restablecer Contraseña - G-IBRO';
   const html = `
-    <div style="font-family: Arial, sans-serif; padding: 25px; color: #333; max-width: 600px; margin: auto; border: 1px solid #e4e4e7; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
-      <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #ef4444; padding-bottom: 15px;">
-        <h2 style="color: #002060; margin: 0; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">G-IBRO S.A.S.</h2>
-        <p style="color: #666; margin: 5px 0 0 0; font-size: 12px; font-weight: bold; text-transform: uppercase;">Portal Corporativo</p>
+    <div style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; font-size: 12px; padding: 25px; color: #333; max-width: 600px; margin: auto; border: 1px solid #e4e4e7; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+      <style>@import url('https://fonts.googleapis.com/css2?family=Alice&display=swap');</style>
+      <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #F87171; padding-bottom: 15px;">
+        <h2 style="font-family: 'Alice', Georgia, serif; color: #002060; margin: 0; font-size: 20px; text-transform: uppercase; letter-spacing: 1px;">G-IBRO S.A.S.</h2>
+        <p style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; color: #666; margin: 5px 0 0 0; font-size: 12px; font-weight: bold; text-transform: uppercase;">Portal Corporativo</p>
       </div>
-      <h3 style="color: #1f2937; font-size: 16px;">Hola ${name},</h3>
-      <p style="line-height: 1.6; font-size: 14px; color: #4b5563;">Has solicitado restablecer tu contraseña para acceder a la plataforma corporativa G-IBRO.</p>
-      <p style="line-height: 1.6; font-size: 14px; color: #4b5563;">Haz clic en el siguiente botón para cambiar tu contraseña de forma segura:</p>
+      <h3 style="font-family: 'Alice', Georgia, serif; color: #1f2937; font-size: 20px;">Hola ${name},</h3>
+      <p style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; line-height: 1.6; font-size: 12px; color: #4b5563;">Has solicitado restablecer tu contraseña para acceder a la plataforma corporativa G-IBRO.</p>
+      <p style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; line-height: 1.6; font-size: 12px; color: #4b5563;">Haz clic en el siguiente botón para cambiar tu contraseña de forma segura:</p>
       <div style="text-align: center; margin: 25px 0;">
-        <a href="${resetLink}" style="background-color: #002060; color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 8px rgba(0, 32, 96, 0.25);">Restablecer Contraseña</a>
+        <a href="${resetLink}" style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; background-color: #002060; color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 12px; display: inline-block; box-shadow: 0 4px 8px rgba(0, 32, 96, 0.25);">Restablecer Contraseña</a>
       </div>
-      <p style="line-height: 1.6; font-size: 13px; color: #4b5563;">O copia y pega el siguiente enlace en tu navegador:</p>
+      <p style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; line-height: 1.6; font-size: 12px; color: #4b5563;">O copia y pega el siguiente enlace en tu navegador:</p>
       <div style="background-color: #f3f4f6; padding: 12px; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 11px; color: #002060; border: 1px solid #e5e7eb;">
         <a href="${resetLink}" style="color: #002060; text-decoration: none; font-weight: bold;">${resetLink}</a>
       </div>
-      <p style="line-height: 1.6; font-size: 12px; color: #ef4444; font-weight: bold; margin-top: 20px;"><i class="fa-solid fa-clock"></i> Este enlace de seguridad expirará en 1 hora.</p>
-      <div style="font-size: 10px; text-align: center; color: #71717a; margin-top: 40px; border-top: 1px solid #e4e4e7; padding-top: 15px; line-height: 1.5;">
+      <p style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; line-height: 1.6; font-size: 12px; color: #F87171; font-weight: bold; margin-top: 20px;">⏰ Este enlace de seguridad expirará en 1 hora.</p>
+      <div style="font-family: Tahoma, Verdana, Segoe UI, sans-serif; font-size: 12px; text-align: center; color: #71717a; margin-top: 40px; border-top: 1px solid #e4e4e7; padding-top: 15px; line-height: 1.5;">
         <strong>IBRO S.A.S. - Aire Acondicionado y Climatización</strong><br>
         Este es un correo automatizado del sistema, por favor no lo respondas de forma directa.
       </div>
@@ -145,18 +146,18 @@ async function verifySmtpConnection() {
 async function sendLockoutEmail(email, name, unlockLink) {
   const subject = 'Alerta de Seguridad: Cuenta Bloqueada - G-IBRO';
   const html = `
-    <div style="font-family: Arial, sans-serif; padding: 25px; color: #333; max-width: 600px; margin: auto; border: 1px solid #ef4444; border-radius: 12px; box-shadow: 0 4px 12px rgba(239,68,68,0.15);">
-      <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #ef4444; padding-bottom: 15px;">
-        <h2 style="color: #ef4444; margin: 0; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">G-IBRO S.A.S. - SEGURIDAD</h2>
+    <div style="font-family: Arial, sans-serif; padding: 25px; color: #333; max-width: 600px; margin: auto; border: 1px solid #F87171; border-radius: 12px; box-shadow: 0 4px 12px rgba(248,113,113,0.15);">
+      <div style="text-align: center; margin-bottom: 20px; border-bottom: 2px solid #F87171; padding-bottom: 15px;">
+        <h2 style="color: #F87171; margin: 0; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">G-IBRO S.A.S. - SEGURIDAD</h2>
       </div>
       <h3 style="color: #1f2937; font-size: 16px;">Hola ${name},</h3>
       <p style="line-height: 1.6; font-size: 14px; color: #4b5563;">Tu cuenta ha sido bloqueada temporalmente tras detectar <strong>3 intentos fallidos de inicio de sesión</strong> consecutivos.</p>
       <p style="line-height: 1.6; font-size: 14px; color: #4b5563;">Si fuiste tú y olvidaste tu contraseña, o si deseas desbloquear la cuenta, haz clic en el siguiente botón:</p>
       <div style="text-align: center; margin: 25px 0;">
-        <a href="${unlockLink}" style="background-color: #ef4444; color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 8px rgba(239, 68, 68, 0.25);">Desbloquear y Restablecer Contraseña</a>
+        <a href="${unlockLink}" style="background-color: #F87171; color: white; padding: 12px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 8px rgba(248, 113, 113, 0.25);">Desbloquear y Restablecer Contraseña</a>
       </div>
-      <div style="background-color: #f3f4f6; padding: 12px; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 11px; color: #ef4444; border: 1px solid #e5e7eb;">
-        <a href="${unlockLink}" style="color: #ef4444; text-decoration: none; font-weight: bold;">${unlockLink}</a>
+      <div style="background-color: #f3f4f6; padding: 12px; border-radius: 8px; word-break: break-all; font-family: monospace; font-size: 11px; color: #F87171; border: 1px solid #e5e7eb;">
+        <a href="${unlockLink}" style="color: #F87171; text-decoration: none; font-weight: bold;">${unlockLink}</a>
       </div>
       <div style="font-size: 10px; text-align: center; color: #71717a; margin-top: 40px; border-top: 1px solid #e4e4e7; padding-top: 15px; line-height: 1.5;">
         <strong>IBRO S.A.S. - Departamento de IT</strong>
@@ -212,8 +213,8 @@ async function sendLockoutEmail(email, name, unlockLink) {
 
 async function sendDailyLoginReportEmail(adminEmails, activeUsers, inactiveUsers, dateStr, reportName = "Corte Diario") {
   const subject = `Reporte de Auditoría de Sesiones (${reportName}) - ${dateStr}`;
-  let inactiveHtml = inactiveUsers.map(u => `<li><span style="color:#ef4444;">🔴 INACTIVO</span>: <strong>${u.nombre} ${u.apellido}</strong> (${u.correo}) - Último acceso: ${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Nunca'}</li>`).join('');
-  let activeHtml = activeUsers.map(u => `<li><span style="color:#22c55e;">🟢 ACTIVO</span>: <strong>${u.nombre} ${u.apellido}</strong> (${u.correo}) - Último acceso: ${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'N/A'}</li>`).join('');
+  let inactiveHtml = inactiveUsers.map(u => `<li><span style="color:#F87171; font-weight: bold;">🔴 INACTIVO</span>: <strong>${u.nombre} ${u.apellido}</strong> (${u.correo}) - Último acceso: ${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Nunca'}</li>`).join('');
+  let activeHtml = activeUsers.map(u => `<li><span style="color:#10B981; font-weight: bold;">🟢 ACTIVO</span>: <strong>${u.nombre} ${u.apellido}</strong> (${u.correo}) - Último acceso: ${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'N/A'}</li>`).join('');
   
   if (inactiveUsers.length === 0) inactiveHtml = '<li>Todos los usuarios registraron actividad hoy.</li>';
   if (activeUsers.length === 0) activeHtml = '<li>Ningún usuario registró actividad hoy.</li>';

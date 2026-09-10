@@ -67,7 +67,7 @@ function setupCronJobs() {
         if (!exists) {
           const mensajeHTML = `
             <div style="text-align: center; padding: 20px; font-family: sans-serif;">
-                <h1 style="color: #002060;">¡Feliz Cumpleaños, ${user.nombre}! 🎂</h1>
+                <h1 style="color: #002060;">¡Feliz Cumpleaños, ${`${user.nombre} ${user.apellido || ''}`.trim()}! 🎂</h1>
                 <p style="font-size: 16px; color: #333;">De parte de todo el equipo, te deseamos un día maravilloso lleno de alegrías, éxitos y bendiciones. ¡Que este nuevo año de vida venga cargado de cosas buenas para ti y los tuyos!</p>
                 <img src="https://media.giphy.com/media/g5R9dok94mrIvplmZd/giphy.gif" alt="Cumpleaños" style="max-width: 250px; border-radius: 10px; margin-top: 15px;" />
             </div>

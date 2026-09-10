@@ -10,13 +10,14 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const { z } = require('zod');
-const { validateSyncPayload } = require('./validators');
+const { validateSyncPayload, sanitizeBackendForPrisma, safeDate, safeJson } = require('./validators');
 const { askGemini, geminiLogs } = require('./geminiService');
 const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('./emailService');
 const driveService = require('./services/drive.service');
 
 const path = require('path');
 const app = express();
+let io; // Instancia global de Socket.io
 app.set('trust proxy', 1); // Solución para error de express-rate-limit en Render (X-Forwarded-For)
 app.use(cookieParser());
 const rateLimit = require('express-rate-limit');
@@ -46,6 +47,16 @@ const authenticateToken = (req, res, next) => {
     }
     req.user = user;
     console.log("USER:", req.user);
+    next();
+  });
+};
+
+const optionalAuthenticateToken = (req, res, next) => {
+  const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
+  if (!token) return next();
+
+  jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
+    if (!err) req.user = user;
     next();
   });
 };
@@ -100,36 +111,59 @@ const upload = multer({
 
 app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
     try {
-        const username = req.body.username;
+        const username = req.body.username || req.user?.user;
         if (!username) return res.status(400).json({ error: 'Username required' });
         if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
         
-        // Eliminar foto vieja de la memoria/disco (solo si es un archivo local heredado)
+        // 1. Eliminar foto anterior (sea de Drive o de disco local)
         const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-        if (user && user.foto && !user.foto.includes('drive.google.com')) {
-            try {
-                const oldFileName = path.basename(user.foto);
-                const oldFilePath = path.join(uploadsDir, oldFileName);
-                if (fs.existsSync(oldFilePath)) {
-                    fs.unlinkSync(oldFilePath);
+        if (user && user.foto) {
+            if (user.foto.includes('drive.google.com')) {
+                try {
+                    await driveService.deleteByUrl(user.foto);
+                } catch (driveDelErr) {
+                    console.error('[UPLOAD-AVATAR] Error al eliminar avatar anterior de Drive:', driveDelErr.message);
                 }
-            } catch (e) {
-                console.error('Error deleting old avatar:', e);
+            } else {
+                try {
+                    const oldFileName = path.basename(user.foto);
+                    const oldFilePath = path.join(uploadsDir, oldFileName);
+                    if (fs.existsSync(oldFilePath)) {
+                        fs.unlinkSync(oldFilePath);
+                    }
+                } catch (e) {
+                    console.error('[UPLOAD-AVATAR] Error al eliminar avatar anterior local:', e.message);
+                }
             }
         }
         
-        // Subir buffer a Google Drive
-        const newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+        // 2. Subir nuevo avatar (a Google Drive si está disponible, o a almacenamiento local como fallback)
+        let newUrl = null;
+        if (driveService.isAvailable()) {
+            try {
+                newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+            } catch (driveUploadErr) {
+                console.warn('[UPLOAD-AVATAR] Falló subida a Drive, usando almacenamiento local de respaldo:', driveUploadErr.message);
+            }
+        }
+
+        if (!newUrl) {
+            const safeName = `${Date.now()}-${req.file.originalname}`;
+            const localPath = path.join(uploadsDir, safeName);
+            fs.writeFileSync(localPath, req.file.buffer);
+            newUrl = `/uploads/${safeName}`;
+        }
         
-        // Guardar URL real en la base de datos
+        // 3. Guardar URL en la base de datos
         await prisma.user.updateMany({
             where: { user: { equals: username, mode: 'insensitive' } },
             data: { foto: newUrl }
         });
         
+        broadcastUpdate('DB_UPDATE');
         res.json({ url: newUrl });
     } catch (error) {
-        console.error(error);
+        console.error('[UPLOAD-AVATAR] Error:', error);
         res.status(500).json({ error: 'Error uploading avatar' });
     }
 });
@@ -156,7 +190,18 @@ app.post('/api/upload-evidence', authenticateToken, uploadEvidence.array('eviden
 
         const urls = [];
         for (const file of req.files) {
-            const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+            let driveUrl = null;
+            if (driveService.isAvailable()) {
+                try {
+                    driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                } catch (e) {}
+            }
+            if (!driveUrl) {
+                const safeName = `${Date.now()}-${file.originalname}`;
+                const localPath = path.join(uploadsDir, safeName);
+                fs.writeFileSync(localPath, file.buffer);
+                driveUrl = `/uploads/${safeName}`;
+            }
             urls.push(driveUrl);
         }
 
@@ -169,19 +214,27 @@ app.post('/api/upload-evidence', authenticateToken, uploadEvidence.array('eviden
 
 app.delete('/api/remove-avatar', authenticateToken, async (req, res) => {
     try {
-        const username = req.body.username;
+        const username = req.body.username || req.user?.user;
         if (!username) return res.status(400).json({ error: 'Username required' });
         
         const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-        if (user && user.foto && !user.foto.includes('drive.google.com')) {
-            try {
-                const oldFileName = path.basename(user.foto);
-                const oldFilePath = path.join(uploadsDir, oldFileName);
-                if (fs.existsSync(oldFilePath)) {
-                    fs.unlinkSync(oldFilePath);
+        if (user && user.foto) {
+            if (user.foto.includes('drive.google.com')) {
+                try {
+                    await driveService.deleteByUrl(user.foto);
+                } catch (driveDelErr) {
+                    console.error('[REMOVE-AVATAR] Error al eliminar avatar de Drive:', driveDelErr.message);
                 }
-            } catch (e) {
-                console.error('Error deleting avatar:', e);
+            } else {
+                try {
+                    const oldFileName = path.basename(user.foto);
+                    const oldFilePath = path.join(uploadsDir, oldFileName);
+                    if (fs.existsSync(oldFilePath)) {
+                        fs.unlinkSync(oldFilePath);
+                    }
+                } catch (e) {
+                    console.error('[REMOVE-AVATAR] Error al eliminar avatar local:', e.message);
+                }
             }
         }
         
@@ -189,9 +242,52 @@ app.delete('/api/remove-avatar', authenticateToken, async (req, res) => {
             where: { user: { equals: username, mode: 'insensitive' } },
             data: { foto: null }
         });
+        broadcastUpdate('DB_UPDATE');
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: 'Error removing avatar' });
+    }
+});
+
+// Endpoint dedicado para firma digital del asesor
+app.post('/api/upload-signature', authenticateToken, async (req, res) => {
+    try {
+        const { username, signature } = req.body;
+        const targetUser = username || req.user?.user;
+        if (!targetUser) return res.status(400).json({ error: 'Username required' });
+        if (!signature || typeof signature !== 'string') {
+            return res.status(400).json({ error: 'Signature data is required' });
+        }
+
+        await prisma.user.updateMany({
+            where: { user: { equals: targetUser, mode: 'insensitive' } },
+            data: { firma: signature }
+        });
+
+        broadcastUpdate('DB_UPDATE');
+        res.json({ success: true, firma: signature });
+    } catch (error) {
+        console.error('Error uploading signature:', error);
+        res.status(500).json({ error: 'Error uploading signature' });
+    }
+});
+
+app.delete('/api/remove-signature', authenticateToken, async (req, res) => {
+    try {
+        const { username } = req.body;
+        const targetUser = username || req.user?.user;
+        if (!targetUser) return res.status(400).json({ error: 'Username required' });
+
+        await prisma.user.updateMany({
+            where: { user: { equals: targetUser, mode: 'insensitive' } },
+            data: { firma: '' }
+        });
+
+        broadcastUpdate('DB_UPDATE');
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error removing signature:', error);
+        res.status(500).json({ error: 'Error removing signature' });
     }
 });
 
@@ -235,21 +331,45 @@ const uploadCourseMaterial = multer({
     }
 });
 
-app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.array('materiales', 5), async (req, res) => {
+app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.array('materiales', 10), async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
-        const urls = [];
+        const uploadedMaterials = [];
         for (const file of req.files) {
-            const driveUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
-            urls.push(driveUrl);
+            let fileUrl = null;
+            if (driveService.isAvailable()) {
+                try {
+                    fileUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
+                } catch (driveErr) {
+                    console.warn(`[UPLOAD-COURSE] Drive falló para ${file.originalname}, usando respaldo local:`, driveErr.message);
+                }
+            }
+
+            if (!fileUrl) {
+                const safeName = `${Date.now()}-${file.originalname}`;
+                const localPath = path.join(uploadsDir, safeName);
+                fs.writeFileSync(localPath, file.buffer);
+                fileUrl = `/uploads/${safeName}`;
+            }
+
+            uploadedMaterials.push({
+                nombre: file.originalname,
+                url: fileUrl,
+                tamano: file.size,
+                mimetype: file.mimetype
+            });
         }
 
-        res.json({ urls });
+        res.json({ 
+            success: true, 
+            materials: uploadedMaterials, 
+            urls: uploadedMaterials.map(m => m.url) 
+        });
     } catch (error) {
-        console.error(error);
+        console.error('[UPLOAD-COURSE] Error:', error);
         res.status(500).json({ error: 'Error uploading course material' });
     }
 });
@@ -426,7 +546,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         });
 
         const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}&user=${encodeURIComponent(dbUser.user)}`;
-        await sendLockoutEmail(dbUser.correo, dbUser.nombre, resetLink);
+        await sendLockoutEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido || ''}`.trim(), resetLink);
       }
 
       await prisma.user.update({
@@ -600,9 +720,9 @@ app.post('/api/auth/recover', async (req, res) => {
     // Guardar token en base de datos
     await prisma.pendingReset.create({
       data: {
-        user: dbUser.user,
+        userId: dbUser.id,
         token: verificationCode,
-        expire: expireTime
+        expire: new Date(Date.now() + 3600000)
       }
     });
 
@@ -622,10 +742,10 @@ app.post('/api/auth/recover', async (req, res) => {
     }
 
     if (mailRes.mockMode) {
-      // Incluso en mock mode ya no devolvemos el resetLink al frontend. 
-      // Se registrará en la consola del servidor únicamente para el desarrollador.
+      // Incluso en mock mode devolvemos el resetLink para desarrollo y pruebas
       return res.json({
         success: true,
+        resetLink: resetLink,
         message: 'Modo de prueba activo en el servidor. Revisa los logs de la consola del servidor.'
       });
     }
@@ -647,7 +767,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
   try {
     const pending = await prisma.pendingReset.findFirst({
       where: {
-        user: { equals: user, mode: 'insensitive' },
+        user: { user: { equals: user, mode: 'insensitive' } },
         token: token
       }
     });
@@ -656,7 +776,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'El código de seguridad o usuario es incorrecto.' });
     }
 
-    if (pending.expire < Date.now()) {
+    if (new Date(pending.expire) < new Date()) {
       await prisma.pendingReset.delete({ where: { id: pending.id } });
       return res.status(400).json({ error: 'El código de seguridad ha expirado.' });
     }
@@ -702,18 +822,20 @@ app.post('/api/auth/reset-password', async (req, res) => {
 // POST /api/db/informes-config
 app.post('/api/db/informes-config', authenticateToken, async (req, res) => {
   try {
-    const data = req.body;
+    const rawData = req.body;
+    const cleanData = sanitizeBackendForPrisma('informesConfig', rawData);
+    delete cleanData.id;
+
     const existing = await prisma.informesConfig.findUnique({ where: { id: 1 } });
-    
     if (existing) {
-      await prisma.informesConfig.update({ where: { id: 1 }, data });
+      await prisma.informesConfig.update({ where: { id: 1 }, data: cleanData });
     } else {
-      await prisma.informesConfig.create({ data: { id: 1, ...data } });
+      await prisma.informesConfig.create({ data: { id: 1, ...cleanData } });
     }
-    res.json({ success: true });
+    res.json({ success: true, timestamp: Date.now() });
   } catch (error) {
     console.error('Error saving informes config:', error);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error', details: error.message });
   }
 });
 
@@ -730,14 +852,64 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         user: true, roleId: true, meta_u: true, ejec_u: true, meta_p: true,
         ejec_p: true, soundsEnabled: true, cumpleanos: true,
         habeasDataAccepted: true, failedLoginAttempts: true, isLocked: true,
-        lastLogin: true, isOnline: true, foto: true, lat: true, lng: true,
+        lastLogin: true, isOnline: true, foto: true, firma: true, lat: true, lng: true,
         lastLocationUpdate: true, codigoAsesor: true
       },
       orderBy: { id: 'asc' }
     });
     const roles = await prisma.role.findMany({ orderBy: { id: 'asc' } });
-    const clientes = await prisma.cliente.findMany({ orderBy: { id: 'asc' } });
-    const inventario = await prisma.inventario.findMany({ orderBy: { id: 'asc' } });
+    const clientesRaw = await prisma.cliente.findMany({ orderBy: { id: 'asc' } });
+    const clientes = clientesRaw.map(c => {
+      let dVal = '', mVal = '', aVal = '';
+      if (c.fechaVinculacion) {
+        if (typeof c.fechaVinculacion === 'string' && c.fechaVinculacion.includes('/')) {
+          const pts = c.fechaVinculacion.split('/');
+          dVal = pts[0]; mVal = pts[1]; aVal = pts[2];
+        } else {
+          const isoDate = c.fechaVinculacion instanceof Date 
+            ? c.fechaVinculacion.toISOString().split('T')[0] 
+            : String(c.fechaVinculacion).split('T')[0];
+          if (isoDate.includes('-')) {
+            const parts = isoDate.split('-');
+            aVal = parts[0];
+            mVal = parts[1];
+            dVal = parts[2];
+          }
+        }
+      }
+
+      // Resolver asesor de forma automática
+      const advisorUser = users.find(u => 
+        (c.asesorNombre && `${u.nombre || ''} ${u.apellido || ''}`.trim().toLowerCase() === c.asesorNombre.trim().toLowerCase()) ||
+        (c.owner && u.user?.toLowerCase() === c.owner.toLowerCase())
+      );
+      const asesorCedula = c.asesorCedula || advisorUser?.cedula || advisorUser?.id || '';
+      const asesorCodigo = c.asesorCodigo || advisorUser?.codigoAsesor || '';
+      const asesorNombre = c.asesorNombre || (advisorUser ? `${advisorUser.nombre || ''} ${advisorUser.apellido || ''}`.trim() : '');
+      const asesorCargo = c.asesorCargo || advisorUser?.cargo || advisorUser?.rol || 'Administrador Master';
+      const asesorEmail = c.asesorEmail || advisorUser?.correo || advisorUser?.email || '';
+
+      return {
+        ...c,
+        dia: dVal,
+        mes: mVal,
+        anio: aVal,
+        fechaVinculacion: dVal && mVal && aVal ? `${dVal}/${mVal}/${aVal}` : (c.fechaVinculacion || ''),
+        asesorCedula,
+        asesorCodigo,
+        asesorNombre,
+        asesorCargo,
+        asesorEmail
+      };
+    });
+    const inventarioRaw = await prisma.inventario.findMany({ orderBy: { id: 'asc' } });
+    const inventario = inventarioRaw.map(inv => {
+      const ext = (inv.datosExt && typeof inv.datosExt === 'object') ? inv.datosExt : {};
+      return {
+        ...inv,
+        ...ext
+      };
+    });
     
     // Mapear Ventas (incluyendo Cliente y Producto)
     const ventasRaw = await prisma.venta.findMany({
@@ -746,58 +918,74 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       orderBy: { id: 'desc' }
     });
     ventasRaw.reverse();
-    const ventas = ventasRaw.map(v => ({
-      id: v.id,
-      fecha: v.fecha,
-      fechaIso: v.fechaIso,
-      venceGarantiaIso: v.venceGarantiaIso,
-      mesesGarantia: v.mesesGarantia,
-      vendedor: v.vendedor?.user || '',
-      vendedorId: v.vendedorId,
-      docCli: v.cliente.doc,
-      cliente: v.cliente.nom,
-      items: v.items.map(i => ({
-        productoId: i.productoId,
-        producto: i.producto.ref,
-        cant: i.cant,
-        desc: i.desc,
-        precioUnitario: i.precioUnitario,
-        serialEquipo: i.serialEquipo
-      })),
-      // Legacy flat fields for retro-compatibility (first item)
-      idProd: v.items[0]?.productoId || null,
-      producto: v.items[0]?.producto?.ref || null,
-      cant: v.items.reduce((acc, i) => acc + i.cant, 0),
-      desc: v.items.reduce((acc, i) => acc + i.desc, 0),
-      precioUnitario: v.items[0]?.precioUnitario || null,
-      serialEquipo: v.items[0]?.serialEquipo || null,
-      
-      metodoPago: v.metodoPago,
-      total: v.total,
-      comisionistaId: v.comisionistaId,
-      comisionistaNombre: v.comisionistaNombre,
-      comisionistaPct: v.comisionistaPct,
-      comisionistaValor: v.comisionistaValor,
-      tipo_precio: v.tipo_precio,
-      lockedBy: v.lockedBy,
-      vendedorNombre: v.vendedorNombre,
-      vendedorCargo: v.vendedorCargo,
-      vendedorEmail: v.vendedorEmail,
-      vendedorMovil: v.vendedorMovil,
-      vendedorCodigoAsesor: v.vendedorCodigoAsesor
-    }));
+    const ventas = ventasRaw.map(v => {
+      const meta = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && v.equipos._meta) ? v.equipos._meta : {};
+      const equiposList = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && Array.isArray(v.equipos.items)) ? v.equipos.items : (Array.isArray(v.equipos) ? v.equipos : []);
+
+      return {
+        id: v.id,
+        fecha: v.fecha,
+        fechaIso: v.fechaIso,
+        venceGarantiaIso: v.venceGarantiaIso,
+        mesesGarantia: v.mesesGarantia,
+        vendedor: v.vendedor?.user || '',
+        vendedorId: v.vendedorId,
+        clienteId: v.clienteId,
+        docCli: v.cliente?.doc || meta.clienteNit || '',
+        cliente: v.cliente?.nom || meta.clienteNombre || '',
+        clienteNombre: meta.clienteNombre || v.cliente?.nom || '',
+        clienteNit: meta.clienteNit || v.cliente?.doc || '',
+        clienteDireccion: meta.clienteDireccion || v.cliente?.direccion || '',
+        clienteTelefono: meta.clienteTelefono || v.cliente?.tel || '',
+        clienteEmail: meta.clienteEmail || v.cliente?.correo || '',
+        items: v.items.map(i => ({
+          productoId: i.productoId,
+          producto: i.producto?.ref || '',
+          cant: i.cant,
+          desc: i.desc,
+          precioUnitario: i.precioUnitario,
+          serialEquipo: i.serialEquipo
+        })),
+        // Legacy flat fields for retro-compatibility (first item)
+        idProd: v.items[0]?.productoId || null,
+        producto: v.items[0]?.producto?.ref || null,
+        cant: v.items.reduce((acc, i) => acc + i.cant, 0),
+        desc: v.items.reduce((acc, i) => acc + i.desc, 0),
+        precioUnitario: v.items[0]?.precioUnitario || null,
+        serialEquipo: v.items[0]?.serialEquipo || null,
+        
+        metodoPago: v.metodoPago,
+        total: v.total,
+        comisionistaId: v.comisionistaId,
+        comisionistaNombre: v.comisionistaNombre,
+        comisionistaPct: v.comisionistaPct,
+        comisionistaValor: v.comisionistaValor,
+        tipo_precio: v.tipo_precio,
+        lockedBy: v.lockedBy,
+        vendedorNombre: v.vendedorNombre || v.vendedor?.nombre || '',
+        vendedorCargo: v.vendedorCargo || v.vendedor?.cargo || '',
+        vendedorEmail: v.vendedorEmail || v.vendedor?.correo || '',
+        vendedorMovil: v.vendedorMovil || v.vendedor?.telefono || '',
+        vendedorCodigoAsesor: v.vendedorCodigoAsesor || v.vendedor?.codigoAsesor || '',
+        equipos: equiposList,
+        materiales: v.materiales || [],
+        numPedido: meta.numPedido || (v.id.startsWith('PED-') ? v.id : 'PED-' + v.id.slice(-4)),
+        ...meta
+      };
+    });
 
     // Mapear PQRS
     const pqrsRaw = await prisma.pQR.findMany({
-      include: { cliente: true },
+      include: { cliente: true, usuarioAsignado: true },
       orderBy: { id: 'asc' }
     });
     const pqrs = pqrsRaw.map(p => ({
       id: p.id,
+      clienteId: p.clienteId,
       fecha: p.fecha,
       limiteIso: p.limiteIso,
-      docCli: p.cliente.doc,
-      cliente: p.cliente.nom,
+      docCli: p.cliente?.doc || '',
+      cliente: p.cliente?.nom || '',
       tipo: p.tipo,
       detalle: p.detalle,
       evidencia: p.evidencia,
@@ -808,7 +996,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       radicado: p.radicado,
       hechos: p.hechos,
       solicitudes: p.solicitudes,
-      evidencias: p.evidencias && p.evidencias.trim() !== '' ? p.evidencias : '[]',
+      evidencias: typeof p.evidencias === 'string' ? p.evidencias : JSON.stringify(p.evidencias || []),
       aplicaGarantia: p.aplicaGarantia,
       tratamientoGarantia: p.tratamientoGarantia,
       terminoLegal: p.terminoLegal,
@@ -816,26 +1004,31 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       inventarioId: p.inventarioId,
       ventaId: p.ventaId,
       cotizacionId: p.cotizacionId,
-      trazabilidad: p.trazabilidad && p.trazabilidad.trim() !== '' ? p.trazabilidad : '[]',
-      usuarioAsignado: p.usuarioAsignado
+      trazabilidad: typeof p.trazabilidad === 'string' ? p.trazabilidad : JSON.stringify(p.trazabilidad || []),
+      usuarioAsignadoId: p.usuarioAsignadoId || null,
+      usuarioAsignado: p.usuarioAsignado?.user || '',
+      usuarioAsignadoNombre: p.usuarioAsignado ? `${p.usuarioAsignado.nombre} ${p.usuarioAsignado.apellido || ''}`.trim() : ''
     }));
 
     // Mapear Servicios Técnicos
     const serviciosRaw = await prisma.servicio.findMany({
-      include: { cliente: true },
+      include: { cliente: true, tecnico: true },
       orderBy: { id: 'asc' }
     });
     const servicios = serviciosRaw.map(s => ({
       id: s.id,
-      docCli: s.cliente.doc,
-      cliente: s.cliente.nom,
+      clienteId: s.clienteId,
+      docCli: s.cliente?.doc || '',
+      cliente: s.cliente?.nom || '',
       fechaProg: s.fechaProg,
       tipo: s.tipo,
       obs: s.obs,
       estado: s.estado,
       obsAdmin: s.obsAdmin,
       lockedBy: s.lockedBy,
-      tecnico: s.tecnico || '',
+      tecnicoId: s.tecnicoId || null,
+      tecnico: s.tecnico?.user || '',
+      tecnicoNombre: s.tecnico ? `${s.tecnico.nombre} ${s.tecnico.apellido || ''}`.trim() : '',
       equipoDetalle: s.equipoDetalle || '',
       obsRecepcion: s.obsRecepcion || '',
       obsDiagnostico: s.obsDiagnostico || '',
@@ -849,18 +1042,22 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       ventaId: s.ventaId,
       cotizacionId: s.cotizacionId,
       etapaActual: s.etapaActual,
-      evidencias: s.evidencias && s.evidencias.trim() !== '' ? s.evidencias : '[]',
-      trazabilidad: s.trazabilidad && s.trazabilidad.trim() !== '' ? s.trazabilidad : '[]',
+      evidencias: typeof s.evidencias === 'string' ? s.evidencias : JSON.stringify(s.evidencias || []),
+      trazabilidad: typeof s.trazabilidad === 'string' ? s.trazabilidad : JSON.stringify(s.trazabilidad || []),
       aplicaGarantia: s.aplicaGarantia,
       costoServicio: s.costoServicio
     }));
 
-    const solicitudesRaw = await prisma.solicitud.findMany({ orderBy: { id: 'asc' } });
+    const solicitudesRaw = await prisma.solicitud.findMany({
+      include: { asesor: true },
+      orderBy: { id: 'asc' }
+    });
     const solicitudes = solicitudesRaw.map(s => ({
       id: s.id,
-      fecha: s.fecha,
-      asesor: s.asesor,
-      nombreAsesor: s.nombreAsesor || '',
+      fecha: s.fecha ? s.fecha.toISOString() : '',
+      asesorId: s.asesorId,
+      asesor: s.asesor?.user || '',
+      nombreAsesor: s.nombreAsesor || (s.asesor ? `${s.asesor.nombre} ${s.asesor.apellido || ''}`.trim() : ''),
       tipo: s.tipo,
       detalle: s.detalle || '',
       evidencia: s.evidencia || null,
@@ -868,22 +1065,51 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       estado: s.estado,
       lockedBy: s.lockedBy || null,
       comentario: s.comentario || '',
-      fechaRadicado: s.fechaRadicado || ''
+      fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : ''
     }));
 
-    const procesosDisciplinarios = await prisma.procesoDisciplinario.findMany({ orderBy: { id: 'asc' } });
+    const procesosDisciplinariosRaw = await prisma.procesoDisciplinario.findMany({
+      include: { asesor: true, jefe: true },
+      orderBy: { id: 'asc' }
+    });
+    const procesosDisciplinarios = procesosDisciplinariosRaw.map(p => ({
+      id: p.id,
+      fecha: p.fecha ? p.fecha.toISOString() : '',
+      asesorId: p.asesorId,
+      asesor: p.asesor?.user || '',
+      asesorNombre: p.asesor ? `${p.asesor.nombre} ${p.asesor.apellido || ''}`.trim() : '',
+      jefeId: p.jefeId || null,
+      jefe: p.jefe?.user || (p.jefeId ? '' : 'Admin'),
+      jefeNombre: p.jefe ? `${p.jefe.nombre} ${p.jefe.apellido || ''}`.trim() : '',
+      falta: p.falta || 'Falta',
+      obs: p.obs || '',
+      etapa: p.etapa || 1,
+      descargo: p.descargo || '',
+      sancion: p.sancion || '',
+      diasSuspension: p.diasSuspension || 0,
+      renunciaTerminos: p.renunciaTerminos || false,
+      timestampEtapa: p.timestampEtapa ? p.timestampEtapa.toISOString() : (p.fecha ? p.fecha.toISOString() : ''),
+      lockedBy: p.lockedBy || null,
+      evidencias: p.evidencias || []
+    }));
 
-    const evaluacionesRaw = await prisma.evaluacion.findMany({ orderBy: { id: 'asc' } });
+    const evaluacionesRaw = await prisma.evaluacion.findMany({
+      include: { evaluador: true, evaluado: true },
+      orderBy: { id: 'asc' }
+    });
     const evaluaciones = evaluacionesRaw.map(ev => ({
       id: ev.id,
-      fecha: ev.fecha,
-      evaluador: ev.evaluador || '',
-      evaluado: ev.evaluado || '',
-      evaluadoNombre: ev.evaluadoNombre || '',
-      tipo: ev.tipo || '',
+      fecha: ev.fecha ? ev.fecha.toISOString() : '',
+      evaluadorId: ev.evaluadorId,
+      evaluador: ev.evaluador?.user || '',
+      evaluadorNombre: ev.evaluador ? `${ev.evaluador.nombre} ${ev.evaluador.apellido || ''}`.trim() : '',
+      evaluadoId: ev.evaluadoId,
+      evaluado: ev.evaluado?.user || ev.empleado || '',
+      evaluadoNombre: ev.evaluadoNombre || (ev.evaluado ? `${ev.evaluado.nombre} ${ev.evaluado.apellido || ''}`.trim() : (ev.empleado || '')),
+      empleado: ev.empleado || ev.evaluado?.user || '',
+      tipo: ev.tipo || 'Evaluación',
       obs: ev.obs || '',
       lockedBy: ev.lockedBy || null,
-      empleado: ev.empleado || '',
       metajobs: ev.metajobs || 5,
       asistencia: ev.asistencia || 5,
       objetivos: ev.objetivos || 5,
@@ -894,12 +1120,12 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     const anunciosRaw = await prisma.anuncio.findMany({ orderBy: { id: 'asc' } });
     const anuncios = anunciosRaw.map(a => ({
       id: a.id,
-      fecha: a.fecha || '',
+      fecha: a.fecha ? a.fecha.toISOString() : '',
       titulo: a.titulo,
-      mensaje: a.mensaje || '',
+      mensaje: a.mensaje || a.contenido || '',
       lockedBy: a.lockedBy || null,
-      contenido: a.contenido || '',
-      expiresAt: a.expiresAt || '',
+      contenido: a.contenido || a.mensaje || '',
+      expiresAt: a.expiresAt ? a.expiresAt.toISOString() : '',
       expired: a.expired || false
     }));
 
@@ -908,124 +1134,228 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
       orderBy: { id: 'asc' }
     });
-    const cotizaciones = cotizacionesRaw.map(c => ({
-      id: c.id,
-      numCotizacion: c.numCotizacion,
-      fecha: c.fecha,
-      vendedor: c.vendedor?.user || '',
-      vendedorId: c.vendedorId,
-      docCli: c.cliente.doc,
-      cliente: c.cliente.nom,
-      
-      items: c.items.map(i => ({
-        productoId: i.productoId,
-        producto: i.producto.ref,
-        cant: i.cant,
-        desc: i.desc,
-        precioUnitario: i.precioUnitario
-      })),
-      // Legacy flat fields for retro-compatibility (first item)
-      idProd: c.items[0]?.productoId || null,
-      producto: c.items[0]?.producto?.ref || null,
-      cant: c.items.reduce((acc, i) => acc + i.cant, 0),
-      desc: c.items.reduce((acc, i) => acc + i.desc, 0),
-      precioUnitario: c.items[0]?.precioUnitario || null,
-      
-      total: c.total,
-      comisionistaId: c.comisionistaId,
-      comisionistaNombre: c.comisionistaNombre,
-      comisionistaPct: c.comisionistaPct,
-      comisionistaValor: c.comisionistaValor,
-      lockedBy: c.lockedBy,
-      contacto: c.contacto,
-      condiciones: c.condiciones,
-      tiempoEntrega: c.tiempoEntrega,
-      direccionEntrega: c.direccionEntrega,
-      detallePagoMixto: c.detallePagoMixto,
-      cuentas: c.cuentas,
-      firmanteNombre: c.firmanteNombre,
-      firmanteCargo: c.firmanteCargo,
-      firmanteCorreo: c.firmanteCorreo,
-      firmanteMovil: c.firmanteMovil,
-      garantia: c.garantia,
-      observacion: c.observacion,
-      vendedorNombre: c.vendedorNombre,
-      vendedorCargo: c.vendedorCargo,
-      vendedorEmail: c.vendedorEmail,
-      vendedorMovil: c.vendedorMovil,
-      vendedorCodigoAsesor: c.vendedorCodigoAsesor,
-      vigencia: c.vigencia,
-      ivaTipo: c.ivaTipo,
-      equipos: c.equipos || [],
-      materiales: c.materiales || [],
-      tipo_precio: c.tipo_precio,
-      fechaSeguimiento: c.fechaSeguimiento,
-      estadoSeguimiento: c.estadoSeguimiento,
-      motivoSeguimiento: c.motivoSeguimiento,
-      motivoNoCompra: c.motivoNoCompra
-    }));
+    const cotizaciones = cotizacionesRaw.map(c => {
+      const meta = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && c.equipos._meta) ? c.equipos._meta : {};
+      const equiposList = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && Array.isArray(c.equipos.items)) ? c.equipos.items : (Array.isArray(c.equipos) ? c.equipos : []);
 
-    const chatGroupsRaw = await prisma.chatGroup.findMany({ orderBy: { fecha: 'asc' } });
+      return {
+        id: c.id,
+        numCotizacion: c.numCotizacion || meta.numCotizacion || '',
+        fecha: c.fecha,
+        fechaIso: c.fecha,
+        vendedor: c.vendedor?.user || '',
+        vendedorId: c.vendedorId,
+        clienteId: c.clienteId,
+        docCli: c.cliente?.doc || meta.clienteNit || '',
+        cliente: c.cliente?.nom || meta.clienteNombre || '',
+        clienteNombre: meta.clienteNombre || c.cliente?.nom || '',
+        clienteDireccion: meta.clienteDireccion || c.cliente?.direccion || '',
+        clienteCiudadDpto: meta.clienteCiudadDpto || (c.cliente?.ciudad ? (c.cliente.ciudad + (c.cliente.departamento ? ' / ' + c.cliente.departamento : '')) : ''),
+        clientePais: meta.clientePais || 'Colombia',
+        clienteTelefono: meta.clienteTelefono || c.cliente?.tel || '',
+        clienteMovil: meta.clienteMovil || c.cliente?.celularContacto || c.cliente?.tel || '',
+        clienteEmail: meta.clienteEmail || c.cliente?.correo || c.cliente?.correoFacturacion || '',
+        clienteNit: meta.clienteNit || c.cliente?.doc || '',
+        contacto: c.contacto || meta.contacto || c.cliente?.contactoComercial || '',
+        
+        items: c.items.map(i => ({
+          productoId: i.productoId,
+          producto: i.producto?.ref || i.producto?.cod || '',
+          cant: i.cant,
+          desc: i.desc,
+          precioUnitario: i.precioUnitario
+        })),
+        // Legacy flat fields for retro-compatibility (first item)
+        idProd: c.items[0]?.productoId || null,
+        producto: c.items[0]?.producto?.ref || null,
+        cant: c.items.reduce((acc, i) => acc + i.cant, 0),
+        desc: meta.desc !== undefined ? meta.desc : c.items.reduce((acc, i) => acc + i.desc, 0),
+        precioUnitario: c.items[0]?.precioUnitario || null,
+        
+        total: c.total,
+        comisionistaId: c.comisionistaId,
+        comisionistaNombre: c.comisionistaNombre,
+        comisionistaPct: c.comisionistaPct,
+        comisionistaValor: c.comisionistaValor,
+        lockedBy: c.lockedBy,
+        contacto: c.contacto || meta.contacto || '',
+        condiciones: c.condiciones || meta.condiciones || '',
+        tiempoEntrega: c.tiempoEntrega || meta.tiempoEntrega || '',
+        direccionEntrega: c.direccionEntrega || meta.direccionEntrega || '',
+        detallePagoMixto: c.detallePagoMixto || meta.detallePagoMixto || '',
+        cuentas: c.cuentas,
+        cuentasBancarias: c.cuentas || '[]',
+        firmanteNombre: c.firmanteNombre,
+        firmanteCargo: c.firmanteCargo,
+        firmanteCorreo: c.firmanteCorreo,
+        firmanteMovil: c.firmanteMovil,
+        garantia: c.garantia || meta.garantia || '',
+        observacion: c.observacion || meta.observacion || '',
+        vendedorNombre: c.vendedorNombre || `${c.vendedor?.nombre || ''} ${c.vendedor?.apellido || ''}`.trim(),
+        vendedorCargo: c.vendedorCargo || c.vendedor?.cargo || 'Asesor',
+        vendedorEmail: c.vendedorEmail || c.vendedor?.correo || '',
+        vendedorMovil: c.vendedorMovil || c.vendedor?.telefono || '',
+        vendedorCodigoAsesor: c.vendedorCodigoAsesor || c.vendedor?.codigoAsesor || '',
+        vigencia: c.vigencia,
+        ivaTipo: c.ivaTipo || meta.ivaTipo || 'sin_iva',
+        equipos: equiposList,
+        materiales: c.materiales || [],
+        tipo_precio: c.tipo_precio || meta.priceTier || 'precio_publico',
+        priceTier: meta.priceTier || c.tipo_precio || 'precio_publico',
+        fechaSeguimiento: c.fechaSeguimiento,
+        estadoSeguimiento: c.estadoSeguimiento,
+        motivoSeguimiento: c.motivoSeguimiento,
+        motivoNoCompra: c.motivoNoCompra,
+        seguimiento: {
+          estado: c.estadoSeguimiento || 'pendiente',
+          compraParcialDetalles: c.motivoSeguimiento || '',
+          noCompraronMotivo: c.motivoNoCompra || '',
+          noCompraronDetalle: '',
+          fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO') : null,
+          vendedor: c.vendedor?.user || ''
+        },
+        ...meta
+      };
+    });
+
+    const chatGroupsRaw = await prisma.chatGroup.findMany({ 
+      include: { createdBy: true },
+      orderBy: { fecha: 'asc' } 
+    });
     const chatGroups = chatGroupsRaw.map(g => ({
       id: g.id,
       nombre: g.nombre,
       descripcion: g.descripcion || '',
-      createdBy: g.createdBy,
-      fecha: g.fecha,
-      integrantes: g.integrantes || []
+      createdById: g.createdById,
+      createdBy: g.createdBy?.user || g.createdById,
+      creadorNombre: g.createdBy ? `${g.createdBy.nombre} ${g.createdBy.apellido || ''}`.trim() : '',
+      fecha: g.fecha ? g.fecha.toISOString() : new Date().toISOString(),
+      integrantes: typeof g.integrantes === 'string' ? JSON.parse(g.integrantes) : (g.integrantes || [])
     }));
 
-    const chatDesc = await prisma.chat.findMany({ orderBy: { timestamp: 'desc' }, take: 150 });
-    const chat = chatDesc.reverse();
-    const auditoriaDesc = await prisma.auditoria.findMany({ orderBy: { id: 'desc' }, take: 200 });
-    const auditoria = auditoriaDesc.reverse();
-    const notificacionesDesc = await prisma.notificacion.findMany({ orderBy: { id: 'desc' }, take: 100 });
-    const notificaciones = notificacionesDesc.reverse();
+    const chatDesc = await prisma.chat.findMany({ 
+      include: { sender: true, receiver: true },
+      orderBy: { timestamp: 'desc' }, 
+      take: 200 
+    });
+    const chat = chatDesc.reverse().map(c => ({
+      id: c.id,
+      timestamp: c.timestamp ? new Date(c.timestamp).getTime() : Date.now(),
+      fecha: c.fecha ? c.fecha.toISOString() : new Date().toISOString(),
+      senderId: c.senderId,
+      user: c.sender?.user || c.senderId,
+      nombre: c.nombre || (c.sender ? `${c.sender.nombre} ${c.sender.apellido || ''}`.trim() : 'Usuario'),
+      receiverId: c.receiverId,
+      to: c.senderTabId ? c.senderTabId : (c.receiver?.user || c.receiverId || 'Todos'),
+      text: c.text || '',
+      senderTabId: c.senderTabId || null,
+      isNudge: !!c.isNudge,
+      isSticker: !!c.isSticker,
+      stickerId: c.stickerId || null,
+      stickerUrl: c.stickerUrl || null,
+      isAudio: !!c.isAudio,
+      audioUrl: c.audioUrl || null,
+      isFile: !!c.isFile,
+      fileUrl: c.fileUrl || null,
+      fileName: c.fileName || null,
+      fileType: c.fileType || null,
+      isMeeting: !!c.isMeeting,
+      meetingId: c.meetingId || null,
+      readAt: c.readAt ? new Date(c.readAt).getTime() : null,
+      isDeleted: !!c.isDeleted,
+      isEdited: !!c.isEdited,
+      reactions: c.reactions || {},
+      replyTo: c.replyTo || null,
+      replyToObj: c.replyToObj || null,
+      hiddenBy: c.hiddenBy || [],
+      fileSize: c.fileSize || null
+    }));
+    const auditoriaDesc = await prisma.auditoria.findMany({
+      include: { user: true },
+      orderBy: { id: 'desc' },
+      take: 200
+    });
+    const auditoria = auditoriaDesc.reverse().map(a => ({
+      id: a.id,
+      userId: a.userId,
+      user: a.user?.user || a.user?.nombre || a.userId,
+      fecha: a.fecha ? a.fecha.toISOString() : new Date().toISOString(),
+      action: a.action,
+      modulo: a.modulo,
+      recordDetails: a.recordDetails || '',
+      shadowingData: a.shadowingData || null,
+      hash: a.hash || null
+    }));
+
+    const notificacionesDesc = await prisma.notificacion.findMany({
+      include: { para: true },
+      orderBy: { id: 'desc' },
+      take: 100
+    });
+    const notificaciones = notificacionesDesc.reverse().map(n => ({
+      id: n.id,
+      paraId: n.paraId,
+      para: n.para?.user || n.paraId,
+      titulo: n.titulo || null,
+      mensaje: n.mensaje,
+      de: n.de || null,
+      tipo: n.tipo || null,
+      fecha: n.fecha ? n.fecha.toISOString() : new Date().toISOString(),
+      leida: !!n.leida,
+      targetModule: n.targetModule || null
+    }));
     const cuentasCobroRaw = await prisma.cuentasCobro.findMany({ orderBy: { fecha: 'asc' } });
     const cuentasCobro = cuentasCobroRaw.map(c => ({
       id: c.id,
       ciudad: c.ciudad || '',
-      fecha: c.fecha || '',
+      fecha: c.fecha ? c.fecha.toISOString() : '',
       cuenta: c.cuenta || '',
+      num: c.cuenta || '',
       nombre: c.nombre || '',
+      comisionista: c.nombre || '',
       cedula: c.cedula || '',
       correo: c.correo || '',
       concepto: c.concepto || '',
-      items: c.items || [],
+      items: typeof c.items === 'string' ? JSON.parse(c.items) : (c.items || []),
       nequi: c.nequi || '',
       titular: c.titular || '',
       estado: c.estado || '',
       total: c.total || 0
     }));
 
-    const comisionistasRaw = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
+    const comisionistasRaw = await prisma.comisionista.findMany({
+      include: { owner: true },
+      orderBy: { id: 'asc' }
+    });
     const comisionistas = comisionistasRaw.map(c => ({
       id: c.id,
-      tipo: c.tipo || '',
+      tipo: c.tipo || 'Técnico Participante',
       nombre: c.nombre,
-      cedula: c.cedula || '',
-      telefono: c.telefono || '',
+      cedula: c.cedula || c.doc || '',
+      doc: c.doc || c.cedula || '',
+      telefono: c.telefono || c.tel || '',
+      tel: c.tel || c.telefono || '',
       correo: c.correo || '',
       direccion: c.direccion || '',
       cliente_remite: c.cliente_remite || '',
       valor_venta: c.valor_venta || 0,
-      pct_comision: c.pct_comision || 10,
+      pct_comision: c.pct_comision || c.porcentaje || 10,
+      porcentaje: c.porcentaje || c.pct_comision || 10,
       fecha: c.fecha || '',
-      owner: c.owner || '',
-      lockedBy: c.lockedBy || null,
-      doc: c.doc || '',
-      tel: c.tel || '',
-      porcentaje: c.porcentaje || 10
+      ownerId: c.ownerId || null,
+      owner: c.owner?.user || '',
+      ownerNombre: c.owner ? `${c.owner.nombre} ${c.owner.apellido || ''}`.trim() : '',
+      lockedBy: c.lockedBy || null
     }));
 
-    // WhatsApp Config
+    // WhatsApp Config (Línea oficial eliminada)
     const config = await prisma.whatsappConfig.findFirst();
-    const whatsappConfig = config ? { phone: config.phone, status: config.status } : { phone: '', status: 'Activo' };
+    const whatsappConfig = config && config.phone ? { phone: config.phone, status: config.status } : null;
     const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
     
     // Configuración general combinada
     const appConfig = {
-      whatsapp: whatsappConfig || { phone: '', status: 'Activo' },
+      whatsapp: whatsappConfig,
       informes: informesConfig || { 
         margenOperativo: 72, 
         ingresoProyectos: 85, 
@@ -1036,24 +1366,42 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         mesPresupuesto: "ACTUAL",
         fechaCorte: "HOY",
         diasTranscurridos: 0
-      }
+      },
+      nit: '806.008.716-5',
+      direccion: 'DG 21 # 52 A - 23, BOSQUE, CARTAGENA',
+      email: 'dircomercial@ibrosas.com',
+      telefono: '',
+      nombreEmpresa: 'IBRO'
     };
 
-    const capacitacionesRaw = await prisma.capacitacion.findMany({ orderBy: { fecha: 'desc' } });
+    const capacitacionesRaw = await prisma.capacitacion.findMany({
+      include: { creador: true },
+      orderBy: { fecha: 'desc' }
+    });
     const capacitaciones = capacitacionesRaw.map(c => ({
       id: c.id,
+      tipo: c.tipo || 'Capacitación',
       tema: c.tema,
       descripcion: c.descripcion || '',
-      fecha: c.fecha,
-      hora: c.hora,
+      fecha: c.fecha ? c.fecha.toISOString() : '',
+      hora: c.hora || '08:00 AM',
       obligatoria: c.obligatoria,
-      creador: c.creador,
+      creadorId: c.creadorId,
+      creador: c.creador?.user || '',
+      creadorNombre: c.creador ? `${c.creador.nombre} ${c.creador.apellido || ''}`.trim() : '',
       videoLink: c.videoLink || '',
+      videoFile: c.videoFile || null,
+      videoFileName: c.videoFileName || '',
+      plataforma: c.plataforma || null,
+      enlaceReunion: c.enlaceReunion || null,
+      tutorFirma: c.tutorFirma || null,
+      tutor: c.tutor || null,
+      creadoEn: c.creadoEn ? c.creadoEn.toISOString() : (c.fecha ? c.fecha.toISOString() : ''),
       materiales: c.materiales || [],
       asistentes: c.asistentes || [],
       evaluacion: c.evaluacion || null,
-      estado: c.estado,
-      lockedBy: c.lockedBy
+      estado: c.estado || 'Programada',
+      lockedBy: c.lockedBy || null
     }));
 
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
@@ -1079,6 +1427,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       cuentasCobro,
       capacitaciones,
       config: appConfig,
+      informesConfig: appConfig.informes,
       whatsappConfig,
       pendingResets
     });
@@ -1090,36 +1439,65 @@ app.get('/api/db', authenticateToken, async (req, res) => {
 
 // POST /api/location/update: Reportar ubicación en tiempo real
 app.post('/api/location/update', authenticateToken, async (req, res) => {
-  const { user, lat, lng } = req.body;
-  if (!user || lat === undefined || lng === undefined) {
+  const targetUser = req.body.user || req.user?.user;
+  const targetId = req.body.id || req.user?.id;
+  const { lat, lng } = req.body;
+  if ((!targetUser && !targetId) || lat === undefined || lng === undefined) {
     return res.status(400).json({ error: 'Faltan datos de ubicación' });
   }
 
+  const parsedLat = parseFloat(lat);
+  const parsedLng = parseFloat(lng);
+  if (isNaN(parsedLat) || isNaN(parsedLng) || parsedLat < -90 || parsedLat > 90 || parsedLng < -180 || parsedLng > 180) {
+    return res.status(400).json({ error: 'Coordenadas numéricas inválidas o fuera de rango geográfico' });
+  }
+
   try {
+    const whereConditions = [];
+    if (targetId) whereConditions.push({ id: String(targetId) });
+    if (targetUser) whereConditions.push({ user: { equals: String(targetUser), mode: 'insensitive' } });
+
+    const now = Date.now();
     await prisma.user.updateMany({
-      where: { user: { equals: user, mode: 'insensitive' } },
+      where: { OR: whereConditions },
       data: {
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
-        lastLocationUpdate: Date.now()
+        lat: parsedLat,
+        lng: parsedLng,
+        lastLocationUpdate: now
       }
     });
-    res.json({ success: true });
-    } catch (error) {
+
+    if (io) {
+      io.emit('LOCATION_UPDATE', {
+        user: targetUser,
+        id: targetId,
+        lat: parsedLat,
+        lng: parsedLng,
+        lastLocationUpdate: now
+      });
+    }
+
+    res.json({ success: true, lat: parsedLat, lng: parsedLng });
+  } catch (error) {
     console.error('Error actualizando ubicación:', error);
-    res.status(500).json({ error: 'Error del servidor', details: error.message, stack: error.stack });
+    res.status(500).json({ error: 'Error del servidor', details: error.message });
   }
 });
 
 // GET /api/location/users: Obtener la ubicación de todos los usuarios
-app.get('/api/location/users', authenticateToken, async (req, res) => {
+app.get('/api/location/users', optionalAuthenticateToken, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
       select: {
         id: true,
         nombre: true,
         apellido: true,
+        user: true,
+        roleId: true,
         cargo: true,
+        foto: true,
+        telefono: true,
+        isOnline: true,
         lat: true,
         lng: true,
         lastLocationUpdate: true
@@ -1129,7 +1507,11 @@ app.get('/api/location/users', authenticateToken, async (req, res) => {
         lng: { not: null }
       }
     });
-    res.json(users);
+    const mappedUsers = users.map(u => ({
+      ...u,
+      username: u.user
+    }));
+    res.json(mappedUsers);
   } catch (error) {
     console.error('Error obteniendo ubicaciones:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -1151,150 +1533,374 @@ app.get('/api/paginated/:model', authenticateToken, async (req, res) => {
         orderBy: { id: 'desc' }
       });
       raw.reverse();
-      result = raw.map(v => ({
-        id: v.id,
-        fecha: v.fecha,
-        fechaIso: v.fechaIso,
-        venceGarantiaIso: v.venceGarantiaIso,
-        mesesGarantia: v.mesesGarantia,
-        vendedor: v.vendedor?.user || '',
-        vendedorId: v.vendedorId,
-        docCli: v.cliente.doc,
-        cliente: v.cliente.nom,
-        items: v.items.map(i => ({
-          productoId: i.productoId,
-          producto: i.producto.ref,
-          cant: i.cant,
-          desc: i.desc,
-          precioUnitario: i.precioUnitario,
-          serialEquipo: i.serialEquipo
-        })),
-        idProd: v.items[0]?.productoId || null,
-        producto: v.items[0]?.producto?.ref || null,
-        cant: v.items.reduce((acc, i) => acc + i.cant, 0),
-        desc: v.items.reduce((acc, i) => acc + i.desc, 0),
-        precioUnitario: v.items[0]?.precioUnitario || null,
-        serialEquipo: v.items[0]?.serialEquipo || null,
-        metodoPago: v.metodoPago,
-        total: v.total,
-        comisionistaId: v.comisionistaId,
-        comisionistaNombre: v.comisionistaNombre,
-        comisionistaPct: v.comisionistaPct,
-        comisionistaValor: v.comisionistaValor,
-        facturado: v.facturado,
-        observacion: v.observacion,
-        estadoAprobacion: v.estadoAprobacion,
-        estadoFacturacion: v.estadoFacturacion,
-        lockedBy: v.lockedBy,
-        lockedAt: v.lockedAt,
-        numPedido: v.numPedido,
-        clienteNombre: v.clienteNombre,
-        clienteDireccion: v.clienteDireccion,
-        clienteCiudadDpto: v.clienteCiudadDpto,
-        clientePais: v.clientePais,
-        clienteTelefono: v.clienteTelefono,
-        clienteMovil: v.clienteMovil,
-        clienteEmail: v.clienteEmail,
-        clienteNit: v.clienteNit,
-        contacto: v.contacto,
-        condicionesComerciales: v.condicionesComerciales,
-        detallePagoMixto: v.detallePagoMixto,
-        tiempoEntrega: v.tiempoEntrega,
-        direccionEntrega: v.direccionEntrega,
-        fechaEntrega: v.fechaEntrega,
-        horaEntrega: v.horaEntrega,
-        vigencia: v.vigencia,
-        garantia: v.garantia,
-        tipoGarantia: v.tipoGarantia,
-        tiempoGarantia: v.tiempoGarantia,
-        tiempoGarantiaDefecto: v.tiempoGarantiaDefecto,
-        ivaTipo: v.ivaTipo,
-        priceTier: v.priceTier,
-        vendedorNombre: v.vendedorNombre,
-        vendedorCargo: v.vendedorCargo,
-        vendedorEmail: v.vendedorEmail,
-        vendedorMovil: v.vendedorMovil,
-        vendedorCodigoAsesor: v.vendedorCodigoAsesor,
-        equipos: v.equipos,
-        materiales: v.materiales,
-        cuentasBancarias: v.cuentasBancarias
-      }));
+      result = raw.map(v => {
+        const meta = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && v.equipos._meta) ? v.equipos._meta : {};
+        const equiposList = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && Array.isArray(v.equipos.items)) ? v.equipos.items : (Array.isArray(v.equipos) ? v.equipos : []);
+
+        return {
+          id: v.id,
+          fecha: v.fecha,
+          fechaIso: v.fechaIso,
+          venceGarantiaIso: v.venceGarantiaIso,
+          mesesGarantia: v.mesesGarantia,
+          vendedor: v.vendedor?.user || '',
+          vendedorId: v.vendedorId,
+          clienteId: v.clienteId,
+          docCli: v.cliente?.doc || meta.clienteNit || '',
+          cliente: v.cliente?.nom || meta.clienteNombre || '',
+          clienteNombre: meta.clienteNombre || v.cliente?.nom || '',
+          clienteNit: meta.clienteNit || v.cliente?.doc || '',
+          clienteDireccion: meta.clienteDireccion || v.cliente?.direccion || '',
+          clienteTelefono: meta.clienteTelefono || v.cliente?.tel || '',
+          clienteEmail: meta.clienteEmail || v.cliente?.correo || '',
+          items: v.items.map(i => ({
+            productoId: i.productoId,
+            producto: i.producto?.ref || '',
+            cant: i.cant,
+            desc: i.desc,
+            precioUnitario: i.precioUnitario,
+            serialEquipo: i.serialEquipo
+          })),
+          idProd: v.items[0]?.productoId || null,
+          producto: v.items[0]?.producto?.ref || null,
+          cant: v.items.reduce((acc, i) => acc + i.cant, 0),
+          desc: v.items.reduce((acc, i) => acc + i.desc, 0),
+          precioUnitario: v.items[0]?.precioUnitario || null,
+          serialEquipo: v.items[0]?.serialEquipo || null,
+          metodoPago: v.metodoPago,
+          total: v.total,
+          comisionistaId: v.comisionistaId,
+          comisionistaNombre: v.comisionistaNombre,
+          comisionistaPct: v.comisionistaPct,
+          comisionistaValor: v.comisionistaValor,
+          facturado: v.facturado,
+          observacion: v.observacion,
+          estadoAprobacion: v.estadoAprobacion,
+          estadoFacturacion: v.estadoFacturacion,
+          lockedBy: v.lockedBy,
+          lockedAt: v.lockedAt,
+          numPedido: meta.numPedido || (v.id.startsWith('PED-') ? v.id : 'PED-' + v.id.slice(-4)),
+          vendedorNombre: v.vendedorNombre || v.vendedor?.nombre || '',
+          vendedorCargo: v.vendedorCargo || v.vendedor?.cargo || '',
+          vendedorEmail: v.vendedorEmail || v.vendedor?.correo || '',
+          vendedorMovil: v.vendedorMovil || v.vendedor?.telefono || '',
+          vendedorCodigoAsesor: v.vendedorCodigoAsesor || v.vendedor?.codigoAsesor || '',
+          equipos: equiposList,
+          materiales: v.materiales || [],
+          cuentasBancarias: v.cuentasBancarias,
+          ...meta
+        };
+      });
     } else if (model === 'cotizaciones') {
       const raw = await prisma.cotizacion.findMany({
         skip, take,
-        include: { items: { include: { producto: true } }, vendedor: true },
+        include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
         orderBy: { id: 'desc' }
       });
       raw.reverse();
-      result = raw.map(c => ({
-        id: c.id,
-        fecha: c.fecha,
-        fechaIso: c.fechaIso,
-        vendedor: c.vendedor?.user || '',
-        vendedorId: c.vendedorId,
-        cliente: c.cliente,
-        items: c.items.map(i => ({
-          productoId: i.productoId,
-          producto: i.producto.ref,
-          cant: i.cant,
-          desc: i.desc,
-          precioUnitario: i.precioUnitario
-        })),
-        idProd: c.items[0]?.productoId || null,
-        producto: c.items[0]?.producto?.ref || null,
-        cant: c.items.reduce((acc, i) => acc + i.cant, 0),
-        desc: c.items.reduce((acc, i) => acc + i.desc, 0),
-        precioUnitario: c.items[0]?.precioUnitario || null,
-        metodoPago: c.metodoPago,
-        total: c.total,
-        observacion: c.observacion,
-        estado: c.estado,
-        lockedBy: c.lockedBy,
-        lockedAt: c.lockedAt,
-        numCotizacion: c.numCotizacion,
-        clienteNombre: c.clienteNombre,
-        clienteDireccion: c.clienteDireccion,
-        clienteCiudadDpto: c.clienteCiudadDpto,
-        clientePais: c.clientePais,
-        clienteTelefono: c.clienteTelefono,
-        clienteMovil: c.clienteMovil,
-        clienteEmail: c.clienteEmail,
-        clienteNit: c.clienteNit,
-        contacto: c.contacto,
-        condicionesComerciales: c.condicionesComerciales,
-        detallePagoMixto: c.detallePagoMixto,
-        tiempoEntrega: c.tiempoEntrega,
-        direccionEntrega: c.direccionEntrega,
-        fechaEntrega: c.fechaEntrega,
-        horaEntrega: c.horaEntrega,
-        vigencia: c.vigencia,
-        garantia: c.garantia,
-        tipoGarantia: c.tipoGarantia,
-        tiempoGarantia: c.tiempoGarantia,
-        tiempoGarantiaDefecto: c.tiempoGarantiaDefecto,
-        ivaTipo: c.ivaTipo,
-        priceTier: c.priceTier,
-        vendedorNombre: c.vendedorNombre,
-        vendedorCargo: c.vendedorCargo,
-        vendedorEmail: c.vendedorEmail,
-        vendedorMovil: c.vendedorMovil,
-        vendedorCodigoAsesor: c.vendedorCodigoAsesor,
-        equipos: c.equipos,
-        materiales: c.materiales,
-        cuentasBancarias: c.cuentasBancarias
-      }));
+      result = raw.map(c => {
+        const meta = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && c.equipos._meta) ? c.equipos._meta : {};
+        const equiposList = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && Array.isArray(c.equipos.items)) ? c.equipos.items : (Array.isArray(c.equipos) ? c.equipos : []);
+
+        return {
+          id: c.id,
+          fecha: c.fecha,
+          fechaIso: c.fecha,
+          vendedor: c.vendedor?.user || '',
+          vendedorId: c.vendedorId,
+          clienteId: c.clienteId,
+          docCli: c.cliente?.doc || meta.clienteNit || '',
+          cliente: c.cliente?.nom || meta.clienteNombre || '',
+          clienteNombre: meta.clienteNombre || c.cliente?.nom || '',
+          clienteDireccion: meta.clienteDireccion || c.cliente?.direccion || '',
+          clienteCiudadDpto: meta.clienteCiudadDpto || (c.cliente?.ciudad ? (c.cliente.ciudad + (c.cliente.departamento ? ' / ' + c.cliente.departamento : '')) : ''),
+          clientePais: meta.clientePais || 'Colombia',
+          clienteTelefono: meta.clienteTelefono || c.cliente?.tel || '',
+          clienteMovil: meta.clienteMovil || c.cliente?.celularContacto || c.cliente?.tel || '',
+          clienteEmail: meta.clienteEmail || c.cliente?.correo || c.cliente?.correoFacturacion || '',
+          clienteNit: meta.clienteNit || c.cliente?.doc || '',
+          contacto: c.contacto || meta.contacto || c.cliente?.contactoComercial || '',
+          items: c.items.map(i => ({
+            productoId: i.productoId,
+            producto: i.producto?.ref || i.producto?.cod || '',
+            cant: i.cant,
+            desc: i.desc,
+            precioUnitario: i.precioUnitario
+          })),
+          idProd: c.items[0]?.productoId || null,
+          producto: c.items[0]?.producto?.ref || null,
+          cant: c.items.reduce((acc, i) => acc + i.cant, 0),
+          desc: meta.desc !== undefined ? meta.desc : c.items.reduce((acc, i) => acc + i.desc, 0),
+          precioUnitario: c.items[0]?.precioUnitario || null,
+          total: c.total,
+          observacion: c.observacion || meta.observacion || '',
+          estado: c.estadoSeguimiento || 'aprobado',
+          lockedBy: c.lockedBy,
+          numCotizacion: c.numCotizacion || meta.numCotizacion || '',
+          condiciones: c.condiciones || meta.condiciones || '',
+          tiempoEntrega: c.tiempoEntrega || meta.tiempoEntrega || '',
+          direccionEntrega: c.direccionEntrega || meta.direccionEntrega || '',
+          detallePagoMixto: c.detallePagoMixto || meta.detallePagoMixto || '',
+          vigencia: c.vigencia,
+          garantia: c.garantia || meta.garantia || '',
+          ivaTipo: c.ivaTipo || meta.ivaTipo || 'sin_iva',
+          priceTier: meta.priceTier || c.tipo_precio || 'precio_publico',
+          vendedorNombre: c.vendedorNombre || `${c.vendedor?.nombre || ''} ${c.vendedor?.apellido || ''}`.trim(),
+          vendedorCargo: c.vendedorCargo || c.vendedor?.cargo || 'Asesor',
+          vendedorEmail: c.vendedorEmail || c.vendedor?.correo || '',
+          vendedorMovil: c.vendedorMovil || c.vendedor?.telefono || '',
+          vendedorCodigoAsesor: c.vendedorCodigoAsesor || c.vendedor?.codigoAsesor || '',
+          equipos: equiposList,
+          materiales: c.materiales || [],
+          cuentasBancarias: c.cuentas || '[]',
+          seguimiento: {
+            estado: c.estadoSeguimiento || 'pendiente',
+            compraParcialDetalles: c.motivoSeguimiento || '',
+            noCompraronMotivo: c.motivoNoCompra || '',
+            noCompraronDetalle: '',
+            fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO') : null,
+            vendedor: c.vendedor?.user || ''
+          },
+          ...meta
+        };
+      });
     } else if (model === 'chat') {
-      result = await prisma.chat.findMany({ skip, take, orderBy: { timestamp: 'desc' } });
-      result.reverse();
+      const chatRows = await prisma.chat.findMany({
+        skip,
+        take,
+        include: { sender: true, receiver: true },
+        orderBy: { timestamp: 'desc' }
+      });
+      result = chatRows.reverse().map(c => ({
+        id: c.id,
+        timestamp: c.timestamp ? new Date(c.timestamp).getTime() : Date.now(),
+        fecha: c.fecha ? c.fecha.toISOString() : new Date().toISOString(),
+        senderId: c.senderId,
+        user: c.sender?.user || c.senderId,
+        nombre: c.nombre || (c.sender ? `${c.sender.nombre} ${c.sender.apellido || ''}`.trim() : 'Usuario'),
+        receiverId: c.receiverId,
+        to: c.senderTabId ? c.senderTabId : (c.receiver?.user || c.receiverId || 'Todos'),
+        text: c.text || '',
+        senderTabId: c.senderTabId || null,
+        isNudge: !!c.isNudge,
+        isSticker: !!c.isSticker,
+        stickerId: c.stickerId || null,
+        stickerUrl: c.stickerUrl || null,
+        isAudio: !!c.isAudio,
+        audioUrl: c.audioUrl || null,
+        isFile: !!c.isFile,
+        fileUrl: c.fileUrl || null,
+        fileName: c.fileName || null,
+        fileType: c.fileType || null,
+        isMeeting: !!c.isMeeting,
+        meetingId: c.meetingId || null,
+        readAt: c.readAt ? new Date(c.readAt).getTime() : null,
+        isDeleted: !!c.isDeleted,
+        isEdited: !!c.isEdited,
+        reactions: c.reactions || {},
+        replyTo: c.replyTo || null,
+        replyToObj: c.replyToObj || null,
+        hiddenBy: c.hiddenBy || [],
+        fileSize: c.fileSize || null
+      }));
     } else if (model === 'pqrs') {
-      result = await prisma.pQR.findMany({ skip, take, orderBy: { id: 'desc' } });
-      result.reverse();
-    } else if (model === 'facturas') {
-      result = await prisma.cuentasCobro.findMany({ skip, take, orderBy: { id: 'desc' } });
-      result.reverse();
+      const pqrRows = await prisma.pQR.findMany({
+        skip,
+        take,
+        include: { cliente: true, usuarioAsignado: true },
+        orderBy: { id: 'desc' }
+      });
+      result = pqrRows.reverse().map(p => ({
+        id: p.id,
+        clienteId: p.clienteId,
+        fecha: p.fecha,
+        limiteIso: p.limiteIso,
+        docCli: p.cliente?.doc || '',
+        cliente: p.cliente?.nom || '',
+        tipo: p.tipo,
+        detalle: p.detalle,
+        evidencia: p.evidencia,
+        fileUrl: p.fileUrl,
+        estado: p.estado,
+        satisfecho: p.satisfecho,
+        lockedBy: p.lockedBy,
+        radicado: p.radicado,
+        hechos: p.hechos,
+        solicitudes: p.solicitudes,
+        evidencias: typeof p.evidencias === 'string' ? p.evidencias : JSON.stringify(p.evidencias || []),
+        aplicaGarantia: p.aplicaGarantia,
+        tratamientoGarantia: p.tratamientoGarantia,
+        terminoLegal: p.terminoLegal,
+        fechaCierre: p.fechaCierre,
+        inventarioId: p.inventarioId,
+        ventaId: p.ventaId,
+        cotizacionId: p.cotizacionId,
+        trazabilidad: typeof p.trazabilidad === 'string' ? p.trazabilidad : JSON.stringify(p.trazabilidad || []),
+        usuarioAsignadoId: p.usuarioAsignadoId || null,
+        usuarioAsignado: p.usuarioAsignado?.user || '',
+        usuarioAsignadoNombre: p.usuarioAsignado ? `${p.usuarioAsignado.nombre} ${p.usuarioAsignado.apellido || ''}`.trim() : ''
+      }));
+    } else if (model === 'facturas' || model === 'cuentasCobro') {
+      const ccRows = await prisma.cuentasCobro.findMany({ skip, take, orderBy: { fecha: 'desc' } });
+      result = ccRows.reverse().map(c => ({
+        id: c.id,
+        ciudad: c.ciudad || '',
+        fecha: c.fecha ? c.fecha.toISOString() : '',
+        cuenta: c.cuenta || '',
+        num: c.cuenta || '',
+        nombre: c.nombre || '',
+        comisionista: c.nombre || '',
+        cedula: c.cedula || '',
+        correo: c.correo || '',
+        concepto: c.concepto || '',
+        items: typeof c.items === 'string' ? JSON.parse(c.items) : (c.items || []),
+        nequi: c.nequi || '',
+        titular: c.titular || '',
+        estado: c.estado || '',
+        total: c.total || 0
+      }));
+    } else if (model === 'servicios') {
+      const servRows = await prisma.servicio.findMany({
+        skip, take,
+        include: { cliente: true, tecnico: true },
+        orderBy: { id: 'desc' }
+      });
+      result = servRows.reverse().map(s => ({
+        id: s.id,
+        clienteId: s.clienteId,
+        docCli: s.cliente?.doc || '',
+        cliente: s.cliente?.nom || '',
+        fechaProg: s.fechaProg,
+        tipo: s.tipo,
+        obs: s.obs,
+        estado: s.estado,
+        obsAdmin: s.obsAdmin,
+        lockedBy: s.lockedBy,
+        tecnicoId: s.tecnicoId || null,
+        tecnico: s.tecnico?.user || '',
+        tecnicoNombre: s.tecnico ? `${s.tecnico.nombre} ${s.tecnico.apellido || ''}`.trim() : '',
+        equipoDetalle: s.equipoDetalle || '',
+        obsRecepcion: s.obsRecepcion || '',
+        obsDiagnostico: s.obsDiagnostico || '',
+        obsCotizacion: s.obsCotizacion || '',
+        obsEjecucion: s.obsEjecucion || '',
+        obsCalidad: s.obsCalidad || '',
+        fechaCreacion: s.fechaCreacion || '',
+        fechaIso: s.fechaIso || '',
+        radicado: s.radicado,
+        inventarioId: s.inventarioId,
+        ventaId: s.ventaId,
+        cotizacionId: s.cotizacionId,
+        etapaActual: s.etapaActual,
+        evidencias: typeof s.evidencias === 'string' ? s.evidencias : JSON.stringify(s.evidencias || []),
+        trazabilidad: typeof s.trazabilidad === 'string' ? s.trazabilidad : JSON.stringify(s.trazabilidad || []),
+        aplicaGarantia: s.aplicaGarantia,
+        costoServicio: s.costoServicio
+      }));
+    } else if (model === 'clientes') {
+      const cliRows = await prisma.cliente.findMany({ skip, take, orderBy: { id: 'desc' } });
+      const usersCache = await prisma.user.findMany();
+      result = cliRows.reverse().map(c => {
+        let dVal = '', mVal = '', aVal = '';
+        if (c.fechaVinculacion) {
+          const isoDate = c.fechaVinculacion instanceof Date ? c.fechaVinculacion.toISOString().split('T')[0] : String(c.fechaVinculacion).split('T')[0];
+          if (isoDate.includes('-')) {
+            const parts = isoDate.split('-');
+            aVal = parts[0]; mVal = parts[1]; dVal = parts[2];
+          }
+        }
+        const advisorUser = usersCache.find(u => 
+          (c.asesorNombre && `${u.nombre || ''} ${u.apellido || ''}`.trim().toLowerCase() === c.asesorNombre.trim().toLowerCase()) ||
+          (c.owner && u.user?.toLowerCase() === c.owner.toLowerCase())
+        );
+        return {
+          ...c,
+          dia: dVal,
+          mes: mVal,
+          anio: aVal,
+          fechaVinculacion: dVal && mVal && aVal ? `${dVal}/${mVal}/${aVal}` : (c.fechaVinculacion || ''),
+          asesorCedula: c.asesorCedula || advisorUser?.cedula || advisorUser?.id || '',
+          asesorCodigo: c.asesorCodigo || advisorUser?.codigoAsesor || '',
+          asesorNombre: c.asesorNombre || (advisorUser ? `${advisorUser.nombre || ''} ${advisorUser.apellido || ''}`.trim() : ''),
+          asesorCargo: c.asesorCargo || advisorUser?.cargo || advisorUser?.rol || 'Administrador Master',
+          asesorEmail: c.asesorEmail || advisorUser?.correo || advisorUser?.email || ''
+        };
+      });
+    } else if (model === 'inventario') {
+      const invRows = await prisma.inventario.findMany({ skip, take, orderBy: { id: 'desc' } });
+      result = invRows.reverse().map(inv => ({
+        ...inv,
+        ...(inv.datosExt && typeof inv.datosExt === 'object' ? inv.datosExt : {})
+      }));
+    } else if (model === 'solicitudes') {
+      const solRows = await prisma.solicitud.findMany({
+        skip, take,
+        include: { asesor: true },
+        orderBy: { id: 'desc' }
+      });
+      result = solRows.reverse().map(s => ({
+        id: s.id,
+        fecha: s.fecha ? s.fecha.toISOString() : '',
+        asesorId: s.asesorId,
+        asesor: s.asesor?.user || '',
+        nombreAsesor: s.nombreAsesor || (s.asesor ? `${s.asesor.nombre} ${s.asesor.apellido || ''}`.trim() : ''),
+        tipo: s.tipo,
+        detalle: s.detalle || '',
+        evidencia: s.evidencia || null,
+        fileUrl: s.fileUrl || null,
+        estado: s.estado,
+        lockedBy: s.lockedBy || null,
+        comentario: s.comentario || '',
+        fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : ''
+      }));
+    } else if (model === 'capacitaciones') {
+      const capRows = await prisma.capacitacion.findMany({
+        skip, take,
+        include: { creador: true },
+        orderBy: { fecha: 'desc' }
+      });
+      result = capRows.reverse().map(c => ({
+        id: c.id,
+        tipo: c.tipo || 'Capacitación',
+        tema: c.tema,
+        descripcion: c.descripcion || '',
+        fecha: c.fecha ? c.fecha.toISOString() : '',
+        hora: c.hora || '08:00 AM',
+        obligatoria: c.obligatoria,
+        creadorId: c.creadorId,
+        creador: c.creador?.user || '',
+        creadorNombre: c.creador ? `${c.creador.nombre} ${c.creador.apellido || ''}`.trim() : '',
+        videoLink: c.videoLink || '',
+        videoFile: c.videoFile || null,
+        videoFileName: c.videoFileName || '',
+        plataforma: c.plataforma || null,
+        enlaceReunion: c.enlaceReunion || null,
+        tutorFirma: c.tutorFirma || null,
+        tutor: c.tutor || null,
+        creadoEn: c.creadoEn ? c.creadoEn.toISOString() : (c.fecha ? c.fecha.toISOString() : ''),
+        materiales: c.materiales || [],
+        asistentes: c.asistentes || [],
+        evaluacion: c.evaluacion || null,
+        estado: c.estado || 'Programada',
+        lockedBy: c.lockedBy || null
+      }));
     } else if (model === 'chatGroups') {
-      result = await prisma.chatGroup.findMany({ skip, take, orderBy: { id: 'desc' } });
-      result.reverse();
+      const groupsRaw = await prisma.chatGroup.findMany({
+        skip,
+        take,
+        include: { createdBy: true },
+        orderBy: { fecha: 'desc' }
+      });
+      result = groupsRaw.reverse().map(g => ({
+        id: g.id,
+        nombre: g.nombre,
+        descripcion: g.descripcion || '',
+        createdById: g.createdById,
+        createdBy: g.createdBy?.user || g.createdById,
+        creadorNombre: g.createdBy ? `${g.createdBy.nombre} ${g.createdBy.apellido || ''}`.trim() : '',
+        fecha: g.fecha ? g.fecha.toISOString() : new Date().toISOString(),
+        integrantes: typeof g.integrantes === 'string' ? JSON.parse(g.integrantes) : (g.integrantes || [])
+      }));
     } else {
       return res.status(400).json({ error: 'Model not supported for pagination' });
     }
@@ -1322,649 +1928,986 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
   try {
     await prisma.$transaction(async (tx) => {
-      // Helper para upserts en tablas planas directas
+      // Caché local a la transacción para resolver usuarios y clientes sin peticiones duplicadas
+      let cachedUsers = null;
+      const getUsersCache = async () => {
+        if (!cachedUsers) {
+          cachedUsers = await tx.user.findMany({ select: { id: true, user: true, nombre: true, apellido: true } });
+        }
+        return cachedUsers;
+      };
+
+      // Resuelve un ID de usuario a partir de ID, username o nombre, con fallback seguro
+      const resolveUser = async (userRef, allowFallback = true) => {
+        const all = await getUsersCache();
+        if (!userRef) {
+          return allowFallback ? (req.user?.id || all[0]?.id || '1') : null;
+        }
+        const str = String(userRef).trim();
+        // 1. Coincidencia directa por id
+        const byId = all.find(u => String(u.id) === str);
+        if (byId) return byId.id;
+        // 2. Coincidencia por username (case-insensitive)
+        const byUser = all.find(u => u.user && u.user.toLowerCase() === str.toLowerCase());
+        if (byUser) return byUser.id;
+        // 3. Coincidencia por nombre completo
+        const byNom = all.find(u => (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === str.toLowerCase());
+        if (byNom) return byNom.id;
+        // 4. Fallback al usuario de sesión o primer usuario (solo si allowFallback es true)
+        return allowFallback ? (req.user?.id || all[0]?.id || '1') : null;
+      };
+
+      // Resuelve un ID de cliente a partir de id, doc o nombre, sin generar registros basura
+      const resolveClient = async (docCli, clienteId, fallbackName = 'Cliente') => {
+        if (clienteId) {
+          const byId = await tx.cliente.findUnique({ where: { id: String(clienteId) } });
+          if (byId) return byId;
+        }
+        if (docCli && String(docCli).trim() && !String(docCli).startsWith('DOC-')) {
+          const cleanDoc = String(docCli).trim();
+          const byDoc = await tx.cliente.findUnique({ where: { doc: cleanDoc } });
+          if (byDoc) return byDoc;
+        }
+        if (fallbackName && typeof fallbackName === 'string' && fallbackName.trim() && !fallbackName.startsWith('Cliente DOC-')) {
+          const cleanName = fallbackName.trim();
+          const byNom = await tx.cliente.findFirst({
+            where: { nom: { equals: cleanName, mode: 'insensitive' } }
+          });
+          if (byNom) return byNom;
+        }
+
+        // Si se proporcionó un documento real válido y no existe, crearlo
+        if (docCli && String(docCli).trim() && !String(docCli).startsWith('DOC-')) {
+          const newDoc = String(docCli).trim();
+          const newId = clienteId || (Date.now().toString() + '_' + Math.random().toString(36).substr(2, 6));
+          try {
+            const created = await tx.cliente.create({
+              data: {
+                id: newId,
+                doc: newDoc,
+                nom: fallbackName || `Cliente ${newDoc}`,
+                doc_tipo: 'CC',
+                tipo_cliente: 'DOM',
+                tel: 'N/A',
+                correo: 'sin-correo@ibrosas.com'
+              }
+            });
+            return created;
+          } catch (e) {
+            const existing = await tx.cliente.findFirst({ where: { OR: [{ id: newId }, { doc: newDoc }] } });
+            if (existing) return existing;
+          }
+        }
+
+        // Fallback seguro: reutilizar cliente real existente para no romper FK ni generar basura
+        const anyLegitClient = await tx.cliente.findFirst({
+          where: { NOT: { doc: { startsWith: 'DOC-' } } },
+          orderBy: { id: 'asc' }
+        });
+        if (anyLegitClient) return anyLegitClient;
+
+        const anyClient = await tx.cliente.findFirst({ orderBy: { id: 'asc' } });
+        return anyClient;
+      };
+
+      // Resuelve un producto de inventario a partir de id, ref, cod o nombre
+      const resolveProduct = async (idProd, refProd) => {
+        if (idProd) {
+          const byId = await tx.inventario.findUnique({ where: { id: String(idProd) } });
+          if (byId) return byId;
+        }
+        if (refProd && String(refProd).trim()) {
+          const searchStr = String(refProd).trim();
+          const byRef = await tx.inventario.findFirst({
+            where: {
+              OR: [
+                { ref: { equals: searchStr, mode: 'insensitive' } },
+                { cod: { equals: searchStr, mode: 'insensitive' } },
+                { nom: { equals: searchStr, mode: 'insensitive' } }
+              ]
+            }
+          });
+          if (byRef) return byRef;
+        }
+        const anyProd = await tx.inventario.findFirst({ orderBy: { id: 'asc' } });
+        return anyProd;
+      };
+
+      // Helper para upserts en tablas directas aplicando sanitización estricta para Prisma
       const flatUpsert = async (table, items) => {
-        for (const item of items) {
-          const { ...data } = item;
-
-          // Pre-cleaning: Remove any nested arrays/objects that aren't native Json fields to prevent Prisma crashes
-          const allowedJsonFields = ['permissions', 'adjuntos', 'equipos', 'materiales', 'evidencias', 'trazabilidad', 'scores', 'integrantes', 'shadowingData', 'items', 'asistentes', 'evaluacion'];
-          for (const key in data) {
-            if (data[key] !== null && typeof data[key] === 'object' && !(data[key] instanceof Date)) {
-              if (!allowedJsonFields.includes(key)) {
-                delete data[key];
-              }
-            }
+        for (const rawItem of items) {
+          const cleaned = sanitizeBackendForPrisma(table, rawItem);
+          if (!cleaned.id) {
+            cleaned.id = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
           }
 
-          // Forzar tipos numéricos para Prisma
-          if (table === 'inventario') {
-            if (data.cant !== undefined) data.cant = parseInt(data.cant) || 0;
-            if (data.pedido !== undefined) data.pedido = parseInt(data.pedido) || 0;
-            if (data.precio !== undefined) data.precio = parseFloat(data.precio) || 0;
-            if (data.precio_publico !== undefined && data.precio_publico !== null) data.precio_publico = parseFloat(data.precio_publico) || null;
-            if (data.precio_tecnico !== undefined && data.precio_tecnico !== null) data.precio_tecnico = parseFloat(data.precio_tecnico) || null;
-            if (data.precio_mayorista !== undefined && data.precio_mayorista !== null) data.precio_mayorista = parseFloat(data.precio_mayorista) || null;
-            if (data.precio_costo !== undefined && data.precio_costo !== null) data.precio_costo = parseFloat(data.precio_costo) || null;
-            if (data.vendidas !== undefined) data.vendidas = parseInt(data.vendidas) || 0;
-          } else if (table === 'cliente') {
-            if (data.condicionesPagoDias !== undefined && data.condicionesPagoDias !== null) data.condicionesPagoDias = parseInt(data.condicionesPagoDias) || null;
-            if (data.porcentajeAutorizado !== undefined && data.porcentajeAutorizado !== null) data.porcentajeAutorizado = parseFloat(data.porcentajeAutorizado) || null;
-            if (data.adjuntos !== undefined && data.adjuntos !== null && typeof data.adjuntos !== 'string') {
-               /* no op for Json */
-            }
-          } else if (table === 'comisionista') {
-            if (data.valor_venta !== undefined && data.valor_venta !== null) data.valor_venta = parseFloat(data.valor_venta) || null;
-            if (data.pct_comision !== undefined && data.pct_comision !== null) data.pct_comision = parseFloat(data.pct_comision) || null;
-            if (data.porcentaje !== undefined && data.porcentaje !== null) data.porcentaje = parseFloat(data.porcentaje) || null;
-          } else if (table === 'user') {
-            if (data.meta_u !== undefined) data.meta_u = parseFloat(data.meta_u) || 0;
-            if (data.ejec_u !== undefined) data.ejec_u = parseFloat(data.ejec_u) || 0;
-            if (data.meta_p !== undefined) data.meta_p = parseFloat(data.meta_p) || 0;
-            if (data.ejec_p !== undefined) data.ejec_p = parseFloat(data.ejec_p) || 0;
-            if (data.cumpleanos && typeof data.cumpleanos === 'string') {
-              const d = new Date(data.cumpleanos);
-              if (!isNaN(d)) {
-                data.cumpleanos = d.toISOString();
-              } else {
-                data.cumpleanos = null;
+          // Optimistic Concurrency Control (OCC)
+          if (cleaned.lockedBy && cleaned.lockedBy !== user) {
+            try {
+              const existingRecord = await tx[table].findUnique({ where: { id: cleaned.id } });
+              if (existingRecord && existingRecord.lockedBy && existingRecord.lockedBy !== user) {
+                console.warn(`[OCC BLOCK] Usuario '${user}' no pudo sobrescribir '${table}' ID '${cleaned.id}' bloqueado por '${existingRecord.lockedBy}'.`);
+                continue;
               }
-            } else if (data.cumpleanos === "") {
-              data.cumpleanos = null;
-            }
-          } else if (table === 'evaluacion') {
-            if (data.scores && typeof data.scores === 'string') {
-              
-            }
-          } else if (table === 'procesoDisciplinario') {
-            if (data.etapa !== undefined) data.etapa = parseInt(data.etapa) || 1;
-            if (data.diasSuspension !== undefined) data.diasSuspension = parseInt(data.diasSuspension) || 0;
-            if (data.timestampEtapa !== undefined) data.timestampEtapa = parseFloat(data.timestampEtapa) || 0;
-          } else if (table === 'capacitacion') {
-            if (data.materiales !== undefined && typeof data.materiales !== 'string') {}
-            if (data.asistentes !== undefined && typeof data.asistentes !== 'string') {}
-            if (data.evaluacion !== undefined && typeof data.evaluacion !== 'string') {}
-          } else if (table === 'auditoria') {
-            if (data.user && typeof data.user === 'string') {
-              let usernameToSearch = data.user;
-              const match = data.user.match(/\(([^)]+)\)$/);
-              if (match && match[1]) {
-                usernameToSearch = match[1];
-              }
-
-              const dbU = await tx.user.findFirst({ where: { user: usernameToSearch } });
-              if (dbU) {
-                data.userId = dbU.id;
-              } else {
-                const fallbackUser = await tx.user.findFirst({ orderBy: { id: 'asc' } });
-                data.userId = fallbackUser?.id || "1";
-              }
-              delete data.user;
-            }
-            if (data.fecha) {
-              const d = new Date(data.fecha);
-              if (!isNaN(d)) {
-                data.fecha = d;
-              } else {
-                data.fecha = new Date();
-              }
-            } else {
-              data.fecha = new Date();
-            }
-          } else if (table === 'anuncio') {
-            if (data.expiresAt) {
-              const d = new Date(data.expiresAt);
-              data.expiresAt = isNaN(d) ? null : d;
-            }
-            if (data.fecha) {
-               // Manejar formato "dd/mm/yyyy" (como 24/8/2026) que arroja frontend
-               if (typeof data.fecha === 'string' && data.fecha.includes('/')) {
-                  const parts = data.fecha.split('/');
-                  if (parts.length === 3) {
-                     // Asume dd/mm/yyyy
-                     data.fecha = new Date(parts[2], parts[1] - 1, parts[0]);
-                  }
-               }
-               const d = new Date(data.fecha);
-               data.fecha = isNaN(d) ? new Date() : d;
-            }
+            } catch (e) {}
           }
 
-        if (table === 'user') {
-          // Ya permitimos que foto se guarde y sincronice
+          const { id: idToUpsert, ...updateData } = cleaned;
+          await tx[table].upsert({
+            where: { id: cleaned.id },
+            update: updateData,
+            create: { id: idToUpsert || cleaned.id, ...updateData },
+          });
         }
+      };
 
-        // Evitar conflictos por llaves únicas (como doc en Clientes o user en Usuarios)
-        if (table === 'cliente' && item.doc) {
-          const existing = await tx.cliente.findUnique({ where: { doc: item.doc } });
-          if (existing) {
-            delete data.id;
-            await tx.cliente.update({
-              where: { id: existing.id },
-              data
-            });
-            continue;
-          }
+      // Helper para eliminaciones
+      const flatDelete = async (table, ids) => {
+        if (ids && ids.length > 0) {
+          await tx[table].deleteMany({
+            where: { id: { in: ids.map(id => id.toString()) } },
+          });
         }
+      };
 
-        if (table === 'user' && item.user) {
-          const existing = await tx.user.findUnique({ where: { user: item.user } });
-          if (existing) {
-            delete data.id;
-            if (data.pass) {
-              const isBcrypt = data.pass.startsWith('$2a$') || data.pass.startsWith('$2b$') || data.pass.startsWith('$2y$');
-              if (!isBcrypt) {
-                data.pass = bcrypt.hashSync(data.pass, 10);
-              }
+      // --- FASE 1: Tablas Independientes ---
+
+      // 1. Roles
+      if (diff.roles) {
+        await flatUpsert('role', diff.roles.upserted || []);
+        await flatDelete('role', diff.roles.deleted || []);
+      }
+
+      // 2. Clientes
+      if (diff.clientes) {
+        await flatDelete('cliente', diff.clientes.deleted || []);
+        for (const rawItem of diff.clientes.upserted || []) {
+          const cleaned = sanitizeBackendForPrisma('cliente', rawItem);
+          if (!cleaned.id) cleaned.id = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
+
+          if (cleaned.doc) {
+            const existing = await tx.cliente.findUnique({ where: { doc: cleaned.doc } });
+            if (existing && existing.id !== cleaned.id) {
+              const { id: _ignoredId, ...updateData } = cleaned;
+              await tx.cliente.update({
+                where: { id: existing.id },
+                data: updateData
+              });
+              continue;
             }
-            await tx.user.update({
-              where: { id: existing.id },
-              data
-            });
-            continue;
           }
-        }
 
-        if (table === 'user' && data.pass) {
-        const isBcrypt = data.pass.startsWith('$2a$') || data.pass.startsWith('$2b$') || data.pass.startsWith('$2y$');
-        if (!isBcrypt) {
-          data.pass = bcrypt.hashSync(data.pass, 10);
+          const { id: idToUpsert, ...dataToUpsert } = cleaned;
+          await tx.cliente.upsert({
+            where: { id: idToUpsert },
+            update: dataToUpsert,
+            create: cleaned,
+          });
         }
       }
 
-      // Optimistic Concurrency Control (OCC) - Prevención Anti-Sobrescritura
-      try {
-        const existingRecord = await tx[table].findUnique({ where: { id: item.id } });
-        if (existingRecord && existingRecord.lockedBy && existingRecord.lockedBy !== user) {
-          console.warn(`[OCC BLOCK] Usuario '${user}' intentó sobrescribir '${table}' ID '${item.id}' que está bloqueado por '${existingRecord.lockedBy}'. Sincronización denegada para este registro.`);
-          continue; // Saltar la actualización para no corromper datos del otro asesor
+      // 3. Inventario (Productos)
+      if (diff.inventario) {
+        if (diff.inventario.deleted && diff.inventario.deleted.length > 0) {
+          const invIds = diff.inventario.deleted.map(id => id.toString());
+          await tx.servicio.updateMany({
+            where: { inventarioId: { in: invIds } },
+            data: { inventarioId: null }
+          });
+          await tx.pQR.updateMany({
+            where: { inventarioId: { in: invIds } },
+            data: { inventarioId: null }
+          });
+          await flatDelete('inventario', invIds);
         }
-      } catch (e) {
-        // Ignorar si la tabla no soporta findUnique por ID u otras razones
+        for (const rawItem of diff.inventario.upserted || []) {
+          const cleaned = sanitizeBackendForPrisma('inventario', rawItem);
+          if (!cleaned.id) cleaned.id = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
+
+          if (cleaned.cod) {
+            const existing = await tx.inventario.findUnique({ where: { cod: cleaned.cod } });
+            if (existing && existing.id !== cleaned.id) {
+              const { id: _ignoredId, ...updateData } = cleaned;
+              await tx.inventario.update({
+                where: { id: existing.id },
+                data: updateData
+              });
+              continue;
+            }
+          }
+
+          const { id: idToUpsert, ...dataToUpsert } = cleaned;
+          await tx.inventario.upsert({
+            where: { id: idToUpsert },
+            update: dataToUpsert,
+            create: cleaned,
+          });
+        }
       }
 
-      await tx[table].upsert({
-        where: { id: item.id },
-        update: data,
-        create: data,
-      });
-    }
-    };
-
-    // Helper para eliminaciones en tablas planas directas
-    const flatDelete = async (table, ids) => {
-      if (ids && ids.length > 0) {
-        await tx[table].deleteMany({
-          where: { id: { in: ids.map(id => id.toString()) } },
-        });
-      }
-    };
-
-    // --- FASE 1: Tablas Independientes ---
-
-    // 1. Roles
-    if (diff.roles) {
-      await flatUpsert('role', diff.roles.upserted || []);
-      await flatDelete('role', diff.roles.deleted || []);
-    }
-
-    // 2. Clientes
-    if (diff.clientes) {
-      await flatUpsert('cliente', diff.clientes.upserted || []);
-      await flatDelete('cliente', diff.clientes.deleted || []);
-    }
-
-    // 3. Inventario (Productos)
-    if (diff.inventario) {
-      await flatUpsert('inventario', diff.inventario.upserted || []);
-      await flatDelete('inventario', diff.inventario.deleted || []);
-    }
-
-    // 4. Usuarios
-    if (diff.users) {
-      const isBcryptHash = (str) => /^\$2[ayb]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(str);
-      const processedUsers = (diff.users.upserted || []).map(u => {
-        if (u.pass && !isBcryptHash(u.pass)) {
-          return { ...u, pass: bcrypt.hashSync(u.pass, 10) };
-        }
-        return u;
-      });
-      await flatUpsert('user', processedUsers);
-      await flatDelete('user', diff.users.deleted || []);
-    }
-
-    // --- FASE 2: Tablas Relacionales (Dependen de Clientes y Productos) ---
-
-    // 5. Ventas / Facturación
-    if (diff.ventas) {
-      // Eliminar primero
-      await flatDelete('venta', diff.ventas.deleted || []);
-
-      // Upsert
-      for (const item of diff.ventas.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
+      // 4. Usuarios
+      if (diff.users) {
+        await flatDelete('user', diff.users.deleted || []);
+        const isBcryptHash = (str) => /^\$2[ayb]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(str);
         
-        // Encontrar Producto (1 sola petición a BD)
-        const productConditions = [];
-        if (item.productoId) productConditions.push({ id: item.productoId });
-        if (item.idProd) productConditions.push({ id: item.idProd });
-        if (item.producto) productConditions.push({ ref: item.producto });
-        const product = productConditions.length > 0 
-          ? await tx.inventario.findFirst({ where: { OR: productConditions } }) 
-          : null;
+        for (const rawItem of diff.users.upserted || []) {
+          const cleaned = sanitizeBackendForPrisma('user', rawItem);
+          if (!cleaned.id) cleaned.id = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
 
-        const vUser = await tx.user.findFirst({ where: { user: item.vendedor } });
-        const finalVendedorId = item.vendedorId || (vUser ? vUser.id : null);
+          if (cleaned.pass && !isBcryptHash(cleaned.pass)) {
+            cleaned.pass = bcrypt.hashSync(cleaned.pass, 10);
+          }
 
-        if (!client || !product || !finalVendedorId) {
-          console.warn(`Sync Venta ${item.id} omitida: Cliente, Producto o Vendedor no encontrado.`);
-          continue;
-        }
+          const updateData = { ...cleaned };
+          delete updateData.id;
+          if (!updateData.pass) {
+            delete updateData.pass;
+          }
+          if (!updateData.firma) {
+            delete updateData.firma;
+          }
 
-        const data = {
-          fecha: item.fecha,
-          fechaIso: item.fechaIso,
-          venceGarantiaIso: item.venceGarantiaIso,
-          mesesGarantia: parseInt(item.mesesGarantia) || 0,
-          vendedorId: finalVendedorId,
-          clienteId: client.id,
-          metodoPago: item.metodoPago || 'Efectivo',
-          total: parseFloat(item.total) || 0,
-          comisionistaId: item.comisionistaId || null,
-          comisionistaNombre: item.comisionistaNombre || null,
-          comisionistaPct: item.comisionistaPct ? parseFloat(item.comisionistaPct) : null,
-          comisionistaValor: item.comisionistaValor ? parseFloat(item.comisionistaValor) : null,
-          tipo_precio: item.tipo_precio || null,
-          lockedBy: item.lockedBy || null,
-          vendedorNombre: item.vendedorNombre || null,
-          vendedorCargo: item.vendedorCargo || null,
-          vendedorEmail: item.vendedorEmail || null,
-          vendedorMovil: item.vendedorMovil || null,
-          vendedorCodigoAsesor: item.vendedorCodigoAsesor || null
-        };
+          if (cleaned.user) {
+            const existing = await tx.user.findUnique({ where: { user: cleaned.user } });
+            if (existing && existing.id !== cleaned.id) {
+              await tx.user.update({
+                where: { id: existing.id },
+                data: updateData
+              });
+              continue;
+            }
+          }
 
-        await tx.venta.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
-        });
+          const createData = cleaned.pass ? cleaned : { ...cleaned, pass: bcrypt.hashSync('Ibro2026*', 10) };
 
-        // Sincronizar Items de Venta (Backward Compatibility)
-        await tx.ventaItem.deleteMany({ where: { ventaId: item.id } });
-        const itemsToCreate = (item.items && item.items.length > 0) ? item.items : [{
-            productoId: product.id,
-            cant: parseInt(item.cant) || 0,
-            precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : 0,
-            desc: parseFloat(item.desc) || 0,
-            serialEquipo: item.serialEquipo || null
-        }];
-
-        for (const i of itemsToCreate) {
-             await tx.ventaItem.create({
-                 data: {
-                     ventaId: item.id,
-                     productoId: i.productoId || product.id,
-                     cant: parseInt(i.cant) || 0,
-                     precioUnitario: i.precioUnitario ? parseFloat(i.precioUnitario) : 0,
-                     desc: parseFloat(i.desc) || 0,
-                     serialEquipo: i.serialEquipo || null
-                 }
-             });
+          await tx.user.upsert({
+            where: { id: cleaned.id },
+            update: updateData,
+            create: createData,
+          });
         }
       }
-    }
 
-    // 6. Cotizaciones
-    if (diff.cotizaciones) {
-      await flatDelete('cotizacion', diff.cotizaciones.deleted || []);
+      // --- FASE 2: Tablas Relacionales (Ventas, Cotizaciones, PQRS, Servicios) ---
 
-      for (const item of diff.cotizaciones.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
-
-        // Encontrar Producto (1 sola petición a BD)
-        const productConditions = [];
-        if (item.productoId) productConditions.push({ id: item.productoId });
-        if (item.idProd) productConditions.push({ id: item.idProd });
-        if (item.producto) productConditions.push({ ref: item.producto });
-        let product = productConditions.length > 0 
-          ? await tx.inventario.findFirst({ where: { OR: productConditions } }) 
-          : null;
-
-        // Backwards compatibility fallback if product is not found (e.g. legacy or manual product)
-        if (!product) {
-          product = await tx.inventario.findFirst();
+      // 5. Ventas / Facturación
+      if (diff.ventas) {
+        if (diff.ventas.deleted && diff.ventas.deleted.length > 0) {
+          const ventaIds = diff.ventas.deleted.map(id => id.toString());
+          await tx.pQR.updateMany({
+            where: { ventaId: { in: ventaIds } },
+            data: { ventaId: null }
+          });
+          await tx.servicio.updateMany({
+            where: { ventaId: { in: ventaIds } },
+            data: { ventaId: null }
+          });
+          await flatDelete('venta', ventaIds);
         }
 
-        const vUser = await tx.user.findFirst({ where: { user: item.vendedor } });
-        const finalVendedorId = item.vendedorId || (vUser ? vUser.id : null);
+        for (const item of diff.ventas.upserted || []) {
+          const client = await resolveClient(item.docCli, item.clienteId, item.cliente || item.clienteNombre);
+          const sellerId = await resolveUser(item.vendedorId || item.vendedor);
 
-        if (!client || !product || !finalVendedorId) {
-          console.warn(`Sync Cotizacion ${item.id} omitida: Cliente, Producto o Vendedor no encontrado.`);
-          continue;
-        }
+          const metaFields = {
+            numPedido: item.numPedido,
+            clienteNombre: item.clienteNombre || item.cliente || (client ? client.nom : undefined),
+            clienteDireccion: item.clienteDireccion || (client ? client.direccion : undefined),
+            clienteCiudadDpto: item.clienteCiudadDpto || (client ? client.ciudad : undefined),
+            clientePais: item.clientePais,
+            clienteTelefono: item.clienteTelefono || (client ? client.tel : undefined),
+            clienteMovil: item.clienteMovil,
+            clienteEmail: item.clienteEmail || (client ? client.correo : undefined),
+            clienteNit: item.clienteNit || item.docCli || (client ? client.doc : undefined),
+            contacto: item.contacto,
+            condiciones: item.condiciones || item.metodoPago,
+            metodoPago: item.metodoPago || item.condiciones,
+            detallePagoMixto: item.detallePagoMixto,
+            tiempoEntrega: item.tiempoEntrega,
+            direccionEntrega: item.direccionEntrega,
+            fechaEntrega: item.fechaEntrega,
+            horaEntrega: item.horaEntrega,
+            vigencia: item.vigencia,
+            garantia: item.garantia,
+            tipoGarantia: item.tipoGarantia,
+            tiempoGarantia: item.tiempoGarantia,
+            tiempoGarantiaDefecto: item.tiempoGarantiaDefecto,
+            observacion: item.observacion,
+            ivaTipo: item.ivaTipo,
+            priceTier: item.priceTier,
+            estadoAprobacion: item.estadoAprobacion,
+            cuentasBancarias: item.cuentasBancarias
+          };
+          Object.keys(metaFields).forEach(k => metaFields[k] === undefined && delete metaFields[k]);
+          
+          let rawEquipos = [];
+          if (Array.isArray(item.equipos)) {
+            rawEquipos = item.equipos;
+          } else if (item.equipos && typeof item.equipos === 'object' && Array.isArray(item.equipos.items)) {
+            rawEquipos = item.equipos.items;
+          }
+          const finalEquipos = { items: rawEquipos, _meta: metaFields };
 
-        const data = {
-          numCotizacion: item.numCotizacion || null,
-          fecha: item.fecha,
-          vendedorId: finalVendedorId,
-          clienteId: client.id,
-          total: parseFloat(item.total) || 0,
-          comisionistaId: item.comisionistaId || null,
-          comisionistaNombre: item.comisionistaNombre || null,
-          comisionistaPct: item.comisionistaPct ? parseFloat(item.comisionistaPct) : null,
-          comisionistaValor: item.comisionistaValor ? parseFloat(item.comisionistaValor) : null,
-          lockedBy: item.lockedBy || null,
-          contacto: item.contacto || null,
-          condiciones: item.condiciones || null,
-          tiempoEntrega: item.tiempoEntrega || null,
-          direccionEntrega: item.direccionEntrega || null,
-          detallePagoMixto: item.detallePagoMixto || null,
-          cuentas: item.cuentas || null,
-          firmanteNombre: item.firmanteNombre || null,
-          firmanteCargo: item.firmanteCargo || null,
-          firmanteCorreo: item.firmanteCorreo || null,
-          firmanteMovil: item.firmanteMovil || null,
-          garantia: item.garantia || null,
-          observacion: item.observacion || null,
-          vendedorNombre: item.vendedorNombre || null,
-          vendedorCargo: item.vendedorCargo || null,
-          vendedorEmail: item.vendedorEmail || null,
-          vendedorMovil: item.vendedorMovil || null,
-          vendedorCodigoAsesor: item.vendedorCodigoAsesor || null,
-          vigencia: item.vigencia ? parseInt(item.vigencia) : 10,
-          ivaTipo: item.ivaTipo || "exento",
-          equipos: item.equipos || null,
-          materiales: item.materiales || null,
-          tipo_precio: item.tipo_precio || null,
-          fechaSeguimiento: item.fechaSeguimiento || null,
-          estadoSeguimiento: item.estadoSeguimiento || null,
-          motivoSeguimiento: item.motivoSeguimiento || null,
-          motivoNoCompra: item.motivoNoCompra || null
-        };
+          const vData = sanitizeBackendForPrisma('venta', {
+            ...item,
+            metodoPago: item.metodoPago || item.condiciones || 'Contado',
+            clienteId: client.id,
+            vendedorId: sellerId,
+            equipos: finalEquipos
+          });
 
-        await tx.cotizacion.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
-        });
+          const { id: _ignoredId, ...updateData } = vData;
 
-        // Sincronizar Items de Cotizacion
-        await tx.cotizacionItem.deleteMany({ where: { cotizacionId: item.id } });
-        const cItemsToCreate = (item.items && item.items.length > 0) ? item.items : [{
-            productoId: product.id,
-            cant: parseInt(item.cant) || 0,
-            precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : 0,
-            desc: parseFloat(item.desc) || 0
-        }];
+          await tx.venta.upsert({
+            where: { id: item.id },
+            update: updateData,
+            create: { id: item.id, ...updateData },
+          });
 
-        for (const i of cItemsToCreate) {
-             await tx.cotizacionItem.create({
-                 data: {
-                     cotizacionId: item.id,
-                     productoId: i.productoId || product.id,
-                     cant: parseInt(i.cant) || 0,
-                     precioUnitario: i.precioUnitario ? parseFloat(i.precioUnitario) : 0,
-                     desc: parseFloat(i.desc) || 0
-                 }
-             });
+          // Sincronizar Items de Venta
+          await tx.ventaItem.deleteMany({ where: { ventaId: item.id } });
+          let itemsRaw = (item.items && item.items.length > 0) ? item.items : null;
+          if (!itemsRaw && rawEquipos.length > 0) {
+            itemsRaw = rawEquipos.map(eq => ({
+              productoId: eq.idProd || eq.productoId,
+              producto: eq.codigo || eq.producto || eq.ref || eq.nom,
+              cant: parseInt(eq.cantidad || eq.cant) || 1,
+              precioUnitario: parseFloat(eq.valorUnitario || eq.precioUnitario) || 0,
+              desc: parseFloat(eq.descuento || eq.desc) || 0,
+              serialEquipo: eq.serialEquipo || null
+            }));
+          }
+          if (!itemsRaw || itemsRaw.length === 0) {
+            itemsRaw = [{
+              productoId: item.productoId || item.idProd,
+              producto: item.producto,
+              cant: parseInt(item.cant) || 1,
+              precioUnitario: parseFloat(item.precioUnitario) || parseFloat(item.total) || 0,
+              desc: parseFloat(item.desc) || 0,
+              serialEquipo: item.serialEquipo || null
+            }];
+          }
+
+          for (const i of itemsRaw) {
+            const prod = await resolveProduct(i.productoId || i.idProd, i.producto);
+            if (prod) {
+              await tx.ventaItem.create({
+                data: {
+                  ventaId: item.id,
+                  productoId: prod.id,
+                  cant: parseInt(i.cant) || 1,
+                  precioUnitario: parseFloat(i.precioUnitario) || 0,
+                  desc: parseFloat(i.desc) || 0,
+                  serialEquipo: i.serialEquipo || null
+                }
+              });
+            }
+          }
         }
       }
-    }
 
-    // 7. PQRS
-    if (diff.pqrs) {
-      await flatDelete('pQR', diff.pqrs.deleted || []);
-
-      for (const item of diff.pqrs.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
-        
-        if (!client) {
-          console.warn(`Sync PQR ${item.id} omitida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
-          continue;
+      // 6. Cotizaciones
+      if (diff.cotizaciones) {
+        if (diff.cotizaciones.deleted && diff.cotizaciones.deleted.length > 0) {
+          const cotIds = diff.cotizaciones.deleted.map(id => id.toString());
+          await tx.pQR.updateMany({
+            where: { cotizacionId: { in: cotIds } },
+            data: { cotizacionId: null }
+          });
+          await tx.servicio.updateMany({
+            where: { cotizacionId: { in: cotIds } },
+            data: { cotizacionId: null }
+          });
+          await flatDelete('cotizacion', cotIds);
         }
 
-        const data = {
-          fecha: item.fecha,
-          limiteIso: item.limiteIso,
-          clienteId: client.id,
-          tipo: item.tipo,
-          detalle: item.detalle,
-          evidencia: item.evidencia || null,
-          fileUrl: item.fileUrl || null,
-          estado: item.estado,
-          satisfecho: item.satisfecho,
-          lockedBy: item.lockedBy || null,
-          radicado: item.radicado || null,
-          hechos: item.hechos || null,
-          solicitudes: item.solicitudes || null,
-          evidencias: item.evidencias || null,
-          aplicaGarantia: item.aplicaGarantia ?? false,
-          tratamientoGarantia: item.tratamientoGarantia || null,
-          terminoLegal: item.terminoLegal || null,
-          fechaCierre: item.fechaCierre || null,
-          inventarioId: item.inventarioId || null,
-          ventaId: item.ventaId || null,
-          cotizacionId: item.cotizacionId || null,
-          trazabilidad: item.trazabilidad || null,
-          usuarioAsignado: item.usuarioAsignado || null,
-        };
+        for (const item of diff.cotizaciones.upserted || []) {
+          const client = await resolveClient(item.docCli, item.clienteId, item.cliente || item.clienteNombre);
+          const sellerId = await resolveUser(item.vendedorId || item.vendedor);
 
-        await tx.pQR.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
-        });
+          const metaFields = {
+            numCotizacion: item.numCotizacion,
+            clienteNombre: item.clienteNombre || item.cliente || (client ? client.nom : undefined),
+            clienteDireccion: item.clienteDireccion || (client ? client.direccion : undefined),
+            clienteCiudadDpto: item.clienteCiudadDpto || (client ? client.ciudad : undefined),
+            clientePais: item.clientePais,
+            clienteTelefono: item.clienteTelefono || (client ? client.tel : undefined),
+            clienteMovil: item.clienteMovil,
+            clienteEmail: item.clienteEmail || (client ? client.correo : undefined),
+            clienteNit: item.clienteNit || item.docCli || (client ? client.doc : undefined),
+            contacto: item.contacto,
+            condiciones: item.condiciones,
+            detallePagoMixto: item.detallePagoMixto,
+            tiempoEntrega: item.tiempoEntrega,
+            direccionEntrega: item.direccionEntrega,
+            fechaEntrega: item.fechaEntrega,
+            horaEntrega: item.horaEntrega,
+            vigencia: item.vigencia,
+            garantia: item.garantia,
+            tipoGarantia: item.tipoGarantia,
+            tiempoGarantia: item.tiempoGarantia,
+            tiempoGarantiaDefecto: item.tiempoGarantiaDefecto,
+            observacion: item.observacion,
+            ivaTipo: item.ivaTipo,
+            priceTier: item.priceTier,
+            estadoAprobacion: item.estadoAprobacion,
+            cuentasBancarias: item.cuentasBancarias,
+            desc: item.desc !== undefined ? item.desc : undefined
+          };
+          Object.keys(metaFields).forEach(k => metaFields[k] === undefined && delete metaFields[k]);
+
+          let rawEquipos = [];
+          if (Array.isArray(item.equipos)) {
+            rawEquipos = item.equipos;
+          } else if (item.equipos && typeof item.equipos === 'object' && Array.isArray(item.equipos.items)) {
+            rawEquipos = item.equipos.items;
+          }
+          const finalEquipos = { items: rawEquipos, _meta: metaFields };
+
+          const cData = sanitizeBackendForPrisma('cotizacion', {
+            ...item,
+            clienteId: client.id,
+            vendedorId: sellerId,
+            equipos: finalEquipos,
+            cuentas: typeof item.cuentasBancarias === 'string' ? item.cuentasBancarias : (item.cuentasBancarias ? JSON.stringify(item.cuentasBancarias) : item.cuentas),
+            estadoSeguimiento: item.seguimiento?.estado || item.estadoSeguimiento,
+            motivoSeguimiento: item.seguimiento?.compraParcialDetalles || item.motivoSeguimiento,
+            motivoNoCompra: item.seguimiento?.noCompraronMotivo ? (item.seguimiento.noCompraronMotivo + (item.seguimiento.noCompraronDetalle ? ': ' + item.seguimiento.noCompraronDetalle : '')) : item.motivoNoCompra,
+            fechaSeguimiento: item.seguimiento?.fechaSeguimiento ? safeDate(item.seguimiento.fechaSeguimiento) : (item.fechaSeguimiento ? safeDate(item.fechaSeguimiento) : null)
+          });
+
+          const { id: _ignoredId, ...updateData } = cData;
+          await tx.cotizacion.upsert({
+            where: { id: item.id },
+            update: updateData,
+            create: { id: item.id, ...updateData },
+          });
+
+          // Sincronizar Items de Cotización
+          await tx.cotizacionItem.deleteMany({ where: { cotizacionId: item.id } });
+          let itemsRaw = (item.items && item.items.length > 0) ? item.items : null;
+          if (!itemsRaw && rawEquipos.length > 0) {
+            itemsRaw = rawEquipos.map(eq => ({
+              productoId: eq.idProd || eq.productoId,
+              producto: eq.codigo || eq.producto || eq.ref || eq.nom,
+              cant: parseInt(eq.cantidad || eq.cant) || 1,
+              precioUnitario: parseFloat(eq.valorUnitario || eq.precioUnitario) || 0,
+              desc: parseFloat(eq.descuento || eq.desc) || 0,
+              serialEquipo: eq.serialEquipo || null
+            }));
+          }
+          if (!itemsRaw || itemsRaw.length === 0) {
+            itemsRaw = [{
+              productoId: item.productoId || item.idProd,
+              producto: item.producto,
+              cant: parseInt(item.cant) || 1,
+              precioUnitario: parseFloat(item.precioUnitario) || parseFloat(item.total) || 0,
+              desc: parseFloat(item.desc) || 0,
+              serialEquipo: item.serialEquipo || null
+            }];
+          }
+
+          for (const i of itemsRaw) {
+            const prod = await resolveProduct(i.productoId || i.idProd, i.producto);
+            if (prod) {
+              await tx.cotizacionItem.create({
+                data: {
+                  cotizacionId: item.id,
+                  productoId: prod.id,
+                  cant: parseInt(i.cant) || 1,
+                  precioUnitario: parseFloat(i.precioUnitario) || 0,
+                  desc: parseFloat(i.desc) || 0
+                }
+              });
+            }
+          }
+        }
       }
-    }
 
-    // 8. Servicios Técnicos
-    if (diff.servicios) {
-      await flatDelete('servicio', diff.servicios.deleted || []);
+      // 7. PQRS
+      if (diff.pqrs) {
+        await flatDelete('pQR', diff.pqrs.deleted || []);
 
-      for (const item of diff.servicios.upserted || []) {
-        // Encontrar Cliente (1 sola petición a BD)
-        const clientConditions = [];
-        if (item.clienteId) clientConditions.push({ id: item.clienteId });
-        if (item.docCli) clientConditions.push({ doc: item.docCli });
-        const client = clientConditions.length > 0 
-          ? await prisma.cliente.findFirst({ where: { OR: clientConditions } }) 
-          : null;
-        
-        if (!client) {
-          console.warn(`Sync Servicio ${item.id} omitida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
-          continue;
+        for (const item of diff.pqrs.upserted || []) {
+          const client = await resolveClient(item.docCli, item.clienteId, item.cliente);
+          
+          let asigId = null;
+          if (item.usuarioAsignadoId) {
+            const userById = await tx.user.findUnique({ where: { id: String(item.usuarioAsignadoId) } });
+            if (userById) asigId = userById.id;
+          }
+          if (!asigId && item.usuarioAsignado) {
+            const users = await getUsersCache();
+            const asigStr = String(item.usuarioAsignado).trim();
+            const userMatch = users.find(u => 
+              u.user?.toLowerCase() === asigStr.toLowerCase() || 
+              u.id === asigStr || 
+              (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === asigStr.toLowerCase()
+            );
+            if (userMatch) asigId = userMatch.id;
+          }
+
+          let invId = null;
+          if (item.inventarioId) {
+            const invExists = await tx.inventario.findUnique({ where: { id: String(item.inventarioId) } });
+            if (invExists) invId = invExists.id;
+          }
+
+          let vtaId = null;
+          if (item.ventaId) {
+            const vtaExists = await tx.venta.findUnique({ where: { id: String(item.ventaId) } });
+            if (vtaExists) vtaId = vtaExists.id;
+          }
+
+          let cotId = null;
+          if (item.cotizacionId) {
+            const cotExists = await tx.cotizacion.findUnique({ where: { id: String(item.cotizacionId) } });
+            if (cotExists) cotId = cotExists.id;
+          }
+
+          const pData = sanitizeBackendForPrisma('pqr', {
+            ...item,
+            clienteId: client.id,
+            usuarioAsignadoId: asigId,
+            inventarioId: invId,
+            ventaId: vtaId,
+            cotizacionId: cotId
+          });
+
+          const { id: idToUpsert, ...updateData } = pData;
+          await tx.pQR.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 8. Servicios Técnicos
+      if (diff.servicios) {
+        await flatDelete('servicio', diff.servicios.deleted || []);
+
+        for (const item of diff.servicios.upserted || []) {
+          const client = await resolveClient(item.docCli, item.clienteId, item.cliente);
+          
+          let techId = null;
+          if (item.tecnicoId) {
+            const userById = await tx.user.findUnique({ where: { id: String(item.tecnicoId) } });
+            if (userById) techId = userById.id;
+          }
+          if (!techId && item.tecnico) {
+            const firstTech = String(item.tecnico).split(',')[0].trim();
+            const users = await getUsersCache();
+            const userMatch = users.find(u => 
+              u.user?.toLowerCase() === firstTech.toLowerCase() || 
+              (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === firstTech.toLowerCase()
+            );
+            if (userMatch) techId = userMatch.id;
+          }
+
+          let invId = null;
+          if (item.inventarioId) {
+            const invExists = await tx.inventario.findUnique({ where: { id: String(item.inventarioId) } });
+            if (invExists) invId = invExists.id;
+          }
+
+          let vtaId = null;
+          if (item.ventaId) {
+            const vtaExists = await tx.venta.findUnique({ where: { id: String(item.ventaId) } });
+            if (vtaExists) vtaId = vtaExists.id;
+          }
+
+          let cotId = null;
+          if (item.cotizacionId) {
+            const cotExists = await tx.cotizacion.findUnique({ where: { id: String(item.cotizacionId) } });
+            if (cotExists) cotId = cotExists.id;
+          }
+
+          const sData = sanitizeBackendForPrisma('servicio', {
+            ...item,
+            clienteId: client.id,
+            tecnicoId: techId,
+            inventarioId: invId,
+            ventaId: vtaId,
+            cotizacionId: cotId
+          });
+
+          const { id: idToUpsert, ...updateData } = sData;
+          await tx.servicio.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // --- FASE 3: Otras Tablas y Recursos Humanos ---
+
+      // 9. Solicitudes Laborales
+      if (diff.solicitudes) {
+        await flatDelete('solicitud', diff.solicitudes.deleted || []);
+        for (const item of diff.solicitudes.upserted || []) {
+          let asId = null;
+          if (item.asesorId) {
+            const userById = await tx.user.findUnique({ where: { id: String(item.asesorId) } });
+            if (userById) asId = userById.id;
+          }
+          if (!asId && item.asesor) {
+            const users = await getUsersCache();
+            const asStr = String(item.asesor).trim();
+            const userMatch = users.find(u => 
+              u.user?.toLowerCase() === asStr.toLowerCase() || 
+              u.id === asStr || 
+              (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === asStr.toLowerCase()
+            );
+            if (userMatch) asId = userMatch.id;
+          }
+          if (!asId && req.user?.id) {
+            asId = req.user.id;
+          }
+          if (!asId) {
+            const users = await getUsersCache();
+            asId = users[0]?.id || '1';
+          }
+
+          const solData = sanitizeBackendForPrisma('solicitud', { ...item, asesorId: asId });
+          const { id: idToUpsert, ...updateData } = solData;
+          await tx.solicitud.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 10. Procesos Disciplinarios
+      if (diff.procesosDisciplinarios) {
+        await flatDelete('procesoDisciplinario', diff.procesosDisciplinarios.deleted || []);
+        for (const item of diff.procesosDisciplinarios.upserted || []) {
+          // Resolución robusta de asesorId
+          let asId = null;
+          if (item.asesorId) {
+            const u = await tx.user.findUnique({ where: { id: String(item.asesorId) } });
+            if (u) asId = u.id;
+          }
+          if (!asId && item.asesor) {
+            const users = await getUsersCache();
+            const asStr = String(item.asesor).trim();
+            const u = users.find(x => 
+              x.user?.toLowerCase() === asStr.toLowerCase() || 
+              x.id === asStr ||
+              (`${x.nombre} ${x.apellido || ''}`).trim().toLowerCase() === asStr.toLowerCase()
+            );
+            if (u) asId = u.id;
+          }
+          if (!asId) {
+            asId = req.user?.id || (await getUsersCache())[0]?.id;
+          }
+
+          // Resolución de jefeId
+          let jId = null;
+          if (item.jefeId) {
+            const uj = await tx.user.findUnique({ where: { id: String(item.jefeId) } });
+            if (uj) jId = uj.id;
+          }
+          if (!jId && item.jefe && item.jefe !== 'Admin') {
+            const users = await getUsersCache();
+            const jStr = String(item.jefe).trim();
+            const uj = users.find(x => 
+              x.user?.toLowerCase() === jStr.toLowerCase() || 
+              x.id === jStr ||
+              (`${x.nombre} ${x.apellido || ''}`).trim().toLowerCase() === jStr.toLowerCase()
+            );
+            if (uj) jId = uj.id;
+          }
+
+          const procData = sanitizeBackendForPrisma('procesoDisciplinario', { ...item, asesorId: asId, jefeId: jId });
+          const { id: idToUpsert, ...updateData } = procData;
+
+          await tx.procesoDisciplinario.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 11. Evaluaciones de Desempeño
+      if (diff.evaluaciones) {
+        await flatDelete('evaluacion', diff.evaluaciones.deleted || []);
+        for (const item of diff.evaluaciones.upserted || []) {
+          let evdrId = null;
+          if (item.evaluadorId) {
+            const u = await tx.user.findUnique({ where: { id: String(item.evaluadorId) } });
+            if (u) evdrId = u.id;
+          }
+          if (!evdrId && item.evaluador) {
+            const users = await getUsersCache();
+            const uStr = String(item.evaluador).trim();
+            const uMatch = users.find(u => 
+              u.user?.toLowerCase() === uStr.toLowerCase() || 
+              u.id === uStr || 
+              (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === uStr.toLowerCase()
+            );
+            if (uMatch) evdrId = uMatch.id;
+          }
+          if (!evdrId && req.user?.id) {
+            evdrId = req.user.id;
+          }
+
+          let evdoId = null;
+          let targetNombre = item.evaluadoNombre || null;
+          if (item.evaluadoId) {
+            const u = await tx.user.findUnique({ where: { id: String(item.evaluadoId) } });
+            if (u) {
+              evdoId = u.id;
+              if (!targetNombre) targetNombre = `${u.nombre} ${u.apellido || ''}`.trim();
+            }
+          }
+          const targetStr = item.evaluado || item.empleado;
+          if (!evdoId && targetStr) {
+            const users = await getUsersCache();
+            const tStr = String(targetStr).trim();
+            const uMatch = users.find(u => 
+              u.user?.toLowerCase() === tStr.toLowerCase() || 
+              u.id === tStr || 
+              (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === tStr.toLowerCase()
+            );
+            if (uMatch) {
+              evdoId = uMatch.id;
+              if (!targetNombre) targetNombre = `${uMatch.nombre} ${uMatch.apellido || ''}`.trim();
+            }
+          }
+
+          const evData = sanitizeBackendForPrisma('evaluacion', { 
+            ...item, 
+            evaluadorId: evdrId, 
+            evaluadoId: evdoId,
+            evaluadoNombre: targetNombre
+          });
+          const { id: idToUpsert, ...updateData } = evData;
+          await tx.evaluacion.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 12. Comunicados Oficiales (Anuncios)
+      if (diff.anuncios || diff.comunicados) {
+        const annDiff = diff.anuncios || diff.comunicados;
+        await flatDelete('anuncio', annDiff.deleted || []);
+        await flatUpsert('anuncio', annDiff.upserted || []);
+      }
+
+      // 13. Chat Interno
+      if (diff.chat) {
+        await flatDelete('chat', diff.chat.deleted || []);
+        for (const item of diff.chat.upserted || []) {
+          let sndId = await resolveUser(item.senderId || item.user || item.sender);
+          if (!sndId) sndId = req.user?.id || (await getUsersCache())[0]?.id;
+
+          const toStr = item.to ? String(item.to).trim() : '';
+          const isTodos = !toStr || toStr.toLowerCase() === 'todos';
+          let rcvId = null;
+          let tabId = item.senderTabId || null;
+
+          if (!isTodos) {
+            rcvId = await resolveUser(toStr || item.receiverId, false);
+            if (!rcvId) {
+              // Si no es un usuario directo, es un grupo de chat
+              tabId = toStr;
+            }
+          }
+
+          const chData = sanitizeBackendForPrisma('chat', { ...item, senderId: sndId, receiverId: rcvId, senderTabId: tabId });
+          const { id: idToUpsert, ...updateData } = chData;
+
+          await tx.chat.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 13.5 Grupos de Chat
+      if (diff.chatGroups) {
+        await flatDelete('chatGroup', diff.chatGroups.deleted || []);
+        for (const item of diff.chatGroups.upserted || []) {
+          let crId = await resolveUser(item.createdById || item.createdBy);
+          if (!crId) crId = req.user?.id || (await getUsersCache())[0]?.id;
+
+          const cgData = sanitizeBackendForPrisma('chatGroup', { ...item, createdById: crId });
+          const { id: idToUpsert, ...updateData } = cgData;
+
+          await tx.chatGroup.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 14. Auditoría
+      if (diff.auditoria) {
+        await flatDelete('auditoria', diff.auditoria.deleted || []);
+        for (const item of diff.auditoria.upserted || []) {
+          let uId = await resolveUser(item.userId || item.user);
+          if (!uId) uId = req.user?.id || (await getUsersCache())[0]?.id;
+
+          const audData = sanitizeBackendForPrisma('auditoria', { ...item, userId: uId });
+          const idToUpsert = item.id || Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
+          const { id: _ignoreId, ...updateData } = audData;
+          await tx.auditoria.upsert({
+            where: { id: idToUpsert },
+            update: updateData,
+            create: { id: idToUpsert, ...updateData },
+          });
+        }
+      }
+
+      // 15. Notificaciones
+      if (diff.notificaciones) {
+        await flatDelete('notificacion', diff.notificaciones.deleted || []);
+        for (const item of diff.notificaciones.upserted || []) {
+          let pId = await resolveUser(item.paraId || item.para);
+          if (!pId) pId = req.user?.id || (await getUsersCache())[0]?.id;
+
+          const notData = sanitizeBackendForPrisma('notificacion', { ...item, paraId: pId });
+          const idToUpsert = item.id || Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
+          const { id: _ignoreId, ...updateData } = notData;
+          await tx.notificacion.upsert({
+            where: { id: idToUpsert },
+            update: updateData,
+            create: { id: idToUpsert, ...updateData },
+          });
+        }
+      }
+
+      // 16. Comisionistas
+      if (diff.comisionistas) {
+        if (diff.comisionistas.deleted && diff.comisionistas.deleted.length > 0) {
+          const comIds = diff.comisionistas.deleted.map(id => id.toString());
+          await tx.venta.updateMany({
+            where: { comisionistaId: { in: comIds } },
+            data: { comisionistaId: null }
+          });
+          await flatDelete('comisionista', comIds);
         }
 
-        const data = {
-          clienteId: client.id,
-          fechaProg: item.fechaProg,
-          tipo: item.tipo,
-          obs: item.obs,
-          estado: item.estado,
-          obsAdmin: item.obsAdmin || null,
-          lockedBy: item.lockedBy || null,
-          tecnico: item.tecnico || null,
-          equipoDetalle: item.equipoDetalle || null,
-          obsRecepcion: item.obsRecepcion || null,
-          obsDiagnostico: item.obsDiagnostico || null,
-          obsCotizacion: item.obsCotizacion || null,
-          obsEjecucion: item.obsEjecucion || null,
-          obsCalidad: item.obsCalidad || null,
-          fechaCreacion: item.fechaCreacion || null,
-          fechaIso: item.fechaIso || null,
-          radicado: item.radicado || null,
-          inventarioId: item.inventarioId || null,
-          ventaId: item.ventaId || null,
-          cotizacionId: item.cotizacionId || null,
-          etapaActual: item.etapaActual || null,
-          evidencias: item.evidencias || null,
-          trazabilidad: item.trazabilidad || null,
-          aplicaGarantia: item.aplicaGarantia ?? false,
-          costoServicio: item.costoServicio ? parseFloat(item.costoServicio) : 0,
-        };
+        for (const item of diff.comisionistas.upserted || []) {
+          let owId = null;
+          if (item.ownerId) {
+            const userById = await tx.user.findUnique({ where: { id: String(item.ownerId) } });
+            if (userById) owId = userById.id;
+          }
+          if (!owId && item.owner) {
+            const users = await getUsersCache();
+            const owStr = String(item.owner).trim();
+            const userMatch = users.find(u => 
+              u.user?.toLowerCase() === owStr.toLowerCase() || 
+              u.id === owStr || 
+              (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === owStr.toLowerCase()
+            );
+            if (userMatch) owId = userMatch.id;
+          }
 
-        await tx.servicio.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
-        });
+          const comData = sanitizeBackendForPrisma('comisionista', { ...item, ownerId: owId });
+          const { id: idToUpsert, ...updateData } = comData;
+
+          await tx.comisionista.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
       }
-    }
 
-    // --- FASE 3: Otras Tablas Planas ---
-
-    // 9. Solicitudes Laborales
-    if (diff.solicitudes) {
-      await flatUpsert('solicitud', diff.solicitudes.upserted || []);
-      await flatDelete('solicitud', diff.solicitudes.deleted || []);
-    }
-
-    // 10. Procesos Disciplinarios
-    if (diff.procesosDisciplinarios) {
-      await flatUpsert('procesoDisciplinario', diff.procesosDisciplinarios.upserted || []);
-      await flatDelete('procesoDisciplinario', diff.procesosDisciplinarios.deleted || []);
-    }
-
-    // 11. Evaluaciones
-    if (diff.evaluaciones) {
-      await flatUpsert('evaluacion', diff.evaluaciones.upserted || []);
-      await flatDelete('evaluacion', diff.evaluaciones.deleted || []);
-    }
-
-    // 12. Comunicados Oficiales (Anuncios)
-    if (diff.anuncios) {
-      await flatUpsert('anuncio', diff.anuncios.upserted || []);
-      await flatDelete('anuncio', diff.anuncios.deleted || []);
-    }
-
-    // 13. Chat Interno
-    if (diff.chat) {
-      await flatUpsert('chat', diff.chat.upserted || []);
-      await flatDelete('chat', diff.chat.deleted || []);
-    }
-
-    // 13.5 Grupos de Chat
-    if (diff.chatGroups) {
-      await flatUpsert('chatGroup', diff.chatGroups.upserted || []);
-      await flatDelete('chatGroup', diff.chatGroups.deleted || []);
-    }
-
-    // 14. Auditoría
-    if (diff.auditoria) {
-      await flatUpsert('auditoria', diff.auditoria.upserted || []);
-      await flatDelete('auditoria', diff.auditoria.deleted || []);
-    }
-
-    // 15. Notificaciones
-    if (diff.notificaciones) {
-      await flatUpsert('notificacion', diff.notificaciones.upserted || []);
-      await flatDelete('notificacion', diff.notificaciones.deleted || []);
-    }
-
-    // 16. Comisionistas
-    if (diff.comisionistas) {
-      await flatUpsert('comisionista', diff.comisionistas.upserted || []);
-      await flatDelete('comisionista', diff.comisionistas.deleted || []);
-    }
-
-    // 20. Cuentas de Cobro
-    if (diff.cuentasCobro) {
-      await flatDelete('cuentasCobro', diff.cuentasCobro.deleted || []);
-      for (const item of diff.cuentasCobro.upserted || []) {
-        const data = {
-          ciudad: item.ciudad || null,
-          fecha: item.fecha || null,
-          cuenta: item.cuenta || null,
-          nombre: item.nombre || null,
-          cedula: item.cedula || null,
-          correo: item.correo || null,
-          concepto: item.concepto || null,
-          items: item.items || null,
-          nequi: item.nequi || null,
-          titular: item.titular || null,
-          estado: item.estado || null,
-          total: item.total ? parseFloat(item.total) : 0,
-        };
-
-        await tx.cuentasCobro.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
-        });
+      // 17. Cuentas de Cobro
+      if (diff.cuentasCobro) {
+        await flatDelete('cuentasCobro', diff.cuentasCobro.deleted || []);
+        await flatUpsert('cuentasCobro', diff.cuentasCobro.upserted || []);
       }
-    }
 
-    // 17. PendingResets
-    if (diff.pendingResets) {
-      await flatUpsert('pendingReset', diff.pendingResets.upserted || []);
-      await flatDelete('pendingReset', diff.pendingResets.deleted || []);
-    }
+      // 18. Capacitaciones
+      if (diff.capacitaciones) {
+        await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
+        for (const item of diff.capacitaciones.upserted || []) {
+          // Resolución robusta de creadorId
+          let crId = null;
+          if (item.creadorId) {
+            const u = await tx.user.findUnique({ where: { id: String(item.creadorId) } });
+            if (u) crId = u.id;
+          }
+          if (!crId && item.creador) {
+            const users = await getUsersCache();
+            const crStr = String(item.creador).trim();
+            const u = users.find(x => 
+              x.user?.toLowerCase() === crStr.toLowerCase() || 
+              x.id === crStr ||
+              (`${x.nombre} ${x.apellido || ''}`).trim().toLowerCase() === crStr.toLowerCase()
+            );
+            if (u) crId = u.id;
+          }
+          if (!crId) {
+            crId = req.user?.id || (await getUsersCache())[0]?.id;
+          }
 
-    // 21. Capacitaciones
-    if (diff.capacitaciones) {
-      await flatUpsert('capacitacion', diff.capacitaciones.upserted || []);
-      await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
-    }
+          const capData = sanitizeBackendForPrisma('capacitacion', { ...item, creadorId: crId });
+          const { id: idToUpsert, ...updateData } = capData;
 
-    // 18. Configuración Global (WhatsApp e Informes)
-    if (diff.config && diff.config.value) {
-      const configVal = diff.config.value;
-      
-      if (configVal.whatsapp) {
+          await tx.capacitacion.upsert({
+            where: { id: idToUpsert || item.id },
+            update: updateData,
+            create: { id: idToUpsert || item.id, ...updateData },
+          });
+        }
+      }
+
+      // 19. PendingResets
+      if (diff.pendingResets) {
+        await flatUpsert('pendingReset', diff.pendingResets.upserted || []);
+        await flatDelete('pendingReset', diff.pendingResets.deleted || []);
+      }
+
+      // 20. Configuración Global (WhatsApp e Informes)
+      const configVal = (diff.config && diff.config.value) 
+        ? diff.config.value 
+        : (diff.config && (diff.config.whatsapp || diff.config.informes) 
+            ? diff.config 
+            : (Array.isArray(diff.config?.upserted) && diff.config.upserted.length > 0 ? diff.config.upserted[0] : null));
+
+      const whatsappVal = configVal?.whatsapp 
+        || (Array.isArray(diff.whatsappConfig?.upserted) && diff.whatsappConfig.upserted.length > 0 
+            ? diff.whatsappConfig.upserted[0] 
+            : (diff.whatsappConfig?.value || (diff.whatsappConfig?.phone ? diff.whatsappConfig : null)));
+
+      const informesVal = configVal?.informes 
+        || (Array.isArray(diff.informesConfig?.upserted) && diff.informesConfig.upserted.length > 0 
+            ? diff.informesConfig.upserted[0] 
+            : (diff.informesConfig?.value || (diff.informesConfig?.margenOperativo !== undefined || diff.informesConfig?.diasHabilesMes !== undefined ? diff.informesConfig : null)));
+
+      if (whatsappVal) {
+        const cleanWp = sanitizeBackendForPrisma('whatsappConfig', whatsappVal);
+        const { id: _id, ...wpData } = cleanWp;
         await tx.whatsappConfig.upsert({
           where: { id: 1 },
-          update: { phone: configVal.whatsapp.phone, status: configVal.whatsapp.status },
-          create: { id: 1, phone: configVal.whatsapp.phone, status: configVal.whatsapp.status },
+          update: wpData,
+          create: { id: 1, ...wpData },
         });
       }
 
-      if (configVal.informes) {
+      if (informesVal) {
+        const cleanInf = sanitizeBackendForPrisma('informesConfig', informesVal);
+        const { id: _id, ...infData } = cleanInf;
         await tx.informesConfig.upsert({
           where: { id: 1 },
-          update: { 
-            margenOperativo: configVal.informes.margenOperativo,
-            ingresoProyectos: configVal.informes.ingresoProyectos,
-            gastosInstalacion: configVal.informes.gastosInstalacion,
-            anticipos: configVal.informes.anticipos,
-            gastosCajaChica: configVal.informes.gastosCajaChica,
-            diasHabilesMes: configVal.informes.diasHabilesMes,
-            mesPresupuesto: configVal.informes.mesPresupuesto,
-            fechaCorte: configVal.informes.fechaCorte,
-            diasTranscurridos: configVal.informes.diasTranscurridos
-          },
-          create: { 
-            id: 1, 
-            margenOperativo: configVal.informes.margenOperativo,
-            ingresoProyectos: configVal.informes.ingresoProyectos,
-            gastosInstalacion: configVal.informes.gastosInstalacion,
-            anticipos: configVal.informes.anticipos,
-            gastosCajaChica: configVal.informes.gastosCajaChica,
-            diasHabilesMes: configVal.informes.diasHabilesMes,
-            mesPresupuesto: configVal.informes.mesPresupuesto,
-            fechaCorte: configVal.informes.fechaCorte,
-            diasTranscurridos: configVal.informes.diasTranscurridos
-          },
+          update: infData,
+          create: { id: 1, ...infData },
         });
       }
-    }
 
     // Fin de la transacción
     }, {
@@ -2025,7 +2968,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
-const io = new Server(server, {
+io = new Server(server, {
   cors: {
     origin: function(origin, callback) {
         callback(null, true);
@@ -2034,6 +2977,7 @@ const io = new Server(server, {
     methods: ["GET", "POST"]
   }
 });
+app.set('io', io);
 
 function broadcastUpdate(type = 'DB_UPDATE', diff = null) {
   io.emit('db_update', { type, diff, timestamp: Date.now() });
@@ -2054,13 +2998,15 @@ io.on('connection', (socket) => {
 
   socket.on('join_chat', async (data) => {
     if (data && data.user) {
-      socket.join(data.user);
-      onlineUsers.set(socket.id, data.user);
+      const uStr = String(data.user).trim();
+      socket.join(uStr);
+      socket.join(uStr.toLowerCase());
+      onlineUsers.set(socket.id, uStr);
       broadcastOnlineUsers();
-      console.log(`User ${data.user} joined personal room`);
+      console.log(`User ${uStr} joined personal room`);
       try {
         await prisma.user.updateMany({
-          where: { user: data.user },
+          where: { user: { equals: uStr, mode: 'insensitive' } },
           data: { isOnline: true }
         });
         broadcastUpdate('DB_UPDATE');
@@ -2071,30 +3017,85 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_group', (groupId) => {
-     socket.join(groupId);
-     console.log(`Socket joined group ${groupId}`);
-  });
-
-  socket.on('send_message', (messageData) => {
-    if (messageData.to === 'Todos') {
-        socket.broadcast.emit('receive_message', messageData);
-    } else if (messageData.to && messageData.to.startsWith('group_')) {
-        socket.to(messageData.to).emit('receive_message', messageData);
-    } else if (messageData.to) {
-        socket.to(messageData.to).emit('receive_message', messageData);
+    if (groupId) {
+      const gStr = String(groupId).trim();
+      socket.join(gStr);
+      socket.join(gStr.toLowerCase());
+      console.log(`Socket joined group ${gStr}`);
     }
   });
 
-  socket.on('send_nudge', (data) => {
-     if (data.to) {
-         if (data.to === 'Todos') socket.broadcast.emit('receive_nudge', data);
-         else socket.to(data.to).emit('receive_nudge', data);
-     }
+  socket.on('send_message', async (messageData) => {
+    if (!messageData || !messageData.to) return;
+    const toTarget = String(messageData.to).trim();
+    if (toTarget.toLowerCase() === 'todos') {
+      socket.broadcast.emit('receive_message', messageData);
+      return;
+    }
+
+    socket.to(toTarget).emit('receive_message', messageData);
+    socket.to(toTarget.toLowerCase()).emit('receive_message', messageData);
+
+    try {
+      const group = await prisma.chatGroup.findFirst({
+        where: { id: toTarget }
+      });
+      if (group && group.integrantes) {
+        const members = Array.isArray(group.integrantes) ? group.integrantes : [];
+        members.forEach(item => {
+          const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
+          if (uName && String(uName).toLowerCase() !== String(messageData.user || '').toLowerCase()) {
+            socket.to(uName).emit('receive_message', messageData);
+            socket.to(String(uName).toLowerCase()).emit('receive_message', messageData);
+          }
+        });
+      }
+    } catch (e) {
+      console.error('[send_message] Group routing error:', e.message);
+    }
+  });
+
+  socket.on('send_nudge', async (data) => {
+    if (!data || !data.to) return;
+    const toTarget = String(data.to).trim();
+    if (toTarget.toLowerCase() === 'todos') {
+      socket.broadcast.emit('receive_nudge', data);
+      return;
+    }
+
+    socket.to(toTarget).emit('receive_nudge', data);
+    socket.to(toTarget.toLowerCase()).emit('receive_nudge', data);
+
+    try {
+      const group = await prisma.chatGroup.findFirst({
+        where: { id: toTarget }
+      });
+      if (group && group.integrantes) {
+        const members = Array.isArray(group.integrantes) ? group.integrantes : [];
+        members.forEach(item => {
+          const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
+          if (uName && String(uName).toLowerCase() !== String(data.user || '').toLowerCase()) {
+            socket.to(uName).emit('receive_nudge', data);
+            socket.to(String(uName).toLowerCase()).emit('receive_nudge', data);
+          }
+        });
+      }
+    } catch (e) {
+      console.error('[send_nudge] Group routing error:', e.message);
+    }
   });
 
   socket.on('typing', (data) => {
      if (data.to) {
          socket.to(data.to).emit('typing', data);
+     }
+  });
+
+  socket.on('message_reaction', (data) => {
+     if (data.to === 'Todos') {
+         socket.broadcast.emit('message_reaction', data);
+     } else if (data.to) {
+         socket.to(data.to).emit('message_reaction', data);
      }
   });
 

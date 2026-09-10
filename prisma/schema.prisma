@@ -58,7 +58,8 @@ model User {
   isOnline  Boolean   @default(false)
 
   // Archivos multimedia
-  foto String?
+  foto  String?
+  firma String?
 
   // Módulo de Ubicación
   lat                Float?
@@ -138,6 +139,7 @@ model Cliente {
   firmaNombre              String?
   firmaCedula              String?
   firmaFecha               DateTime?
+  firma                    String?
   descripcion              String?
   adjuntos                 Json?
 
@@ -172,6 +174,7 @@ model Inventario {
   precio_costo     Float?
   vendidas         Int     @default(0)
   lockedBy         String?
+  datosExt         Json?
 
   // Relaciones inversas
   ventaItems      VentaItem[]
@@ -358,6 +361,7 @@ model ProcesoDisciplinario {
   renunciaTerminos Boolean  @default(false)
   timestampEtapa   DateTime
   lockedBy         String?
+  evidencias       Json?
 }
 
 // 10. Evaluaciones de Desempeño
@@ -494,12 +498,18 @@ model Chat {
   fileUrl  String? // Reemplaza fileData String @db.Text
   fileName String?
   fileType String?
+  fileSize Int?
 
   isMeeting Boolean   @default(false)
   meetingId String?
   readAt    DateTime?
   isDeleted Boolean   @default(false)
   isEdited  Boolean   @default(false)
+
+  reactions  Json?
+  replyTo    String?
+  replyToObj Json?
+  hiddenBy   Json?
 }
 
 // 13.5 Grupos de Chat
@@ -533,7 +543,10 @@ model Notificacion {
   id           String   @id
   paraId       String
   para         User     @relation(fields: [paraId], references: [id])
+  titulo       String?
   mensaje      String
+  de           String?
+  tipo         String?
   fecha        DateTime
   leida        Boolean  @default(false)
   targetModule String?
@@ -625,10 +638,17 @@ model Capacitacion {
   creadorId String
   creador   User   @relation("CapacitacionCreador", fields: [creadorId], references: [id])
 
-  videoLink  String?
-  materiales Json? // JSON para adjuntos
-  asistentes Json? // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
-  evaluacion Json? // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
-  estado     String  @default("Programada") // Programada, En Curso, Finalizada
-  lockedBy   String?
+  videoLink     String?
+  videoFile     String?
+  videoFileName String?
+  plataforma    String?
+  enlaceReunion String?
+  tutorFirma    String?
+  tutor         String?
+  creadoEn      DateTime?
+  materiales    Json? // JSON para adjuntos
+  asistentes    Json? // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
+  evaluacion    Json? // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
+  estado        String  @default("Programada") // Programada, En Curso, Finalizada
+  lockedBy      String?
 }

@@ -18,7 +18,9 @@ function broadcastUpdate(type = 'DB_UPDATE') {
 function initSocket(server) {
     io = new Server(server, {
         cors: {
-            origin: process.env.FRONTEND_URL || "https://ibrio-erp-app.vercel.app",
+            origin: (origin, callback) => {
+                callback(null, true);
+            },
             credentials: true,
             methods: ["GET", "POST"]
         }
@@ -31,13 +33,15 @@ function initSocket(server) {
 
         socket.on('join_chat', async (data) => {
             if (data && data.user) {
-                socket.join(data.user);
-                onlineUsers.set(socket.id, data.user);
+                const uStr = String(data.user).trim();
+                socket.join(uStr);
+                socket.join(uStr.toLowerCase());
+                onlineUsers.set(socket.id, uStr);
                 broadcastOnlineUsers();
-                console.log(`User ${data.user} joined personal room`);
+                console.log(`User ${uStr} joined personal room`);
                 try {
                     await prisma.user.updateMany({
-                        where: { user: data.user },
+                        where: { user: { equals: uStr, mode: 'insensitive' } },
                         data: { isOnline: true }
                     });
                     broadcastUpdate('DB_UPDATE');
@@ -48,30 +52,85 @@ function initSocket(server) {
         });
 
         socket.on('join_group', (groupId) => {
-            socket.join(groupId);
-            console.log(`Socket joined group ${groupId}`);
-        });
-
-        socket.on('send_message', (messageData) => {
-            if (messageData.to === 'Todos') {
-                socket.broadcast.emit('receive_message', messageData);
-            } else if (messageData.to && messageData.to.startsWith('group_')) {
-                socket.to(messageData.to).emit('receive_message', messageData);
-            } else if (messageData.to) {
-                socket.to(messageData.to).emit('receive_message', messageData);
+            if (groupId) {
+                const gStr = String(groupId).trim();
+                socket.join(gStr);
+                socket.join(gStr.toLowerCase());
+                console.log(`Socket joined group ${gStr}`);
             }
         });
 
-        socket.on('send_nudge', (data) => {
-            if (data.to) {
-                if (data.to === 'Todos') socket.broadcast.emit('receive_nudge', data);
-                else socket.to(data.to).emit('receive_nudge', data);
+        socket.on('send_message', async (messageData) => {
+            if (!messageData || !messageData.to) return;
+            const toTarget = String(messageData.to).trim();
+            if (toTarget.toLowerCase() === 'todos') {
+                socket.broadcast.emit('receive_message', messageData);
+                return;
+            }
+
+            socket.to(toTarget).emit('receive_message', messageData);
+            socket.to(toTarget.toLowerCase()).emit('receive_message', messageData);
+
+            try {
+                const group = await prisma.chatGroup.findFirst({
+                    where: { id: toTarget }
+                });
+                if (group && group.integrantes) {
+                    const members = Array.isArray(group.integrantes) ? group.integrantes : [];
+                    members.forEach(item => {
+                        const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
+                        if (uName && String(uName).toLowerCase() !== String(messageData.user || '').toLowerCase()) {
+                            socket.to(uName).emit('receive_message', messageData);
+                            socket.to(String(uName).toLowerCase()).emit('receive_message', messageData);
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error('[send_message] Group routing error in socket.js:', e.message);
+            }
+        });
+
+        socket.on('send_nudge', async (data) => {
+            if (!data || !data.to) return;
+            const toTarget = String(data.to).trim();
+            if (toTarget.toLowerCase() === 'todos') {
+                socket.broadcast.emit('receive_nudge', data);
+                return;
+            }
+
+            socket.to(toTarget).emit('receive_nudge', data);
+            socket.to(toTarget.toLowerCase()).emit('receive_nudge', data);
+
+            try {
+                const group = await prisma.chatGroup.findFirst({
+                    where: { id: toTarget }
+                });
+                if (group && group.integrantes) {
+                    const members = Array.isArray(group.integrantes) ? group.integrantes : [];
+                    members.forEach(item => {
+                        const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
+                        if (uName && String(uName).toLowerCase() !== String(data.user || '').toLowerCase()) {
+                            socket.to(uName).emit('receive_nudge', data);
+                            socket.to(String(uName).toLowerCase()).emit('receive_nudge', data);
+                        }
+                    });
+                }
+            } catch (e) {
+                console.error('[send_nudge] Group routing error in socket.js:', e.message);
             }
         });
 
         socket.on('typing', (data) => {
             if (data.to) {
                 socket.to(data.to).emit('typing', data);
+            }
+        });
+
+        socket.on('message_reaction', (data) => {
+            if (data.to === 'Todos') {
+                socket.broadcast.emit('message_reaction', data);
+            } else if (data.to) {
+                socket.to(data.to).emit('message_reaction', data);
             }
         });
 

@@ -49,18 +49,21 @@ class SyncController {
 
     async updateInformesConfig(req, res) {
         try {
-            const data = req.body;
+            const rawData = req.body;
+            const { sanitizeBackendForPrisma } = require('../validators');
+            const cleanData = sanitizeBackendForPrisma('informesConfig', rawData);
+            delete cleanData.id;
+
             const existing = await prisma.informesConfig.findUnique({ where: { id: 1 } });
-            
             if (existing) {
-                await prisma.informesConfig.update({ where: { id: 1 }, data });
+                await prisma.informesConfig.update({ where: { id: 1 }, data: cleanData });
             } else {
-                await prisma.informesConfig.create({ data: { id: 1, ...data } });
+                await prisma.informesConfig.create({ data: { id: 1, ...cleanData } });
             }
-            res.json({ success: true });
+            res.json({ success: true, timestamp: Date.now() });
         } catch (error) {
             console.error('Error saving informes config:', error);
-            res.status(500).json({ error: 'Server error' });
+            res.status(500).json({ error: 'Server error', details: error.message });
         }
     }
 }

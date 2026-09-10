@@ -1,4 +1,12 @@
 const prisma = require('../prisma');
+const bcrypt = require('bcryptjs');
+const { sanitizeBackendForPrisma } = require('../validators');
+
+const safeDate = (val) => {
+  if (!val) return new Date();
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? new Date() : d;
+};
 
 class SyncService {
   async getDb() {
@@ -9,76 +17,106 @@ class SyncService {
         user: true, roleId: true, meta_u: true, ejec_u: true, meta_p: true,
         ejec_p: true, soundsEnabled: true, cumpleanos: true,
         habeasDataAccepted: true, failedLoginAttempts: true, isLocked: true,
-        lastLogin: true, isOnline: true, foto: true, lat: true, lng: true,
+        lastLogin: true, isOnline: true, foto: true, firma: true, lat: true, lng: true,
         lastLocationUpdate: true, codigoAsesor: true
       },
       orderBy: { id: 'asc' }
     });
     const roles = await prisma.role.findMany({ orderBy: { id: 'asc' } });
     const clientes = await prisma.cliente.findMany({ orderBy: { id: 'asc' } });
-    const inventario = await prisma.inventario.findMany({ orderBy: { id: 'asc' } });
+    const inventarioRaw = await prisma.inventario.findMany({ orderBy: { id: 'asc' } });
+    const inventario = inventarioRaw.map(inv => {
+      const ext = (inv.datosExt && typeof inv.datosExt === 'object') ? inv.datosExt : {};
+      return {
+        ...inv,
+        ...ext
+      };
+    });
     
     // Mapear Ventas (incluyendo Cliente y Producto)
     const ventasRaw = await prisma.venta.findMany({
-      include: { cliente: true, producto: true },
-      orderBy: { id: 'asc' }
+      take: 50,
+      include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
+      orderBy: { id: 'desc' }
     });
-    const ventas = ventasRaw.map(v => ({
-      id: v.id,
-      fecha: v.fecha,
-      fechaIso: v.fechaIso,
-      venceGarantiaIso: v.venceGarantiaIso,
-      mesesGarantia: v.mesesGarantia,
-      vendedor: v.vendedor,
-      docCli: v.cliente.doc,
-      cliente: v.cliente.nom,
-      idProd: v.productoId,
-      producto: v.producto.ref,
-      cant: v.cant,
-      desc: v.desc,
-      metodoPago: v.metodoPago,
-      total: v.total,
-      comisionistaId: v.comisionistaId,
-      comisionistaNombre: v.comisionistaNombre,
-      comisionistaPct: v.comisionistaPct,
-      comisionistaValor: v.comisionistaValor,
-      tipo_precio: v.tipo_precio,
-      precioUnitario: v.precioUnitario,
-      lockedBy: v.lockedBy,
-      serialEquipo: v.serialEquipo,
-      vendedorNombre: v.vendedorNombre,
-      vendedorCargo: v.vendedorCargo,
-      vendedorEmail: v.vendedorEmail,
-      vendedorMovil: v.vendedorMovil,
-      vendedorCodigoAsesor: v.vendedorCodigoAsesor,
-      estadoComision: v.estadoComision,
-      fechaComision: v.fechaComision,
-      equipos: v.equipos ? (typeof v.equipos === 'string' ? JSON.parse(v.equipos) : v.equipos) : [],
-      materiales: v.materiales ? (typeof v.materiales === 'string' ? JSON.parse(v.materiales) : v.materiales) : []
-    }));
+    ventasRaw.reverse();
+    const ventas = ventasRaw.map(v => {
+      const meta = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && v.equipos._meta) ? v.equipos._meta : {};
+      const equiposList = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && Array.isArray(v.equipos.items)) ? v.equipos.items : (Array.isArray(v.equipos) ? v.equipos : []);
+
+      return {
+        id: v.id,
+        fecha: v.fecha,
+        fechaIso: v.fechaIso,
+        venceGarantiaIso: v.venceGarantiaIso,
+        mesesGarantia: v.mesesGarantia,
+        vendedor: v.vendedor?.user || '',
+        vendedorId: v.vendedorId,
+        clienteId: v.clienteId,
+        docCli: v.cliente?.doc || meta.clienteNit || '',
+        cliente: v.cliente?.nom || meta.clienteNombre || '',
+        clienteNombre: meta.clienteNombre || v.cliente?.nom || '',
+        clienteNit: meta.clienteNit || v.cliente?.doc || '',
+        clienteDireccion: meta.clienteDireccion || v.cliente?.direccion || '',
+        clienteTelefono: meta.clienteTelefono || v.cliente?.tel || '',
+        clienteEmail: meta.clienteEmail || v.cliente?.correo || '',
+        items: v.items.map(i => ({
+          productoId: i.productoId,
+          producto: i.producto?.ref || '',
+          cant: i.cant,
+          desc: i.desc,
+          precioUnitario: i.precioUnitario,
+          serialEquipo: i.serialEquipo
+        })),
+        idProd: v.items[0]?.productoId || null,
+        producto: v.items[0]?.producto?.ref || null,
+        cant: v.items.reduce((acc, i) => acc + i.cant, 0),
+        desc: v.items.reduce((acc, i) => acc + i.desc, 0),
+        precioUnitario: v.items[0]?.precioUnitario || null,
+        serialEquipo: v.items[0]?.serialEquipo || null,
+        metodoPago: v.metodoPago,
+        total: v.total,
+        comisionistaId: v.comisionistaId,
+        comisionistaNombre: v.comisionistaNombre,
+        comisionistaPct: v.comisionistaPct,
+        comisionistaValor: v.comisionistaValor,
+        tipo_precio: v.tipo_precio,
+        lockedBy: v.lockedBy,
+        vendedorNombre: v.vendedorNombre || v.vendedor?.nombre || '',
+        vendedorCargo: v.vendedorCargo || v.vendedor?.cargo || '',
+        vendedorEmail: v.vendedorEmail || v.vendedor?.correo || '',
+        vendedorMovil: v.vendedorMovil || v.vendedor?.telefono || '',
+        vendedorCodigoAsesor: v.vendedorCodigoAsesor || v.vendedor?.codigoAsesor || '',
+        equipos: equiposList,
+        materiales: v.materiales || [],
+        numPedido: meta.numPedido || (v.id.startsWith('PED-') ? v.id : 'PED-' + v.id.slice(-4)),
+        ...meta
+      };
+    });
 
     // Mapear PQRS
     const pqrsRaw = await prisma.pQR.findMany({
-      include: { cliente: true },
+      include: { cliente: true, usuarioAsignado: true },
       orderBy: { id: 'asc' }
     });
     const pqrs = pqrsRaw.map(p => ({
       id: p.id,
+      clienteId: p.clienteId,
       fecha: p.fecha,
       limiteIso: p.limiteIso,
-      docCli: p.cliente.doc,
-      cliente: p.cliente.nom,
+      docCli: p.cliente?.doc || '',
+      cliente: p.cliente?.nom || '',
       tipo: p.tipo,
       detalle: p.detalle,
       evidencia: p.evidencia,
-      fileData: p.fileData,
+      fileUrl: p.fileUrl,
       estado: p.estado,
       satisfecho: p.satisfecho,
       lockedBy: p.lockedBy,
       radicado: p.radicado,
       hechos: p.hechos,
       solicitudes: p.solicitudes,
-      evidencias: p.evidencias,
+      evidencias: typeof p.evidencias === 'string' ? p.evidencias : JSON.stringify(p.evidencias || []),
       aplicaGarantia: p.aplicaGarantia,
       tratamientoGarantia: p.tratamientoGarantia,
       terminoLegal: p.terminoLegal,
@@ -86,26 +124,30 @@ class SyncService {
       inventarioId: p.inventarioId,
       ventaId: p.ventaId,
       cotizacionId: p.cotizacionId,
-      trazabilidad: p.trazabilidad,
-      usuarioAsignado: p.usuarioAsignado
+      trazabilidad: typeof p.trazabilidad === 'string' ? p.trazabilidad : JSON.stringify(p.trazabilidad || []),
+      usuarioAsignadoId: p.usuarioAsignadoId || null,
+      usuarioAsignado: p.usuarioAsignado?.user || '',
+      usuarioAsignadoNombre: p.usuarioAsignado ? `${p.usuarioAsignado.nombre} ${p.usuarioAsignado.apellido || ''}`.trim() : ''
     }));
 
-    // Mapear Servicios T├®cnicos
+    // Mapear Servicios Técnicos
     const serviciosRaw = await prisma.servicio.findMany({
-      include: { cliente: true },
+      include: { cliente: true, tecnico: true },
       orderBy: { id: 'asc' }
     });
     const servicios = serviciosRaw.map(s => ({
       id: s.id,
-      docCli: s.cliente.doc,
-      cliente: s.cliente.nom,
+      docCli: s.cliente?.doc || '',
+      cliente: s.cliente?.nom || '',
       fechaProg: s.fechaProg,
       tipo: s.tipo,
       obs: s.obs,
       estado: s.estado,
       obsAdmin: s.obsAdmin,
       lockedBy: s.lockedBy,
-      tecnico: s.tecnico || '',
+      tecnicoId: s.tecnicoId || null,
+      tecnico: s.tecnico?.user || '',
+      tecnicoNombre: s.tecnico ? `${s.tecnico.nombre} ${s.tecnico.apellido || ''}`.trim() : '',
       equipoDetalle: s.equipoDetalle || '',
       obsRecepcion: s.obsRecepcion || '',
       obsDiagnostico: s.obsDiagnostico || '',
@@ -125,39 +167,72 @@ class SyncService {
       costoServicio: s.costoServicio
     }));
 
-    const solicitudesRaw = await prisma.solicitud.findMany({ orderBy: { id: 'asc' } });
+    const solicitudesRaw = await prisma.solicitud.findMany({
+      include: { asesor: true },
+      orderBy: { id: 'asc' }
+    });
     const solicitudes = solicitudesRaw.map(s => ({
       id: s.id,
-      fecha: s.fecha,
-      asesor: s.asesor,
-      nombreAsesor: s.nombreAsesor || '',
+      fecha: s.fecha ? (typeof s.fecha === 'string' ? s.fecha : s.fecha.toISOString()) : '',
+      asesorId: s.asesorId,
+      asesor: s.asesor?.user || '',
+      nombreAsesor: s.nombreAsesor || (s.asesor ? `${s.asesor.nombre} ${s.asesor.apellido || ''}`.trim() : ''),
       tipo: s.tipo,
       detalle: s.detalle || '',
       evidencia: s.evidencia || null,
-      fileData: s.fileData || null,
+      fileUrl: s.fileUrl || null,
       estado: s.estado,
       lockedBy: s.lockedBy || null,
       comentario: s.comentario || '',
-      fechaRadicado: s.fechaRadicado || ''
+      fechaRadicado: s.fechaRadicado ? (typeof s.fechaRadicado === 'string' ? s.fechaRadicado : s.fechaRadicado.toISOString()) : ''
     }));
 
-    const procesosDisciplinarios = await prisma.procesoDisciplinario.findMany({ orderBy: { id: 'asc' } });
+    const procesosDisciplinariosRaw = await prisma.procesoDisciplinario.findMany({
+      include: { asesor: true, jefe: true },
+      orderBy: { id: 'asc' }
+    });
+    const procesosDisciplinarios = procesosDisciplinariosRaw.map(p => ({
+      id: p.id,
+      fecha: p.fecha ? (typeof p.fecha === 'string' ? p.fecha : p.fecha.toISOString()) : '',
+      asesorId: p.asesorId,
+      asesor: p.asesor?.user || '',
+      asesorNombre: p.asesor ? `${p.asesor.nombre} ${p.asesor.apellido || ''}`.trim() : '',
+      jefeId: p.jefeId || null,
+      jefe: p.jefe?.user || (p.jefeId ? '' : 'Admin'),
+      jefeNombre: p.jefe ? `${p.jefe.nombre} ${p.jefe.apellido || ''}`.trim() : '',
+      falta: p.falta || 'Falta',
+      obs: p.obs || '',
+      etapa: p.etapa || 1,
+      descargo: p.descargo || '',
+      sancion: p.sancion || '',
+      diasSuspension: p.diasSuspension || 0,
+      renunciaTerminos: p.renunciaTerminos || false,
+      timestampEtapa: p.timestampEtapa ? (typeof p.timestampEtapa === 'string' ? p.timestampEtapa : p.timestampEtapa.toISOString()) : '',
+      lockedBy: p.lockedBy || null,
+      evidencias: p.evidencias || []
+    }));
 
-    const evaluacionesRaw = await prisma.evaluacion.findMany({ orderBy: { id: 'asc' } });
+    const evaluacionesRaw = await prisma.evaluacion.findMany({
+      include: { evaluador: true, evaluado: true },
+      orderBy: { id: 'asc' }
+    });
     const evaluaciones = evaluacionesRaw.map(ev => ({
       id: ev.id,
-      fecha: ev.fecha,
-      evaluador: ev.evaluador || '',
-      evaluado: ev.evaluado || '',
-      evaluadoNombre: ev.evaluadoNombre || '',
-      tipo: ev.tipo || '',
+      fecha: ev.fecha ? (typeof ev.fecha === 'string' ? ev.fecha : ev.fecha.toISOString()) : '',
+      evaluadorId: ev.evaluadorId || null,
+      evaluador: ev.evaluador?.user || '',
+      evaluadorNombre: ev.evaluador ? `${ev.evaluador.nombre} ${ev.evaluador.apellido || ''}`.trim() : '',
+      evaluadoId: ev.evaluadoId || null,
+      evaluado: ev.evaluado?.user || ev.empleado || '',
+      evaluadoNombre: ev.evaluadoNombre || (ev.evaluado ? `${ev.evaluado.nombre} ${ev.evaluado.apellido || ''}`.trim() : (ev.empleado || 'Colaborador')),
+      empleado: ev.empleado || ev.evaluado?.user || ev.evaluadoNombre || 'Colaborador',
+      tipo: ev.tipo || 'Evaluación',
       obs: ev.obs || '',
       lockedBy: ev.lockedBy || null,
-      empleado: ev.empleado || '',
       metajobs: ev.metajobs || 5,
       asistencia: ev.asistencia || 5,
       objetivos: ev.objetivos || 5,
-      promedio: ev.promedio || 5.0,
+      promedio: ev.promedio > 5 ? Number((ev.promedio / 20).toFixed(2)) : (ev.promedio || 5.0),
       scores: ev.scores || null
     }));
 
@@ -175,71 +250,176 @@ class SyncService {
 
     // Mapear Cotizaciones
     const cotizacionesRaw = await prisma.cotizacion.findMany({
-      include: { cliente: true, producto: true },
+      include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
       orderBy: { id: 'asc' }
     });
-    const cotizaciones = cotizacionesRaw.map(c => ({
-      id: c.id,
-      numCotizacion: c.numCotizacion,
-      fecha: c.fecha,
-      vendedor: c.vendedor,
-      docCli: c.cliente.doc,
-      cliente: c.cliente.nom,
-      idProd: c.productoId,
-      producto: c.producto.ref,
-      cant: c.cant,
-      desc: c.desc,
-      total: c.total,
-      comisionistaId: c.comisionistaId,
-      comisionistaNombre: c.comisionistaNombre,
-      comisionistaPct: c.comisionistaPct,
-      comisionistaValor: c.comisionistaValor,
-      lockedBy: c.lockedBy,
-      contacto: c.contacto,
-      condiciones: c.condiciones,
-      tiempoEntrega: c.tiempoEntrega,
-      direccionEntrega: c.direccionEntrega,
-      detallePagoMixto: c.detallePagoMixto,
-      cuentas: c.cuentas,
-      firmanteNombre: c.firmanteNombre,
-      firmanteCargo: c.firmanteCargo,
-      firmanteCorreo: c.firmanteCorreo,
-      firmanteMovil: c.firmanteMovil,
-      garantia: c.garantia,
-      observacion: c.observacion,
-      vendedorNombre: c.vendedorNombre,
-      vendedorCargo: c.vendedorCargo,
-      vendedorEmail: c.vendedorEmail,
-      vendedorMovil: c.vendedorMovil,
-      vendedorCodigoAsesor: c.vendedorCodigoAsesor,
-      vigencia: c.vigencia,
-      ivaTipo: c.ivaTipo,
-      equipos: c.equipos ? (typeof c.equipos === 'string' ? JSON.parse(c.equipos) : c.equipos) : [],
-      materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
-      tipo_precio: c.tipo_precio,
-      precioUnitario: c.precioUnitario,
-      fechaSeguimiento: c.fechaSeguimiento,
-      estadoSeguimiento: c.estadoSeguimiento,
-      motivoSeguimiento: c.motivoSeguimiento,
-      motivoNoCompra: c.motivoNoCompra
-    }));
+    const cotizaciones = cotizacionesRaw.map(c => {
+      const meta = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && c.equipos._meta) ? c.equipos._meta : {};
+      const equiposList = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && Array.isArray(c.equipos.items)) ? c.equipos.items : (Array.isArray(c.equipos) ? c.equipos : []);
 
-    const chatGroupsRaw = await prisma.chatGroup.findMany({ orderBy: { fecha: 'asc' } });
+      return {
+        id: c.id,
+        numCotizacion: c.numCotizacion || meta.numCotizacion || '',
+        fecha: c.fecha,
+        fechaIso: c.fecha,
+        vendedor: c.vendedor?.user || '',
+        vendedorId: c.vendedorId,
+        clienteId: c.clienteId,
+        docCli: c.cliente?.doc || meta.clienteNit || '',
+        cliente: c.cliente?.nom || meta.clienteNombre || '',
+        clienteNombre: meta.clienteNombre || c.cliente?.nom || '',
+        clienteDireccion: meta.clienteDireccion || c.cliente?.direccion || '',
+        clienteCiudadDpto: meta.clienteCiudadDpto || (c.cliente?.ciudad ? (c.cliente.ciudad + (c.cliente.departamento ? ' / ' + c.cliente.departamento : '')) : ''),
+        clientePais: meta.clientePais || 'Colombia',
+        clienteTelefono: meta.clienteTelefono || c.cliente?.tel || '',
+        clienteMovil: meta.clienteMovil || c.cliente?.celularContacto || c.cliente?.tel || '',
+        clienteEmail: meta.clienteEmail || c.cliente?.correo || c.cliente?.correoFacturacion || '',
+        clienteNit: meta.clienteNit || c.cliente?.doc || '',
+        contacto: c.contacto || meta.contacto || c.cliente?.contactoComercial || '',
+        items: c.items.map(i => ({
+          productoId: i.productoId,
+          producto: i.producto?.ref || i.producto?.cod || '',
+          cant: i.cant,
+          desc: i.desc,
+          precioUnitario: i.precioUnitario
+        })),
+        idProd: c.items[0]?.productoId || null,
+        producto: c.items[0]?.producto?.ref || null,
+        cant: c.items.reduce((acc, i) => acc + i.cant, 0),
+        desc: meta.desc !== undefined ? meta.desc : c.items.reduce((acc, i) => acc + i.desc, 0),
+        precioUnitario: c.items[0]?.precioUnitario || null,
+        total: c.total,
+        comisionistaId: c.comisionistaId,
+        comisionistaNombre: c.comisionistaNombre,
+        comisionistaPct: c.comisionistaPct,
+        comisionistaValor: c.comisionistaValor,
+        lockedBy: c.lockedBy,
+        contacto: c.contacto || meta.contacto || '',
+        condiciones: c.condiciones || meta.condiciones || '',
+        tiempoEntrega: c.tiempoEntrega || meta.tiempoEntrega || '',
+        direccionEntrega: c.direccionEntrega || meta.direccionEntrega || '',
+        detallePagoMixto: c.detallePagoMixto || meta.detallePagoMixto || '',
+        cuentas: c.cuentas,
+        cuentasBancarias: c.cuentas || '[]',
+        firmanteNombre: c.firmanteNombre,
+        firmanteCargo: c.firmanteCargo,
+        firmanteCorreo: c.firmanteCorreo,
+        firmanteMovil: c.firmanteMovil,
+        garantia: c.garantia || meta.garantia || '',
+        observacion: c.observacion || meta.observacion || '',
+        vendedorNombre: c.vendedorNombre || `${c.vendedor?.nombre || ''} ${c.vendedor?.apellido || ''}`.trim(),
+        vendedorCargo: c.vendedorCargo || c.vendedor?.cargo || 'Asesor',
+        vendedorEmail: c.vendedorEmail || c.vendedor?.correo || '',
+        vendedorMovil: c.vendedorMovil || c.vendedor?.telefono || '',
+        vendedorCodigoAsesor: c.vendedorCodigoAsesor || c.vendedor?.codigoAsesor || '',
+        vigencia: c.vigencia,
+        ivaTipo: c.ivaTipo || meta.ivaTipo || 'sin_iva',
+        equipos: equiposList,
+        materiales: c.materiales || [],
+        tipo_precio: c.tipo_precio || meta.priceTier || 'precio_publico',
+        priceTier: meta.priceTier || c.tipo_precio || 'precio_publico',
+        fechaSeguimiento: c.fechaSeguimiento,
+        estadoSeguimiento: c.estadoSeguimiento,
+        motivoSeguimiento: c.motivoSeguimiento,
+        motivoNoCompra: c.motivoNoCompra,
+        seguimiento: {
+          estado: c.estadoSeguimiento || 'pendiente',
+          compraParcialDetalles: c.motivoSeguimiento || '',
+          noCompraronMotivo: c.motivoNoCompra || '',
+          noCompraronDetalle: '',
+          fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO') : null,
+          vendedor: c.vendedor?.user || ''
+        },
+        ...meta
+      };
+    });
+
+    const chatGroupsRaw = await prisma.chatGroup.findMany({ 
+      include: { createdBy: true },
+      orderBy: { fecha: 'asc' } 
+    });
     const chatGroups = chatGroupsRaw.map(g => ({
       id: g.id,
       nombre: g.nombre,
       descripcion: g.descripcion || '',
-      createdBy: g.createdBy,
-      fecha: g.fecha,
-      integrantes: g.integrantes ? (typeof g.integrantes === 'string' ? JSON.parse(g.integrantes) : g.integrantes) : []
+      createdById: g.createdById,
+      createdBy: g.createdBy?.user || g.createdById,
+      creadorNombre: g.createdBy ? `${g.createdBy.nombre} ${g.createdBy.apellido || ''}`.trim() : '',
+      fecha: g.fecha ? g.fecha.toISOString() : new Date().toISOString(),
+      integrantes: typeof g.integrantes === 'string' ? JSON.parse(g.integrantes) : (g.integrantes || [])
     }));
 
-    const chatDesc = await prisma.chat.findMany({ orderBy: { timestamp: 'desc' }, take: 150 });
-    const chat = chatDesc.reverse();
-    const auditoriaDesc = await prisma.auditoria.findMany({ orderBy: { id: 'desc' }, take: 200 });
-    const auditoria = auditoriaDesc.reverse();
-    const notificacionesDesc = await prisma.notificacion.findMany({ orderBy: { id: 'desc' }, take: 100 });
-    const notificaciones = notificacionesDesc.reverse();
+    const chatDesc = await prisma.chat.findMany({ 
+      include: { sender: true, receiver: true },
+      orderBy: { timestamp: 'desc' }, 
+      take: 200 
+    });
+    const chat = chatDesc.reverse().map(c => ({
+      id: c.id,
+      timestamp: c.timestamp ? new Date(c.timestamp).getTime() : Date.now(),
+      fecha: c.fecha ? c.fecha.toISOString() : new Date().toISOString(),
+      senderId: c.senderId,
+      user: c.sender?.user || c.senderId,
+      nombre: c.nombre || (c.sender ? `${c.sender.nombre} ${c.sender.apellido || ''}`.trim() : 'Usuario'),
+      receiverId: c.receiverId,
+      to: c.senderTabId ? c.senderTabId : (c.receiver?.user || c.receiverId || 'Todos'),
+      text: c.text || '',
+      senderTabId: c.senderTabId || null,
+      isNudge: !!c.isNudge,
+      isSticker: !!c.isSticker,
+      stickerId: c.stickerId || null,
+      stickerUrl: c.stickerUrl || null,
+      isAudio: !!c.isAudio,
+      audioUrl: c.audioUrl || null,
+      isFile: !!c.isFile,
+      fileUrl: c.fileUrl || null,
+      fileName: c.fileName || null,
+      fileType: c.fileType || null,
+      isMeeting: !!c.isMeeting,
+      meetingId: c.meetingId || null,
+      readAt: c.readAt ? new Date(c.readAt).getTime() : null,
+      isDeleted: !!c.isDeleted,
+      isEdited: !!c.isEdited,
+      reactions: c.reactions || {},
+      replyTo: c.replyTo || null,
+      replyToObj: c.replyToObj || null,
+      hiddenBy: c.hiddenBy || [],
+      fileSize: c.fileSize || null
+    }));
+    const auditoriaDesc = await prisma.auditoria.findMany({
+      include: { user: true },
+      orderBy: { id: 'desc' },
+      take: 200
+    });
+    const auditoria = auditoriaDesc.reverse().map(a => ({
+      id: a.id,
+      userId: a.userId,
+      user: a.user?.user || a.user?.nombre || a.userId,
+      fecha: a.fecha ? a.fecha.toISOString() : new Date().toISOString(),
+      action: a.action,
+      modulo: a.modulo,
+      recordDetails: a.recordDetails || '',
+      shadowingData: a.shadowingData || null,
+      hash: a.hash || null
+    }));
+
+    const notificacionesDesc = await prisma.notificacion.findMany({
+      include: { para: true },
+      orderBy: { id: 'desc' },
+      take: 100
+    });
+    const notificaciones = notificacionesDesc.reverse().map(n => ({
+      id: n.id,
+      paraId: n.paraId,
+      para: n.para?.user || n.paraId,
+      titulo: n.titulo || null,
+      mensaje: n.mensaje,
+      de: n.de || null,
+      tipo: n.tipo || null,
+      fecha: n.fecha ? n.fecha.toISOString() : new Date().toISOString(),
+      leida: !!n.leida,
+      targetModule: n.targetModule || null
+    }));
     const cuentasCobroRaw = await prisma.cuentasCobro.findMany({ orderBy: { fecha: 'asc' } });
     const cuentasCobro = cuentasCobroRaw.map(c => ({
       id: c.id,
@@ -298,21 +478,34 @@ class SyncService {
       }
     };
 
-    const capacitacionesRaw = await prisma.capacitacion.findMany({ orderBy: { fecha: 'desc' } });
+    const capacitacionesRaw = await prisma.capacitacion.findMany({
+      include: { creador: true },
+      orderBy: { fecha: 'desc' }
+    });
     const capacitaciones = capacitacionesRaw.map(c => ({
       id: c.id,
+      tipo: c.tipo || 'Capacitación',
       tema: c.tema,
       descripcion: c.descripcion || '',
-      fecha: c.fecha,
-      hora: c.hora,
+      fecha: c.fecha ? (typeof c.fecha === 'string' ? c.fecha : c.fecha.toISOString()) : '',
+      hora: c.hora || '08:00 AM',
       obligatoria: c.obligatoria,
-      creador: c.creador,
+      creadorId: c.creadorId,
+      creador: c.creador?.user || '',
+      creadorNombre: c.creador ? `${c.creador.nombre} ${c.creador.apellido || ''}`.trim() : '',
       videoLink: c.videoLink || '',
+      videoFile: c.videoFile || null,
+      videoFileName: c.videoFileName || '',
+      plataforma: c.plataforma || null,
+      enlaceReunion: c.enlaceReunion || null,
+      tutorFirma: c.tutorFirma || null,
+      tutor: c.tutor || null,
+      creadoEn: c.creadoEn ? (typeof c.creadoEn === 'string' ? c.creadoEn : c.creadoEn.toISOString()) : '',
       materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
       asistentes: c.asistentes ? (typeof c.asistentes === 'string' ? JSON.parse(c.asistentes) : c.asistentes) : [],
       evaluacion: c.evaluacion ? (typeof c.evaluacion === 'string' ? JSON.parse(c.evaluacion) : c.evaluacion) : null,
-      estado: c.estado,
-      lockedBy: c.lockedBy
+      estado: c.estado || 'Programada',
+      lockedBy: c.lockedBy || null
     }));
 
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
@@ -325,9 +518,33 @@ class SyncService {
 
   async sync(diff, user) {
     await prisma.$transaction(async (tx) => {
+      let cachedUsers = null;
+      const getUsersCache = async () => {
+        if (!cachedUsers) {
+          cachedUsers = await tx.user.findMany({ select: { id: true, user: true, nombre: true, apellido: true } });
+        }
+        return cachedUsers;
+      };
+
+      const resolveUser = async (userRef, allowFallback = true) => {
+        const all = await getUsersCache();
+        if (!userRef) {
+          return allowFallback ? (user?.id || all[0]?.id || '1') : null;
+        }
+        const str = String(userRef).trim();
+        const byId = all.find(u => String(u.id) === str);
+        if (byId) return byId.id;
+        const byUser = all.find(u => u.user && u.user.toLowerCase() === str.toLowerCase());
+        if (byUser) return byUser.id;
+        const byNom = all.find(u => (`${u.nombre} ${u.apellido || ''}`).trim().toLowerCase() === str.toLowerCase());
+        if (byNom) return byNom.id;
+        return allowFallback ? (user?.id || all[0]?.id || '1') : null;
+      };
+
       // Helper para upserts en tablas planas directas
       const flatUpsert = async (table, items) => {
-        for (const item of items) {
+        for (const rawItem of items) {
+          const item = sanitizeBackendForPrisma(table, rawItem);
           const { ...data } = item;
 
         if (table === 'user') {
@@ -339,9 +556,10 @@ class SyncService {
           const existing = await tx.cliente.findUnique({ where: { doc: item.doc } });
           if (existing) {
             delete data.id;
+            const cleanClientData = sanitizeBackendForPrisma('cliente', data);
             await tx.cliente.update({
               where: { id: existing.id },
-              data
+              data: cleanClientData
             });
             continue;
           }
@@ -377,9 +595,13 @@ class SyncService {
                 data.pass = bcrypt.hashSync(data.pass, 10);
               }
             }
+            const cleanUserData = sanitizeBackendForPrisma('user', data);
+            if (!cleanUserData.firma && existing.firma) {
+              cleanUserData.firma = existing.firma;
+            }
             await tx.user.update({
               where: { id: existing.id },
-              data
+              data: cleanUserData
             });
             continue;
           }
@@ -392,21 +614,23 @@ class SyncService {
         }
       }
 
-      // Optimistic Concurrency Control (OCC) - Prevenci├│n Anti-Sobrescritura
+      // Optimistic Concurrency Control (OCC) - Prevención Anti-Sobrescritura
       try {
         const existingRecord = await tx[table].findUnique({ where: { id: item.id } });
         if (existingRecord && existingRecord.lockedBy && existingRecord.lockedBy !== user) {
-          console.warn(`[OCC BLOCK] Usuario '${user}' intent├│ sobrescribir '${table}' ID '${item.id}' que est├í bloqueado por '${existingRecord.lockedBy}'. Sincronizaci├│n denegada para este registro.`);
-          continue; // Saltar la actualizaci├│n para no corromper datos del otro asesor
+          console.warn(`[OCC BLOCK] Usuario '${user}' intentó sobrescribir '${table}' ID '${item.id}' que está bloqueado por '${existingRecord.lockedBy}'. Sincronización denegada para este registro.`);
+          continue; // Saltar la actualización para no corromper datos del otro asesor
         }
       } catch (e) {
         // Ignorar si la tabla no soporta findUnique por ID u otras razones
       }
 
+      const finalData = sanitizeBackendForPrisma(table, data);
+      delete finalData.id;
       await tx[table].upsert({
         where: { id: item.id },
-        update: data,
-        create: data,
+        update: finalData,
+        create: { id: item.id, ...finalData },
       });
     }
     };
@@ -537,10 +761,12 @@ class SyncService {
           materiales: item.materiales ? (typeof item.materiales === 'string' ? item.materiales : JSON.stringify(item.materiales)) : null
         };
 
+        const cleanVentaData = sanitizeBackendForPrisma('venta', data);
+        delete cleanVentaData.id;
         await tx.venta.upsert({
           where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
+          update: cleanVentaData,
+          create: { id: item.id, ...cleanVentaData },
         });
       }
     }
@@ -613,10 +839,12 @@ class SyncService {
           motivoNoCompra: item.motivoNoCompra || null
         };
 
+        const cleanCotizacionData = sanitizeBackendForPrisma('cotizacion', data);
+        delete cleanCotizacionData.id;
         await tx.cotizacion.upsert({
           where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
+          update: cleanCotizacionData,
+          create: { id: item.id, ...cleanCotizacionData },
         });
       }
     }
@@ -632,6 +860,13 @@ class SyncService {
           throw new Error(`Sync PQR ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
         }
 
+        let asigId = null;
+        if (item.usuarioAsignadoId) {
+          asigId = await resolveUser(item.usuarioAsignadoId, false);
+        } else if (item.usuarioAsignado) {
+          asigId = await resolveUser(item.usuarioAsignado, false);
+        }
+
         const data = {
           fecha: item.fecha ? new Date(item.fecha) : new Date(),
           limiteIso: item.limiteIso ? new Date(item.limiteIso) : new Date(),
@@ -639,7 +874,7 @@ class SyncService {
           tipo: item.tipo,
           detalle: item.detalle,
           evidencia: item.evidencia || null,
-          fileData: item.fileData || null,
+          fileUrl: item.fileUrl || item.fileData || null,
           estado: item.estado,
           satisfecho: item.satisfecho,
           lockedBy: item.lockedBy || null,
@@ -655,13 +890,15 @@ class SyncService {
           ventaId: item.ventaId || null,
           cotizacionId: item.cotizacionId || null,
           trazabilidad: item.trazabilidad || null,
-          usuarioAsignado: item.usuarioAsignado || null,
+          usuarioAsignadoId: asigId,
         };
 
+        const cleanPqrData = sanitizeBackendForPrisma('pqr', data);
+        delete cleanPqrData.id;
         await tx.pQR.upsert({
           where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
+          update: cleanPqrData,
+          create: { id: item.id, ...cleanPqrData },
         });
       }
     }
@@ -705,10 +942,12 @@ class SyncService {
           costoServicio: item.costoServicio ? parseFloat(item.costoServicio) : 0,
         };
 
+        const cleanServicioData = sanitizeBackendForPrisma('servicio', data);
+        delete cleanServicioData.id;
         await tx.servicio.upsert({
           where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
+          update: cleanServicioData,
+          create: { id: item.id, ...cleanServicioData },
         });
       }
     }
@@ -717,14 +956,42 @@ class SyncService {
 
     // 9. Solicitudes Laborales
     if (diff.solicitudes) {
-      await flatUpsert('solicitud', diff.solicitudes.upserted || []);
       await flatDelete('solicitud', diff.solicitudes.deleted || []);
+      for (const item of diff.solicitudes.upserted || []) {
+        let asId = await resolveUser(item.asesorId || item.asesor);
+        if (!asId) asId = user?.id || (await getUsersCache())[0]?.id;
+        const solData = sanitizeBackendForPrisma('solicitud', {
+          ...item,
+          asesorId: asId,
+          fileUrl: item.fileUrl || item.fileData || null
+        });
+        const { id: idToUpsert, ...updateData } = solData;
+        await tx.solicitud.upsert({
+          where: { id: idToUpsert || item.id },
+          update: updateData,
+          create: { id: idToUpsert || item.id, ...updateData },
+        });
+      }
     }
 
     // 10. Procesos Disciplinarios
     if (diff.procesosDisciplinarios) {
-      await flatUpsert('procesoDisciplinario', diff.procesosDisciplinarios.upserted || []);
       await flatDelete('procesoDisciplinario', diff.procesosDisciplinarios.deleted || []);
+      for (const item of diff.procesosDisciplinarios.upserted || []) {
+        let asId = await resolveUser(item.asesorId || item.asesor);
+        let jId = item.jefe && item.jefe !== 'Admin' ? await resolveUser(item.jefeId || item.jefe, false) : null;
+        const procData = sanitizeBackendForPrisma('procesoDisciplinario', {
+          ...item,
+          asesorId: asId,
+          jefeId: jId
+        });
+        const { id: idToUpsert, ...updateData } = procData;
+        await tx.procesoDisciplinario.upsert({
+          where: { id: idToUpsert || item.id },
+          update: updateData,
+          create: { id: idToUpsert || item.id, ...updateData },
+        });
+      }
     }
 
     // 11. Evaluaciones
@@ -741,14 +1008,51 @@ class SyncService {
 
     // 13. Chat Interno
     if (diff.chat) {
-      await flatUpsert('chat', diff.chat.upserted || []);
       await flatDelete('chat', diff.chat.deleted || []);
+      for (const item of diff.chat.upserted || []) {
+        let sndId = await resolveUser(item.senderId || item.user || item.sender);
+        if (!sndId) sndId = user?.id || (await getUsersCache())[0]?.id;
+
+        const toStr = item.to ? String(item.to).trim() : '';
+        const isTodos = !toStr || toStr.toLowerCase() === 'todos';
+        let rcvId = null;
+        let tabId = item.senderTabId || null;
+
+        if (!isTodos) {
+          rcvId = await resolveUser(toStr || item.receiverId, false);
+          if (!rcvId) {
+            // Si no es un usuario directo, es un grupo de chat
+            tabId = toStr;
+          }
+        }
+
+        const chData = sanitizeBackendForPrisma('chat', { ...item, senderId: sndId, receiverId: rcvId, senderTabId: tabId });
+        const { id: idToUpsert, ...updateData } = chData;
+
+        await tx.chat.upsert({
+          where: { id: idToUpsert || item.id },
+          update: updateData,
+          create: { id: idToUpsert || item.id, ...updateData },
+        });
+      }
     }
 
     // 13.5 Grupos de Chat
     if (diff.chatGroups) {
-      await flatUpsert('chatGroup', diff.chatGroups.upserted || []);
       await flatDelete('chatGroup', diff.chatGroups.deleted || []);
+      for (const item of diff.chatGroups.upserted || []) {
+        let crId = await resolveUser(item.createdById || item.createdBy);
+        if (!crId) crId = user?.id || (await getUsersCache())[0]?.id;
+
+        const cgData = sanitizeBackendForPrisma('chatGroup', { ...item, createdById: crId });
+        const { id: idToUpsert, ...updateData } = cgData;
+
+        await tx.chatGroup.upsert({
+          where: { id: idToUpsert || item.id },
+          update: updateData,
+          create: { id: idToUpsert || item.id, ...updateData },
+        });
+      }
     }
 
     // 14. Auditor├¡a
@@ -759,8 +1063,17 @@ class SyncService {
 
     // 15. Notificaciones
     if (diff.notificaciones) {
-      await flatUpsert('notificacion', diff.notificaciones.upserted || []);
       await flatDelete('notificacion', diff.notificaciones.deleted || []);
+      for (const item of diff.notificaciones.upserted || []) {
+        let pId = await resolveUser(item.paraId || item.para);
+        const notData = sanitizeBackendForPrisma('notificacion', { ...item, paraId: pId });
+        const { id: idToUpsert, ...updateData } = notData;
+        await tx.notificacion.upsert({
+          where: { id: idToUpsert || item.id },
+          update: updateData,
+          create: { id: idToUpsert || item.id, ...updateData },
+        });
+      }
     }
 
     // 16. Comisionistas
@@ -788,10 +1101,12 @@ class SyncService {
           total: item.total ? parseFloat(item.total) : 0,
         };
 
+        const cleanCuentaData = sanitizeBackendForPrisma('cuentasCobro', data);
+        delete cleanCuentaData.id;
         await tx.cuentasCobro.upsert({
           where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
+          update: cleanCuentaData,
+          create: { id: item.id, ...cleanCuentaData },
         });
       }
     }
@@ -806,26 +1121,36 @@ class SyncService {
     if (diff.capacitaciones) {
       await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
       for (const item of diff.capacitaciones.upserted || []) {
+        let crId = await resolveUser(item.creadorId || item.creador);
         const data = {
-          tipo: item.tipo,
+          tipo: item.tipo || 'Capacitación',
           tema: item.tema,
-          descripcion: item.descripcion,
+          descripcion: item.descripcion || null,
           fecha: item.fecha ? new Date(item.fecha) : new Date(),
-          hora: item.hora,
-          obligatoria: item.obligatoria,
-          creador: item.creador,
-          videoLink: item.videoLink,
-          materiales: item.materiales ? JSON.stringify(item.materiales) : null,
-          asistentes: item.asistentes ? JSON.stringify(item.asistentes) : null,
-          evaluacion: item.evaluacion ? JSON.stringify(item.evaluacion) : null,
-          estado: item.estado,
-          lockedBy: item.lockedBy
+          hora: item.hora || '08:00 AM',
+          obligatoria: item.obligatoria ?? true,
+          creadorId: crId,
+          videoLink: item.videoLink || null,
+          videoFile: item.videoFile || null,
+          videoFileName: item.videoFileName || null,
+          plataforma: item.plataforma || null,
+          enlaceReunion: item.enlaceReunion || null,
+          tutorFirma: item.tutorFirma || null,
+          tutor: item.tutor || null,
+          creadoEn: item.creadoEn ? new Date(item.creadoEn) : new Date(),
+          materiales: item.materiales || null,
+          asistentes: item.asistentes || null,
+          evaluacion: item.evaluacion || null,
+          estado: item.estado || 'Programada',
+          lockedBy: item.lockedBy || null
         };
 
+        const cleanCapacitacionData = sanitizeBackendForPrisma('capacitacion', data);
+        delete cleanCapacitacionData.id;
         await tx.capacitacion.upsert({
           where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data },
+          update: cleanCapacitacionData,
+          create: { id: item.id, ...cleanCapacitacionData },
         });
       }
     }

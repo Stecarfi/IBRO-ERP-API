@@ -4,6 +4,6 @@ const locationController = require('../controllers/location.controller');
 const authenticateToken = require('../middlewares/auth.middleware');
 
 router.post('/update', authenticateToken, locationController.updateLocation);
-router.get('/users', authenticateToken, locationController.getUsersLocations);
+router.get('/users', authenticateToken.optional, locationController.getUsersLocations);
 
 module.exports = router;

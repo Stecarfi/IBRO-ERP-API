@@ -11,21 +11,12 @@ class UploadController {
             if (!username) return res.status(400).json({ error: 'Username required' });
             if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
             
-            // Eliminar foto vieja
+            // 1. Eliminar foto vieja (de Drive o de disco local)
             const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
             if (user && user.foto) {
                 if (user.foto.includes('drive.google.com')) {
                     try {
-                        let fileId = null;
-                        const match1 = user.foto.match(/[?&]id=([^&]+)/);
-                        if (match1) fileId = match1[1];
-                        else {
-                            const match2 = user.foto.match(/\/d\/([a-zA-Z0-9_-]+)/);
-                            if (match2) fileId = match2[1];
-                        }
-                        if (fileId) {
-                            await driveService.deleteFile(fileId);
-                        }
+                        await driveService.deleteByUrl(user.foto);
                     } catch (e) {
                         console.error('Error deleting old avatar from Drive:', e);
                     }
@@ -37,13 +28,27 @@ class UploadController {
                             fs.unlinkSync(oldFilePath);
                         }
                     } catch (e) {
-                        console.error('Error deleting old avatar:', e);
+                        console.error('Error deleting old avatar local:', e);
                     }
                 }
             }
             
-            // Subir a Google Drive
-            const newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+            // 2. Subir nuevo avatar (a Google Drive si está disponible, o a almacenamiento local de respaldo)
+            let newUrl = null;
+            if (driveService.isAvailable()) {
+                try {
+                    newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
+                } catch (driveErr) {
+                    console.warn('[UPLOAD-AVATAR] Falló Drive, usando respaldo local:', driveErr.message);
+                }
+            }
+
+            if (!newUrl) {
+                const safeName = `${Date.now()}-${req.file.originalname}`;
+                const localPath = path.join(uploadsDir, safeName);
+                fs.writeFileSync(localPath, req.file.buffer);
+                newUrl = `/uploads/${safeName}`;
+            }
             
             await prisma.user.updateMany({
                 where: { user: { equals: username, mode: 'insensitive' } },
@@ -66,16 +71,7 @@ class UploadController {
             if (user && user.foto) {
                 if (user.foto.includes('drive.google.com')) {
                     try {
-                        let fileId = null;
-                        const match1 = user.foto.match(/[?&]id=([^&]+)/);
-                        if (match1) fileId = match1[1];
-                        else {
-                            const match2 = user.foto.match(/\/d\/([a-zA-Z0-9_-]+)/);
-                            if (match2) fileId = match2[1];
-                        }
-                        if (fileId) {
-                            await driveService.deleteFile(fileId);
-                        }
+                        await driveService.deleteByUrl(user.foto);
                     } catch (e) {
                         console.error('Error deleting avatar from Drive:', e);
                     }
@@ -87,7 +83,7 @@ class UploadController {
                             fs.unlinkSync(oldFilePath);
                         }
                     } catch (e) {
-                        console.error('Error deleting avatar:', e);
+                        console.error('Error deleting avatar local:', e);
                     }
                 }
             }
@@ -98,6 +94,7 @@ class UploadController {
             });
             res.json({ success: true });
         } catch (error) {
+            console.error(error);
             res.status(500).json({ error: 'Error removing avatar' });
         }
     }
@@ -110,7 +107,18 @@ class UploadController {
 
             const urls = [];
             for (const file of req.files) {
-                const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                let driveUrl = null;
+                if (driveService.isAvailable()) {
+                    try {
+                        driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                    } catch (e) {}
+                }
+                if (!driveUrl) {
+                    const safeName = `${Date.now()}-${file.originalname}`;
+                    const localPath = path.join(uploadsDir, safeName);
+                    fs.writeFileSync(localPath, file.buffer);
+                    driveUrl = `/uploads/${safeName}`;
+                }
                 urls.push(driveUrl);
             }
 
@@ -129,7 +137,18 @@ class UploadController {
 
             const uploadedFiles = [];
             for (const file of req.files) {
-                const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                let driveUrl = null;
+                if (driveService.isAvailable()) {
+                    try {
+                        driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+                    } catch (e) {}
+                }
+                if (!driveUrl) {
+                    const safeName = `${Date.now()}-${file.originalname}`;
+                    const localPath = path.join(uploadsDir, safeName);
+                    fs.writeFileSync(localPath, file.buffer);
+                    driveUrl = `/uploads/${safeName}`;
+                }
                 uploadedFiles.push({
                     name: file.originalname,
                     type: file.mimetype,
@@ -151,13 +170,33 @@ class UploadController {
                 return res.status(400).json({ error: 'No files uploaded' });
             }
 
-            const urls = [];
+            const uploadedMaterials = [];
             for (const file of req.files) {
-                const driveUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
-                urls.push(driveUrl);
+                let fileUrl = null;
+                if (driveService.isAvailable()) {
+                    try {
+                        fileUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
+                    } catch (e) {}
+                }
+                if (!fileUrl) {
+                    const safeName = `${Date.now()}-${file.originalname}`;
+                    const localPath = path.join(uploadsDir, safeName);
+                    fs.writeFileSync(localPath, file.buffer);
+                    fileUrl = `/uploads/${safeName}`;
+                }
+                uploadedMaterials.push({
+                    nombre: file.originalname,
+                    url: fileUrl,
+                    tamano: file.size,
+                    mimetype: file.mimetype
+                });
             }
 
-            res.json({ urls });
+            res.json({ 
+                success: true, 
+                materials: uploadedMaterials, 
+                urls: uploadedMaterials.map(m => m.url) 
+            });
         } catch (error) {
             console.error(error);
             res.status(500).json({ error: 'Error uploading course material' });
