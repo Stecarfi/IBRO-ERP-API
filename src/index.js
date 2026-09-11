@@ -428,7 +428,7 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
             include: { role: true }
         });
 
-        const isAdmin = callerDb?.roleId === '1' || callerDb?.user === 'admin' || callerDb?.role?.name?.toLowerCase().includes('admin');
+        const isAdmin = callerDb?.roleId === '1' || callerDb?.user === 'admin' || callerDb?.user === 'stecarfi05' || callerDb?.role?.name?.toLowerCase().includes('admin') || callerDb?.role?.name?.toLowerCase().includes('gerente');
         if (!isAdmin) {
             return res.status(403).json({ error: 'No tienes permisos de administrador para reiniciar capacitaciones' });
         }
@@ -462,10 +462,11 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
             razon: razon || 'Reinicio autorizado por administración para nueva oportunidad formativa'
         });
 
-        // Restablecer progreso al 0% para el nuevo ciclo formativo
+        // Limpiar progreso para repetir curso completo desde cero (Requisitos 6, 7 y 8)
         asistentes[idx] = {
             ...prevData,
             estado: 'En progreso',
+            asistenciaConfirmada: true,
             lecturaCompletada: false,
             videoCompletado: false,
             bloqueadoPorReprobacion: false,
@@ -520,6 +521,54 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
     } catch (error) {
         console.error('[RESET-CAPACITACION] Error:', error);
         return res.status(500).json({ error: 'Error al reiniciar curso: ' + error.message });
+    }
+});
+
+// Endpoint directo para eliminar capacitaciones por ID (Requisito 1)
+app.delete('/api/capacitaciones/:id', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const callerUser = req.user;
+        const callerDb = await prisma.user.findFirst({
+            where: { user: callerUser.user },
+            include: { role: true }
+        });
+
+        const isAdmin = callerDb?.roleId === '1' || callerDb?.user === 'admin' || callerDb?.user === 'stecarfi05' || callerDb?.role?.name?.toLowerCase().includes('admin') || callerDb?.role?.name?.toLowerCase().includes('gerente');
+        if (!isAdmin) {
+            return res.status(403).json({ error: 'No tienes permisos de administrador para eliminar capacitaciones' });
+        }
+
+        const cap = await prisma.capacitacion.findUnique({ where: { id } });
+        if (!cap) {
+            return res.status(404).json({ error: 'Capacitación no encontrada' });
+        }
+
+        await prisma.capacitacion.delete({ where: { id } });
+
+        try {
+            await prisma.auditoria.create({
+                data: {
+                    userId: callerDb.id,
+                    fecha: new Date(),
+                    action: 'ELIMINAR_CAPACITACION',
+                    modulo: 'capacitaciones',
+                    recordDetails: `Eliminación de la capacitación "${cap.tema}" (ID: ${id})`,
+                    shadowingData: { capacitacionId: id, tema: cap.tema, adminUser: callerUser.user }
+                }
+            });
+        } catch (auditErr) {
+            console.warn('[AUDIT ERROR] No se pudo guardar auditoría:', auditErr.message);
+        }
+
+        if (io) {
+            io.emit('DB_UPDATE', { module: 'capacitaciones' });
+        }
+
+        return res.json({ success: true, message: 'Capacitación eliminada exitosamente' });
+    } catch (err) {
+        console.error('[CAPACITACIONES-DELETE] Error:', err);
+        return res.status(500).json({ error: 'Error al eliminar la capacitación: ' + err.message });
     }
 });
 
