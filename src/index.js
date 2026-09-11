@@ -374,6 +374,183 @@ app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.
     }
 });
 
+// Endpoint proxy/streaming para transmitir archivos de Google Drive sin restricciones de CORS ni login
+app.get('/api/drive-stream/:fileId', async (req, res) => {
+    try {
+        const { fileId } = req.params;
+        if (!fileId) return res.status(400).json({ error: 'fileId es requerido' });
+        if (!driveService.isAvailable()) {
+            return res.status(503).json({ error: 'Servicio de Google Drive no disponible' });
+        }
+
+        let meta = null;
+        try {
+            const metaRes = await driveService.drive.files.get({
+                fileId: fileId,
+                fields: 'id, name, mimeType, size',
+                supportsAllDrives: true
+            });
+            meta = metaRes.data;
+        } catch (mErr) {
+            console.warn('[DRIVE-STREAM] No se pudieron obtener metadatos:', mErr.message);
+        }
+
+        const driveStream = await driveService.drive.files.get(
+            { fileId: fileId, alt: 'media', supportsAllDrives: true },
+            { responseType: 'stream' }
+        );
+
+        res.setHeader('Content-Type', meta?.mimeType || 'application/pdf');
+        if (meta?.size) res.setHeader('Content-Length', meta.size);
+        if (meta?.name) res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(meta.name)}"`);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+
+        driveStream.data.pipe(res);
+    } catch (err) {
+        console.error('[DRIVE-STREAM] Error al transmitir archivo desde Drive:', err.message);
+        res.status(500).json({ error: 'Error al transmitir archivo desde Drive' });
+    }
+});
+
+// Endpoint administrativo para reiniciar capacitación a un usuario (Requisito 6 y 7)
+app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { userId, razon } = req.body;
+
+        if (!userId) {
+            return res.status(400).json({ error: 'userId es requerido para reiniciar el curso' });
+        }
+
+        const callerUser = req.user;
+        const callerDb = await prisma.user.findFirst({
+            where: { user: callerUser.user },
+            include: { role: true }
+        });
+
+        const isAdmin = callerDb?.roleId === '1' || callerDb?.user === 'admin' || callerDb?.role?.name?.toLowerCase().includes('admin');
+        if (!isAdmin) {
+            return res.status(403).json({ error: 'No tienes permisos de administrador para reiniciar capacitaciones' });
+        }
+
+        const cap = await prisma.capacitacion.findUnique({ where: { id } });
+        if (!cap) {
+            return res.status(404).json({ error: 'Capacitación no encontrada' });
+        }
+
+        const asistentes = Array.isArray(cap.asistentes) ? [...cap.asistentes] : [];
+        const idx = asistentes.findIndex(a => a.userId === userId || String(a.userId).toLowerCase() === String(userId).toLowerCase());
+
+        if (idx === -1) {
+            return res.status(404).json({ error: 'El usuario no está registrado como asistente en esta capacitación' });
+        }
+
+        const prevData = asistentes[idx];
+        const prevCiclo = prevData.ciclo || 1;
+        const prevHistory = Array.isArray(prevData.historialCiclos) ? [...prevData.historialCiclos] : [];
+
+        // Guardar intento anterior en historial de trazabilidad
+        prevHistory.push({
+            ciclo: prevCiclo,
+            estadoFinal: prevData.estado || 'Reprobado',
+            score: prevData.score ?? null,
+            correctCount: prevData.correctCount ?? null,
+            totalCount: prevData.totalCount ?? null,
+            fechaEvaluacion: prevData.fechaEvaluacion || null,
+            fechaReinicio: new Date().toISOString(),
+            reiniciadoPor: callerUser.user,
+            razon: razon || 'Reinicio autorizado por administración para nueva oportunidad formativa'
+        });
+
+        // Restablecer progreso al 0% para el nuevo ciclo formativo
+        asistentes[idx] = {
+            ...prevData,
+            estado: 'En progreso',
+            lecturaCompletada: false,
+            videoCompletado: false,
+            bloqueadoPorReprobacion: false,
+            evaluacionPresentada: false,
+            score: null,
+            correctCount: null,
+            totalCount: null,
+            fechaEvaluacion: null,
+            ciclo: prevCiclo + 1,
+            fechaReinicio: new Date().toISOString(),
+            reiniciadoPor: callerUser.user,
+            historialCiclos: prevHistory
+        };
+
+        const updatedCap = await prisma.capacitacion.update({
+            where: { id },
+            data: { asistentes }
+        });
+
+        // Registrar en Auditoría formal
+        try {
+            await prisma.auditoria.create({
+                data: {
+                    userId: callerDb.id,
+                    fecha: new Date(),
+                    action: 'REINICIO_CAPACITACION',
+                    modulo: 'capacitaciones',
+                    recordDetails: `Reinicio de curso "${cap.tema}" para el colaborador ${userId} (Ciclo ${prevCiclo + 1}). Motivo: ${razon || 'Solicitud de nueva oportunidad'}`,
+                    shadowingData: {
+                        capacitacionId: id,
+                        tema: cap.tema,
+                        targetUserId: userId,
+                        nuevoCiclo: prevCiclo + 1,
+                        adminUser: callerUser.user
+                    }
+                }
+            });
+        } catch (auditErr) {
+            console.warn('[AUDIT ERROR] No se pudo guardar auditoría de reinicio:', auditErr.message);
+        }
+
+        // Notificar en tiempo real por Socket.io si está disponible
+        if (io) {
+            io.emit('DB_UPDATE', { module: 'capacitaciones' });
+        }
+
+        return res.json({
+            success: true,
+            message: `Curso reiniciado exitosamente para ${userId}. El colaborador ha avanzado al Ciclo ${prevCiclo + 1}.`,
+            capacitacion: updatedCap
+        });
+    } catch (error) {
+        console.error('[RESET-CAPACITACION] Error:', error);
+        return res.status(500).json({ error: 'Error al reiniciar curso: ' + error.message });
+    }
+});
+
+// Endpoint para registrar eventos de avance y auditoría de capacitaciones (Requisito 8)
+app.post('/api/capacitaciones/:id/log-event', authenticateToken, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { eventType, details } = req.body;
+        const user = req.user;
+
+        const userDb = await prisma.user.findFirst({ where: { user: user.user } });
+        if (!userDb) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+        await prisma.auditoria.create({
+            data: {
+                userId: userDb.id,
+                fecha: new Date(),
+                action: eventType || 'EVENTO_CAPACITACION',
+                modulo: 'capacitaciones',
+                recordDetails: details || `Evento en capacitación ID ${id}`,
+                shadowingData: { capacitacionId: id, user: user.user, details }
+            }
+        });
+
+        res.json({ success: true });
+    } catch (e) {
+        console.error('[LOG-CAPACITACION-EVENT] Error:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Exponer archivos estáticos de la carpeta de uploads
 app.use('/uploads', express.static(uploadsDir));
 // Mantener la ruta de avatares temporalmente para compatibilidad
