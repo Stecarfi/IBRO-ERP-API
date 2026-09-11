@@ -174,12 +174,14 @@ const PRISMA_ALLOWED_FIELDS = {
   comisionista: [
     'id', 'tipo', 'nombre', 'cedula', 'telefono', 'correo', 'direccion',
     'cliente_remite', 'valor_venta', 'pct_comision', 'fecha', 'ownerId',
-    'lockedBy', 'doc', 'tel', 'porcentaje'
+    'lockedBy', 'doc', 'tel', 'porcentaje',
+    'estado', 'banco', 'tipoCuenta', 'numeroCuenta'
   ],
 
   cuentasCobro: [
     'id', 'ciudad', 'fecha', 'cuenta', 'num', 'nombre', 'comisionista', 'cedula', 'correo',
-    'concepto', 'items', 'nequi', 'titular', 'estado', 'total', 'tecnicos'
+    'concepto', 'items', 'nequi', 'titular', 'estado', 'total', 'tecnicos',
+    'fechaRadicacion', 'fechaAprobacion', 'fechaPago', 'aprobadoPor', 'notasSeguimiento'
   ],
 
   chat: [
@@ -581,6 +583,10 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.valor_venta = parseFloat(cleaned.valor_venta) || 0;
     cleaned.pct_comision = parseFloat(cleaned.pct_comision !== undefined && cleaned.pct_comision !== null ? cleaned.pct_comision : cleaned.porcentaje) || 10;
     cleaned.porcentaje = cleaned.pct_comision;
+    cleaned.estado = cleaned.estado ? String(cleaned.estado) : 'Activo';
+    cleaned.banco = cleaned.banco ? String(cleaned.banco) : null;
+    cleaned.tipoCuenta = cleaned.tipoCuenta ? String(cleaned.tipoCuenta) : null;
+    cleaned.numeroCuenta = cleaned.numeroCuenta ? String(cleaned.numeroCuenta) : null;
     cleaned.ownerId = cleaned.ownerId ? String(cleaned.ownerId) : null;
     delete cleaned.owner;
   } else if (modelKey === 'cuentasCobro') {
@@ -590,6 +596,11 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.total = parseFloat(cleaned.total !== undefined ? cleaned.total : item.total) || 0;
     cleaned.items = safeJson(cleaned.items !== undefined ? cleaned.items : item.items, []);
     cleaned.tecnicos = safeJson(cleaned.tecnicos !== undefined ? cleaned.tecnicos : item.tecnicos, []);
+    cleaned.fechaRadicacion = safeDate(cleaned.fechaRadicacion, null);
+    cleaned.fechaAprobacion = safeDate(cleaned.fechaAprobacion, null);
+    cleaned.fechaPago = safeDate(cleaned.fechaPago, null);
+    cleaned.aprobadoPor = cleaned.aprobadoPor ? String(cleaned.aprobadoPor) : null;
+    cleaned.notasSeguimiento = cleaned.notasSeguimiento ? String(cleaned.notasSeguimiento) : null;
     delete cleaned.num;
     delete cleaned.comisionista;
   } else if (modelKey === 'chat') {
@@ -729,6 +740,7 @@ function validateSyncPayload(diff) {
   if (diff.capacitaciones?.upserted) checkCollection(diff.capacitaciones.upserted, capacitacionSchema, 'Capacitación');
   if (diff.solicitudes?.upserted) checkCollection(diff.solicitudes.upserted, solicitudSchema, 'Solicitud');
   if (diff.comisionistas?.upserted) checkCollection(diff.comisionistas.upserted, comisionistaSchema, 'Comisionista');
+  if (diff.cuentasCobro?.upserted) checkCollection(diff.cuentasCobro.upserted, cuentasCobroSchema, 'CuentasCobro');
 
   return { success: true };
 }

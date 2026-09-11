@@ -1321,7 +1321,12 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       titular: c.titular || '',
       estado: c.estado || '',
       total: c.total || 0,
-      tecnicos: typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : (c.tecnicos || [])
+      tecnicos: typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : (c.tecnicos || []),
+      fechaRadicacion: c.fechaRadicacion ? c.fechaRadicacion.toISOString() : null,
+      fechaAprobacion: c.fechaAprobacion ? c.fechaAprobacion.toISOString() : null,
+      fechaPago: c.fechaPago ? c.fechaPago.toISOString() : null,
+      aprobadoPor: c.aprobadoPor || '',
+      notasSeguimiento: c.notasSeguimiento || ''
     }));
 
     const comisionistasRaw = await prisma.comisionista.findMany({
@@ -1346,7 +1351,11 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       ownerId: c.ownerId || null,
       owner: c.owner?.user || '',
       ownerNombre: c.owner ? `${c.owner.nombre} ${c.owner.apellido || ''}`.trim() : '',
-      lockedBy: c.lockedBy || null
+      lockedBy: c.lockedBy || null,
+      estado: c.estado || 'Activo',
+      banco: c.banco || '',
+      tipoCuenta: c.tipoCuenta || '',
+      numeroCuenta: c.numeroCuenta || ''
     }));
 
     // WhatsApp Config (Línea oficial eliminada)

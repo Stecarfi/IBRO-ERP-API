@@ -435,7 +435,12 @@ class SyncService {
       titular: c.titular || '',
       estado: c.estado || '',
       total: c.total || 0,
-      tecnicos: c.tecnicos ? (typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : c.tecnicos) : []
+      tecnicos: c.tecnicos ? (typeof c.tecnicos === 'string' ? JSON.parse(c.tecnicos) : c.tecnicos) : [],
+      fechaRadicacion: c.fechaRadicacion || null,
+      fechaAprobacion: c.fechaAprobacion || null,
+      fechaPago: c.fechaPago || null,
+      aprobadoPor: c.aprobadoPor || '',
+      notasSeguimiento: c.notasSeguimiento || ''
     }));
 
     const comisionistasRaw = await prisma.comisionista.findMany({ orderBy: { id: 'asc' } });
@@ -455,7 +460,11 @@ class SyncService {
       lockedBy: c.lockedBy || null,
       doc: c.doc || '',
       tel: c.tel || '',
-      porcentaje: c.porcentaje || 10
+      porcentaje: c.porcentaje || 10,
+      estado: c.estado || 'Activo',
+      banco: c.banco || '',
+      tipoCuenta: c.tipoCuenta || '',
+      numeroCuenta: c.numeroCuenta || ''
     }));
 
     // WhatsApp Config

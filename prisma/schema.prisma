@@ -571,9 +571,13 @@ model Comisionista {
   lockedBy String?
 
   // Campos de React
-  doc        String?
-  tel        String?
-  porcentaje Float?
+  doc          String?
+  tel          String?
+  porcentaje   Float?
+  estado       String?   @default("Activo") // "Activo" | "Inactivo"
+  banco        String?
+  tipoCuenta   String?
+  numeroCuenta String?
 
   ventas Venta[]
 }
@@ -610,20 +614,25 @@ model InformesConfig {
 
 // 20. Cuentas de Cobro
 model CuentasCobro {
-  id       String    @id
-  ciudad   String?
-  fecha    DateTime?
-  cuenta   String?
-  nombre   String?
-  cedula   String?
-  correo   String?
-  concepto String?
-  items    Json? // Reemplazado de String @db.Text
-  nequi    String?
-  titular  String?
-  estado   String?
-  total    Float?    @default(0)
-  tecnicos Json? // Técnicos participantes asociados a la cuenta de cobro
+  id               String    @id
+  ciudad           String?
+  fecha            DateTime?
+  cuenta           String?
+  nombre           String?
+  cedula           String?
+  correo           String?
+  concepto         String?
+  items            Json? // Reemplazado de String @db.Text
+  nequi            String?
+  titular          String?
+  estado           String?   // "Radicada", "En Revisión", "Aprobada", "Pagada", "Rechazada"
+  total            Float?    @default(0)
+  tecnicos         Json? // Técnicos participantes asociados a la cuenta de cobro
+  fechaRadicacion  DateTime?
+  fechaAprobacion  DateTime?
+  fechaPago        DateTime?
+  aprobadoPor      String?
+  notasSeguimiento String?
 }
 
 // 21. Capacitaciones en Ventas
