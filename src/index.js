@@ -412,6 +412,87 @@ app.get('/api/drive-stream/:fileId', async (req, res) => {
     }
 });
 
+// Endpoint para reconocimiento y validación automática de duración de videos de YouTube
+app.get('/api/youtube-duration', async (req, res) => {
+    try {
+        const rawUrl = req.query.url || req.query.videoId || '';
+        if (!rawUrl || typeof rawUrl !== 'string') {
+            return res.status(400).json({ error: 'url o videoId es requerido' });
+        }
+
+        let videoId = rawUrl.trim();
+        const m = videoId.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/);
+        if (m) videoId = m[1];
+
+        if (!videoId || videoId.length !== 11) {
+            return res.status(400).json({ error: 'ID o URL de video de YouTube inválido' });
+        }
+
+        const https = require('https');
+        const fetchPromise = new Promise((resolve) => {
+            const ytReq = https.get('https://www.youtube.com/watch?v=' + videoId, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+                }
+            }, (ytRes) => {
+                let data = '';
+                ytRes.on('data', chunk => data += chunk);
+                ytRes.on('end', () => {
+                    let totalSecs = 0;
+                    const m1 = data.match(/"approxDurationMs":"(\d+)"/);
+                    if (m1) {
+                        totalSecs = Math.round(parseInt(m1[1], 10) / 1000);
+                    } else {
+                        const m2 = data.match(/"lengthSeconds":"(\d+)"/);
+                        if (m2) {
+                            totalSecs = parseInt(m2[1], 10);
+                        } else {
+                            const m3 = data.match(/itemprop="duration" content="PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"/);
+                            if (m3) {
+                                const h = parseInt(m3[1] || '0', 10);
+                                const min = parseInt(m3[2] || '0', 10);
+                                const s = parseInt(m3[3] || '0', 10);
+                                totalSecs = h * 3600 + min * 60 + s;
+                            }
+                        }
+                    }
+
+                    if (totalSecs > 0) {
+                        const mins = Math.floor(totalSecs / 60);
+                        const secs = totalSecs % 60;
+                        const formatted = mins > 0 ? `${mins} min ${secs} s` : `${secs} s`;
+                        return resolve({
+                            success: true,
+                            videoId,
+                            seconds: totalSecs,
+                            minutes: Math.ceil(totalSecs / 60),
+                            formatted
+                        });
+                    }
+
+                    resolve({ success: false, error: 'No se pudo detectar la duración del video de YouTube' });
+                });
+            });
+
+            ytReq.on('error', (err) => resolve({ success: false, error: err.message }));
+            ytReq.setTimeout(6000, () => {
+                ytReq.destroy();
+                resolve({ success: false, error: 'Tiempo de espera agotado al consultar YouTube' });
+            });
+        });
+
+        const result = await fetchPromise;
+        if (!result.success) {
+            return res.status(422).json(result);
+        }
+        res.json(result);
+    } catch (err) {
+        console.error('[YOUTUBE-DURATION] Error:', err);
+        res.status(500).json({ error: 'Error interno al consultar duración de YouTube' });
+    }
+});
+
 // Endpoint administrativo para reiniciar capacitación a un usuario (Requisito 6 y 7)
 app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, res) => {
     try {
