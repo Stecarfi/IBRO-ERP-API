@@ -9,6 +9,7 @@ class DriveService {
         this.drive = null;
         this.authType = null;
         this.folderId = process.env.GOOGLE_DRIVE_FOLDER_ID || null;
+        this.folderCache = new Map();
         this.init();
     }
 
@@ -103,24 +104,136 @@ class DriveService {
     }
 
     /**
+     * Obtiene o crea una carpeta en Google Drive dentro de un contenedor padre
+     * @param {string} folderName - Nombre de la carpeta a buscar o crear
+     * @param {string|null} parentFolderId - ID de la carpeta padre (o this.folderId por defecto)
+     * @returns {Promise<string>} - ID de la carpeta
+     */
+    async getOrCreateFolder(folderName, parentFolderId = null) {
+        if (!this.drive) {
+            throw new Error('El servicio de Google Drive no está inicializado.');
+        }
+
+        const parentId = parentFolderId || this.folderId || null;
+        const safeFolderName = folderName.replace(/'/g, "\\'");
+
+        try {
+            // 1. Buscar si la carpeta ya existe
+            let query = `mimeType = 'application/vnd.google-apps.folder' and name = '${safeFolderName}' and trashed = false`;
+            if (parentId) {
+                query += ` and '${parentId}' in parents`;
+            }
+
+            const searchRes = await this.drive.files.list({
+                q: query,
+                fields: 'files(id, name)',
+                spaces: 'drive',
+                supportsAllDrives: true,
+                includeItemsFromAllDrives: true
+            });
+
+            if (searchRes.data.files && searchRes.data.files.length > 0) {
+                return searchRes.data.files[0].id;
+            }
+
+            // 2. Si no existe, crear la carpeta
+            console.log(`[DRIVE SERVICE] Creando carpeta '${folderName}' en Google Drive (padre: ${parentId || 'root'})...`);
+            const folderMetadata = {
+                name: folderName,
+                mimeType: 'application/vnd.google-apps.folder',
+                ...(parentId ? { parents: [parentId] } : {})
+            };
+
+            const createRes = await this.drive.files.create({
+                resource: folderMetadata,
+                fields: 'id, name',
+                supportsAllDrives: true
+            });
+
+            const newFolderId = createRes.data.id;
+
+            // Otorgar permisos públicos de lectura a la carpeta para visibilidad heredada
+            try {
+                await this.drive.permissions.create({
+                    fileId: newFolderId,
+                    requestBody: { role: 'reader', type: 'anyone' },
+                    supportsAllDrives: true
+                });
+            } catch (pErr) {
+                // Silencioso si no es permitido
+            }
+
+            return newFolderId;
+        } catch (error) {
+            console.error(`[DRIVE SERVICE] Error en getOrCreateFolder para '${folderName}':`, error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Resuelve una ruta de carpetas anidadas (ej. ['Usuarios', 'user_12'])
+     * utilizando caché en memoria para máxima velocidad.
+     * @param {string[]} folderSegments - Segmentos de la ruta de carpetas
+     * @param {string|null} baseFolderId - ID de la carpeta base (this.folderId por defecto)
+     * @returns {Promise<string|null>} - ID de la carpeta final
+     */
+    async resolveFolderPath(folderSegments = [], baseFolderId = null) {
+        if (!this.drive) return null;
+        if (!Array.isArray(folderSegments) || folderSegments.length === 0) {
+            return baseFolderId || this.folderId || null;
+        }
+
+        let currentParent = baseFolderId || this.folderId || null;
+        let pathKey = currentParent || 'root';
+
+        for (const rawSegment of folderSegments) {
+            if (!rawSegment) continue;
+            const segment = String(rawSegment).trim().replace(/[\\/:*?"<>|]/g, '_');
+            if (!segment) continue;
+
+            pathKey += `/${segment}`;
+            if (this.folderCache.has(pathKey)) {
+                currentParent = this.folderCache.get(pathKey);
+                continue;
+            }
+
+            const folderId = await this.getOrCreateFolder(segment, currentParent);
+            this.folderCache.set(pathKey, folderId);
+            currentParent = folderId;
+        }
+
+        return currentParent;
+    }
+
+    /**
      * Sube una imagen a Google Drive y retorna un enlace optimizado para <img>
      * @param {Buffer} buffer - Buffer del archivo
      * @param {string} originalName - Nombre original
      * @param {string} mimeType - Tipo MIME
+     * @param {string[]|null} folderSegments - Segmentos de carpetas (ej. ['Usuarios', 'user_1'])
      * @returns {Promise<string>} - URL directa de Google Drive
      */
-    async uploadFile(buffer, originalName, mimeType) {
+    async uploadFile(buffer, originalName, mimeType, folderSegments = []) {
         if (!this.drive) {
             throw new Error('El servicio de Google Drive no está inicializado.');
+        }
+
+        let targetFolderId = this.folderId;
+        if (folderSegments && folderSegments.length > 0) {
+            try {
+                targetFolderId = await this.resolveFolderPath(folderSegments, this.folderId);
+            } catch (fErr) {
+                console.warn('[DRIVE SERVICE] No se pudo resolver carpeta específica en Drive, usando carpeta base:', fErr.message);
+            }
         }
 
         const bufferStream = new stream.PassThrough();
         bufferStream.end(buffer);
 
-        const safeName = `${Date.now()}-${originalName}`;
+        const safeName = `${Date.now()}-${originalName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         const fileMetadata = {
             name: safeName,
-            ...(this.folderId ? { parents: [this.folderId] } : {})
+            ...(targetFolderId ? { parents: [targetFolderId] } : {})
         };
 
         const media = {
@@ -129,7 +242,7 @@ class DriveService {
         };
 
         try {
-            console.log(`[DRIVE SERVICE] Subiendo archivo ${safeName} a Drive...`);
+            console.log(`[DRIVE SERVICE] Subiendo archivo ${safeName} a Drive (carpeta: ${targetFolderId || 'root'})...`);
             const response = await this.drive.files.create({
                 resource: fileMetadata,
                 media: media,
@@ -162,23 +275,37 @@ class DriveService {
     }
 
     /**
-     * Sube un documento (PDF, PPT, Word) a Google Drive y retorna el enlace de visualización (webViewLink)
+     * Sube un documento (PDF, PPT, Word, etc.) a Google Drive y retorna el enlace de visualización (webViewLink)
+     * @param {Buffer} buffer - Buffer del archivo
+     * @param {string} originalName - Nombre original
+     * @param {string} mimeType - Tipo MIME
+     * @param {string[]|null} folderSegments - Segmentos de carpetas (ej. ['Capacitaciones', 'curso_4'])
+     * @returns {Promise<string>} - URL de visualización de Drive
      */
-    async uploadDocument(buffer, originalName, mimeType) {
+    async uploadDocument(buffer, originalName, mimeType, folderSegments = []) {
         if (!this.drive) throw new Error('El servicio de Google Drive no está inicializado.');
+
+        let targetFolderId = this.folderId;
+        if (folderSegments && folderSegments.length > 0) {
+            try {
+                targetFolderId = await this.resolveFolderPath(folderSegments, this.folderId);
+            } catch (fErr) {
+                console.warn('[DRIVE SERVICE] No se pudo resolver carpeta específica en Drive, usando carpeta base:', fErr.message);
+            }
+        }
 
         const bufferStream = new stream.PassThrough();
         bufferStream.end(buffer);
 
-        const safeName = `${Date.now()}-${originalName}`;
+        const safeName = `${Date.now()}-${originalName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         const fileMetadata = {
             name: safeName,
-            ...(this.folderId ? { parents: [this.folderId] } : {})
+            ...(targetFolderId ? { parents: [targetFolderId] } : {})
         };
         const media = { mimeType: mimeType, body: bufferStream };
 
         try {
-            console.log(`[DRIVE SERVICE] Subiendo documento ${safeName} a Drive...`);
+            console.log(`[DRIVE SERVICE] Subiendo documento ${safeName} a Drive (carpeta: ${targetFolderId || 'root'})...`);
             const response = await this.drive.files.create({
                 resource: fileMetadata,
                 media: media,

@@ -115,44 +115,28 @@ app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async
         if (!username) return res.status(400).json({ error: 'Username required' });
         if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
         
-        // 1. Eliminar foto anterior (sea de Drive o de disco local)
+        if (!driveService.isAvailable()) {
+            return res.status(503).json({ error: 'El servicio de Google Drive no está disponible para almacenar avatares.' });
+        }
+
+        // 1. Eliminar foto anterior si era de Drive
         const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
-        if (user && user.foto) {
-            if (user.foto.includes('drive.google.com')) {
-                try {
-                    await driveService.deleteByUrl(user.foto);
-                } catch (driveDelErr) {
-                    console.error('[UPLOAD-AVATAR] Error al eliminar avatar anterior de Drive:', driveDelErr.message);
-                }
-            } else {
-                try {
-                    const oldFileName = path.basename(user.foto);
-                    const oldFilePath = path.join(uploadsDir, oldFileName);
-                    if (fs.existsSync(oldFilePath)) {
-                        fs.unlinkSync(oldFilePath);
-                    }
-                } catch (e) {
-                    console.error('[UPLOAD-AVATAR] Error al eliminar avatar anterior local:', e.message);
-                }
+        if (user && user.foto && user.foto.includes('drive.google.com')) {
+            try {
+                await driveService.deleteByUrl(user.foto);
+            } catch (driveDelErr) {
+                console.error('[UPLOAD-AVATAR] Error al eliminar avatar anterior de Drive:', driveDelErr.message);
             }
         }
         
-        // 2. Subir nuevo avatar (a Google Drive si está disponible, o a almacenamiento local como fallback)
-        let newUrl = null;
-        if (driveService.isAvailable()) {
-            try {
-                newUrl = await driveService.uploadFile(req.file.buffer, req.file.originalname, req.file.mimetype);
-            } catch (driveUploadErr) {
-                console.warn('[UPLOAD-AVATAR] Falló subida a Drive, usando almacenamiento local de respaldo:', driveUploadErr.message);
-            }
-        }
-
-        if (!newUrl) {
-            const safeName = `${Date.now()}-${req.file.originalname}`;
-            const localPath = path.join(uploadsDir, safeName);
-            fs.writeFileSync(localPath, req.file.buffer);
-            newUrl = `/uploads/${safeName}`;
-        }
+        // 2. Subir nuevo avatar directamente a Drive en Usuarios/user_{id}
+        const userFolder = `user_${user?.id || username}`;
+        const newUrl = await driveService.uploadFile(
+            req.file.buffer, 
+            req.file.originalname, 
+            req.file.mimetype,
+            ['Usuarios', userFolder]
+        );
         
         // 3. Guardar URL en la base de datos
         await prisma.user.updateMany({
@@ -164,14 +148,13 @@ app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async
         res.json({ url: newUrl });
     } catch (error) {
         console.error('[UPLOAD-AVATAR] Error:', error);
-        res.status(500).json({ error: 'Error uploading avatar' });
+        res.status(500).json({ error: error.message || 'Error uploading avatar to Google Drive' });
     }
 });
 
 const uploadEvidence = multer({ 
     storage: storage,
     fileFilter: function (req, file, cb) {
-        // Permitir imágenes y documentos pdf/word
         if (file.mimetype.startsWith('image/') || 
             file.mimetype === 'application/pdf' ||
             file.mimetype.includes('document')) {
@@ -188,27 +171,30 @@ app.post('/api/upload-evidence', authenticateToken, uploadEvidence.array('eviden
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
+        if (!driveService.isAvailable()) {
+            return res.status(503).json({ error: 'El servicio de Google Drive no está disponible para almacenar evidencias.' });
+        }
+
+        const rawModule = req.body.modulo || req.body.module || 'Servicios';
+        const moduleFolder = rawModule.charAt(0).toUpperCase() + rawModule.slice(1).toLowerCase();
+        const caseId = req.body.serviceId || req.body.servicioId || req.body.pqrsId || req.body.id || 'general';
+        const folderSegments = [moduleFolder, `caso_${caseId}`];
+
         const urls = [];
         for (const file of req.files) {
-            let driveUrl = null;
-            if (driveService.isAvailable()) {
-                try {
-                    driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
-                } catch (e) {}
-            }
-            if (!driveUrl) {
-                const safeName = `${Date.now()}-${file.originalname}`;
-                const localPath = path.join(uploadsDir, safeName);
-                fs.writeFileSync(localPath, file.buffer);
-                driveUrl = `/uploads/${safeName}`;
-            }
+            const driveUrl = await driveService.uploadFile(
+                file.buffer, 
+                file.originalname, 
+                file.mimetype,
+                folderSegments
+            );
             urls.push(driveUrl);
         }
 
         res.json({ urls });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error uploading evidence' });
+        console.error('[UPLOAD-EVIDENCE] Error:', error);
+        res.status(500).json({ error: error.message || 'Error uploading evidence to Google Drive' });
     }
 });
 
@@ -298,9 +284,16 @@ app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req,
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
+        if (!driveService.isAvailable()) {
+            return res.status(503).json({ error: 'El servicio de Google Drive no está disponible.' });
+        }
+
+        const targetFolder = req.body.folder || 'General';
+        const folderSegments = [targetFolder];
+
         const uploadedFiles = [];
         for (const file of req.files) {
-            const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype);
+            const driveUrl = await driveService.uploadFile(file.buffer, file.originalname, file.mimetype, folderSegments);
             uploadedFiles.push({
                 name: file.originalname,
                 type: file.mimetype,
@@ -311,7 +304,7 @@ app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req,
         res.json({ success: true, files: uploadedFiles });
     } catch (error) {
         console.error('Error uploading generic files:', error);
-        res.status(500).json({ error: error.message || 'Error uploading files' });
+        res.status(500).json({ error: error.message || 'Error uploading files to Google Drive' });
     }
 });
 
@@ -337,23 +330,16 @@ app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
+        if (!driveService.isAvailable()) {
+            return res.status(503).json({ error: 'El servicio de Google Drive no está disponible para materiales de capacitación.' });
+        }
+
+        const courseId = req.body.courseId || req.body.cursoId || 'general';
+        const folderSegments = ['Capacitaciones', `curso_${courseId}`];
+
         const uploadedMaterials = [];
         for (const file of req.files) {
-            let fileUrl = null;
-            if (driveService.isAvailable()) {
-                try {
-                    fileUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype);
-                } catch (driveErr) {
-                    console.warn(`[UPLOAD-COURSE] Drive falló para ${file.originalname}, usando respaldo local:`, driveErr.message);
-                }
-            }
-
-            if (!fileUrl) {
-                const safeName = `${Date.now()}-${file.originalname}`;
-                const localPath = path.join(uploadsDir, safeName);
-                fs.writeFileSync(localPath, file.buffer);
-                fileUrl = `/uploads/${safeName}`;
-            }
+            const fileUrl = await driveService.uploadDocument(file.buffer, file.originalname, file.mimetype, folderSegments);
 
             uploadedMaterials.push({
                 nombre: file.originalname,
@@ -370,7 +356,7 @@ app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.
         });
     } catch (error) {
         console.error('[UPLOAD-COURSE] Error:', error);
-        res.status(500).json({ error: 'Error uploading course material' });
+        res.status(500).json({ error: error.message || 'Error uploading course material to Google Drive' });
     }
 });
 
