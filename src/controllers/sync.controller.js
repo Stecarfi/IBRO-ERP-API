@@ -10,7 +10,7 @@ class SyncController {
         res.setHeader('Expires', '0');
         
         try {
-            const data = await syncService.getDb();
+            const data = await syncService.getDb(req.user);
             res.json(data);
         } catch (error) {
             console.error('Error fetching full DB:', error);

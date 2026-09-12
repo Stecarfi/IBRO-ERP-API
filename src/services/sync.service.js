@@ -9,7 +9,7 @@ const safeDate = (val) => {
 };
 
 class SyncService {
-  async getDb() {
+  async getDb(requestingUser = null) {
     const users = await prisma.user.findMany({
       select: {
         id: true, nombre: true, apellido: true, cedula: true, tipoDoc: true,
@@ -492,31 +492,50 @@ class SyncService {
       include: { creador: true },
       orderBy: { fecha: 'desc' }
     });
-    const capacitaciones = capacitacionesRaw.map(c => ({
-      id: c.id,
-      tipo: c.tipo || 'Capacitación',
-      tema: c.tema,
-      descripcion: c.descripcion || '',
-      fecha: c.fecha ? (typeof c.fecha === 'string' ? c.fecha : c.fecha.toISOString()) : '',
-      hora: c.hora || '08:00 AM',
-      obligatoria: c.obligatoria,
-      creadorId: c.creadorId,
-      creador: c.creador?.user || '',
-      creadorNombre: c.creador ? `${c.creador.nombre} ${c.creador.apellido || ''}`.trim() : '',
-      videoLink: c.videoLink || '',
-      videoFile: c.videoFile || null,
-      videoFileName: c.videoFileName || '',
-      plataforma: c.plataforma || null,
-      enlaceReunion: c.enlaceReunion || null,
-      tutorFirma: c.tutorFirma || null,
-      tutor: c.tutor || null,
-      creadoEn: c.creadoEn ? (typeof c.creadoEn === 'string' ? c.creadoEn : c.creadoEn.toISOString()) : '',
-      materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
-      asistentes: c.asistentes ? (typeof c.asistentes === 'string' ? JSON.parse(c.asistentes) : c.asistentes) : [],
-      evaluacion: c.evaluacion ? (typeof c.evaluacion === 'string' ? JSON.parse(c.evaluacion) : c.evaluacion) : null,
-      estado: c.estado || 'Programada',
-      lockedBy: c.lockedBy || null
-    }));
+    const isCallerMaster = requestingUser && (
+      String(requestingUser.roleId) === '1' ||
+      requestingUser.roleId === 1 ||
+      String(requestingUser.user || '').toLowerCase() === 'admin'
+    );
+
+    const capacitaciones = capacitacionesRaw.map(c => {
+      let rawAsistentes = c.asistentes ? (typeof c.asistentes === 'string' ? JSON.parse(c.asistentes) : c.asistentes) : [];
+      if (!Array.isArray(rawAsistentes)) rawAsistentes = [];
+
+      // Blindaje Master: lo de master es de master (no visible para otros usuarios)
+      if (!isCallerMaster) {
+        rawAsistentes = rawAsistentes.filter(a => {
+          const uId = String(a.userId || '').toLowerCase();
+          return uId !== 'admin' && uId !== '1';
+        });
+      }
+
+      return {
+        id: c.id,
+        tipo: c.tipo || 'Capacitación',
+        tema: c.tema,
+        descripcion: c.descripcion || '',
+        fecha: c.fecha ? (typeof c.fecha === 'string' ? c.fecha : c.fecha.toISOString()) : '',
+        hora: c.hora || '08:00 AM',
+        obligatoria: c.obligatoria,
+        creadorId: c.creadorId,
+        creador: c.creador?.user || '',
+        creadorNombre: c.creador ? `${c.creador.nombre} ${c.creador.apellido || ''}`.trim() : '',
+        videoLink: c.videoLink || '',
+        videoFile: c.videoFile || null,
+        videoFileName: c.videoFileName || '',
+        plataforma: c.plataforma || null,
+        enlaceReunion: c.enlaceReunion || null,
+        tutorFirma: c.tutorFirma || null,
+        tutor: c.tutor || null,
+        creadoEn: c.creadoEn ? (typeof c.creadoEn === 'string' ? c.creadoEn : c.creadoEn.toISOString()) : '',
+        materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
+        asistentes: rawAsistentes,
+        evaluacion: c.evaluacion ? (typeof c.evaluacion === 'string' ? JSON.parse(c.evaluacion) : c.evaluacion) : null,
+        estado: c.estado || 'Programada',
+        lockedBy: c.lockedBy || null
+      };
+    });
 
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
     return {
@@ -1139,7 +1158,44 @@ class SyncService {
     if (diff.capacitaciones) {
       await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
       for (const item of diff.capacitaciones.upserted || []) {
-        let crId = await resolveUser(item.creadorId || item.creador);
+        let mergedAsistentes = item.asistentes || null;
+        if (mergedAsistentes) {
+          if (typeof mergedAsistentes === 'string') {
+            try { mergedAsistentes = JSON.parse(mergedAsistentes); } catch(e) {}
+          }
+        }
+        if (!Array.isArray(mergedAsistentes) && mergedAsistentes !== null) mergedAsistentes = [];
+
+        // Si el usuario que sincroniza no es Master, preservar en la BD los asistentes Master previos
+        const isMasterSyncUser = user && (
+          String(user.roleId) === '1' ||
+          user.roleId === 1 ||
+          String(user.user || '').toLowerCase() === 'admin'
+        );
+
+        if (!isMasterSyncUser && mergedAsistentes) {
+          const existingCap = await tx.capacitacion.findUnique({
+            where: { id: item.id },
+            select: { asistentes: true }
+          });
+          if (existingCap && existingCap.asistentes) {
+            const prevAsistList = Array.isArray(existingCap.asistentes)
+              ? existingCap.asistentes
+              : (typeof existingCap.asistentes === 'string' ? JSON.parse(existingCap.asistentes) : []);
+            
+            const masterRecords = prevAsistList.filter(a => {
+              const uId = String(a.userId || '').toLowerCase();
+              return uId === 'admin' || uId === '1';
+            });
+
+            masterRecords.forEach(mRec => {
+              if (!mergedAsistentes.some(a => String(a.userId).toLowerCase() === String(mRec.userId).toLowerCase())) {
+                mergedAsistentes.push(mRec);
+              }
+            });
+          }
+        }
+
         const data = {
           tipo: item.tipo || 'Capacitación',
           tema: item.tema,
@@ -1157,7 +1213,7 @@ class SyncService {
           tutor: item.tutor || null,
           creadoEn: item.creadoEn ? new Date(item.creadoEn) : new Date(),
           materiales: item.materiales || null,
-          asistentes: item.asistentes || null,
+          asistentes: mergedAsistentes,
           evaluacion: item.evaluacion || null,
           estado: item.estado || 'Programada',
           lockedBy: item.lockedBy || null
