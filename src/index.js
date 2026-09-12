@@ -379,33 +379,62 @@ app.get('/api/drive-stream/:fileId', async (req, res) => {
     try {
         const { fileId } = req.params;
         if (!fileId) return res.status(400).json({ error: 'fileId es requerido' });
-        if (!driveService.isAvailable()) {
-            return res.status(503).json({ error: 'Servicio de Google Drive no disponible' });
-        }
 
-        let meta = null;
-        try {
-            const metaRes = await driveService.drive.files.get({
-                fileId: fileId,
-                fields: 'id, name, mimeType, size',
-                supportsAllDrives: true
-            });
-            meta = metaRes.data;
-        } catch (mErr) {
-            console.warn('[DRIVE-STREAM] No se pudieron obtener metadatos:', mErr.message);
-        }
-
-        const driveStream = await driveService.drive.files.get(
-            { fileId: fileId, alt: 'media', supportsAllDrives: true },
-            { responseType: 'stream' }
-        );
-
-        res.setHeader('Content-Type', meta?.mimeType || 'application/pdf');
-        if (meta?.size) res.setHeader('Content-Length', meta.size);
-        if (meta?.name) res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(meta.name)}"`);
         res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
 
-        driveStream.data.pipe(res);
+        // 1. Intentar streaming autenticado si driveService está activo
+        if (driveService && typeof driveService.isAvailable === 'function' && driveService.isAvailable()) {
+            try {
+                let meta = null;
+                try {
+                    const metaRes = await driveService.drive.files.get({
+                        fileId: fileId,
+                        fields: 'id, name, mimeType, size',
+                        supportsAllDrives: true
+                    });
+                    meta = metaRes.data;
+                } catch (mErr) {
+                    console.warn('[DRIVE-STREAM] Metadatos no disponibles:', mErr.message);
+                }
+
+                const driveStream = await driveService.drive.files.get(
+                    { fileId: fileId, alt: 'media', supportsAllDrives: true },
+                    { responseType: 'stream' }
+                );
+
+                res.setHeader('Content-Type', meta?.mimeType || 'application/pdf');
+                if (meta?.size) res.setHeader('Content-Length', meta.size);
+                if (meta?.name) res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(meta.name)}"`);
+                return driveStream.data.pipe(res);
+            } catch (authErr) {
+                console.warn('[DRIVE-STREAM] Intento con service account falló, usando descarga directa de respaldo:', authErr.message);
+            }
+        }
+
+        // 2. Respaldo universal directo para enlaces de Google Drive públicos o compartidos
+        const directDriveUrl = `https://drive.google.com/uc?id=${fileId}&export=download`;
+        const fetchRes = await fetch(directDriveUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+
+        if (!fetchRes.ok) {
+            return res.status(fetchRes.status).json({ error: 'No se pudo descargar el archivo desde Google Drive' });
+        }
+
+        const contentType = fetchRes.headers.get('content-type') || 'application/pdf';
+        const contentLength = fetchRes.headers.get('content-length');
+
+        res.setHeader('Content-Type', contentType.includes('text/html') ? 'application/pdf' : contentType);
+        if (contentLength) res.setHeader('Content-Length', contentLength);
+        res.setHeader('Content-Disposition', `inline; filename="documento-${fileId}.pdf"`);
+
+        const arrayBuffer = await fetchRes.arrayBuffer();
+        return res.send(Buffer.from(arrayBuffer));
     } catch (err) {
         console.error('[DRIVE-STREAM] Error al transmitir archivo desde Drive:', err.message);
         res.status(500).json({ error: 'Error al transmitir archivo desde Drive' });
