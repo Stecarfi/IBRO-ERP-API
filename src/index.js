@@ -537,45 +537,76 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
         const asistentes = Array.isArray(cap.asistentes) ? [...cap.asistentes] : [];
         const idx = asistentes.findIndex(a => a.userId === userId || String(a.userId).toLowerCase() === String(userId).toLowerCase());
 
+        let isNewAssignment = false;
+        let prevCiclo = 1;
+
         if (idx === -1) {
-            return res.status(404).json({ error: 'El usuario no está registrado como asistente en esta capacitación' });
+            // Usuario no estaba asignado: registrar nueva asignación oficial
+            isNewAssignment = true;
+            const targetUser = await prisma.user.findFirst({
+                where: {
+                    OR: [
+                        { id: userId },
+                        { user: userId }
+                    ]
+                }
+            });
+
+            const newAsistente = {
+                userId: targetUser ? targetUser.user : userId,
+                nombre: targetUser ? `${targetUser.nombre || ''} ${targetUser.apellido || ''}`.trim() || targetUser.user : userId,
+                cargo: targetUser?.cargo || 'Colaborador',
+                estado: 'En progreso',
+                asistenciaConfirmada: true,
+                lecturaCompletada: false,
+                videoCompletado: false,
+                evaluacionPresentada: false,
+                score: null,
+                correctCount: null,
+                totalCount: null,
+                ciclo: 1,
+                fechaInicio: new Date().toISOString(),
+                fechaAsignacion: new Date().toISOString(),
+                asignadoPor: callerUser.user,
+                razon: razon || 'Asignación formal de capacitación por administración'
+            };
+            asistentes.push(newAsistente);
+        } else {
+            // Usuario ya registrado: archivar intento en historial e iniciar nuevo ciclo formativo
+            const prevData = asistentes[idx];
+            prevCiclo = prevData.ciclo || 1;
+            const prevHistory = Array.isArray(prevData.historialCiclos) ? [...prevData.historialCiclos] : [];
+
+            prevHistory.push({
+                ciclo: prevCiclo,
+                estadoFinal: prevData.estado || 'Reprobado',
+                score: prevData.score ?? null,
+                correctCount: prevData.correctCount ?? null,
+                totalCount: prevData.totalCount ?? null,
+                fechaEvaluacion: prevData.fechaEvaluacion || null,
+                fechaReinicio: new Date().toISOString(),
+                reiniciadoPor: callerUser.user,
+                razon: razon || 'Reinicio autorizado por administración para nueva oportunidad formativa'
+            });
+
+            asistentes[idx] = {
+                ...prevData,
+                estado: 'En progreso',
+                asistenciaConfirmada: true,
+                lecturaCompletada: false,
+                videoCompletado: false,
+                bloqueadoPorReprobacion: false,
+                evaluacionPresentada: false,
+                score: null,
+                correctCount: null,
+                totalCount: null,
+                fechaEvaluacion: null,
+                ciclo: prevCiclo + 1,
+                fechaReinicio: new Date().toISOString(),
+                reiniciadoPor: callerUser.user,
+                historialCiclos: prevHistory
+            };
         }
-
-        const prevData = asistentes[idx];
-        const prevCiclo = prevData.ciclo || 1;
-        const prevHistory = Array.isArray(prevData.historialCiclos) ? [...prevData.historialCiclos] : [];
-
-        // Guardar intento anterior en historial de trazabilidad
-        prevHistory.push({
-            ciclo: prevCiclo,
-            estadoFinal: prevData.estado || 'Reprobado',
-            score: prevData.score ?? null,
-            correctCount: prevData.correctCount ?? null,
-            totalCount: prevData.totalCount ?? null,
-            fechaEvaluacion: prevData.fechaEvaluacion || null,
-            fechaReinicio: new Date().toISOString(),
-            reiniciadoPor: callerUser.user,
-            razon: razon || 'Reinicio autorizado por administración para nueva oportunidad formativa'
-        });
-
-        // Limpiar progreso para repetir curso completo desde cero (Requisitos 6, 7 y 8)
-        asistentes[idx] = {
-            ...prevData,
-            estado: 'En progreso',
-            asistenciaConfirmada: true,
-            lecturaCompletada: false,
-            videoCompletado: false,
-            bloqueadoPorReprobacion: false,
-            evaluacionPresentada: false,
-            score: null,
-            correctCount: null,
-            totalCount: null,
-            fechaEvaluacion: null,
-            ciclo: prevCiclo + 1,
-            fechaReinicio: new Date().toISOString(),
-            reiniciadoPor: callerUser.user,
-            historialCiclos: prevHistory
-        };
 
         const updatedCap = await prisma.capacitacion.update({
             where: { id },
@@ -588,20 +619,23 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
                 data: {
                     userId: callerDb.id,
                     fecha: new Date(),
-                    action: 'REINICIO_CAPACITACION',
+                    action: isNewAssignment ? 'ASIGNACION_CAPACITACION' : 'REINICIO_CAPACITACION',
                     modulo: 'capacitaciones',
-                    recordDetails: `Reinicio de curso "${cap.tema}" para el colaborador ${userId} (Ciclo ${prevCiclo + 1}). Motivo: ${razon || 'Solicitud de nueva oportunidad'}`,
+                    recordDetails: isNewAssignment
+                        ? `Asignación de curso "${cap.tema}" para el colaborador ${userId}. Motivo: ${razon || 'Asignación administrativa'}`
+                        : `Reinicio de curso "${cap.tema}" para el colaborador ${userId} (Ciclo ${prevCiclo + 1}). Motivo: ${razon || 'Solicitud de nueva oportunidad'}`,
                     shadowingData: {
                         capacitacionId: id,
                         tema: cap.tema,
                         targetUserId: userId,
-                        nuevoCiclo: prevCiclo + 1,
-                        adminUser: callerUser.user
+                        nuevoCiclo: isNewAssignment ? 1 : prevCiclo + 1,
+                        adminUser: callerUser.user,
+                        isNewAssignment
                     }
                 }
             });
         } catch (auditErr) {
-            console.warn('[AUDIT ERROR] No se pudo guardar auditoría de reinicio:', auditErr.message);
+            console.warn('[AUDIT ERROR] No se pudo guardar auditoría de capacitación:', auditErr.message);
         }
 
         // Notificar en tiempo real por Socket.io si está disponible
@@ -611,13 +645,22 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
 
         return res.json({
             success: true,
-            message: `Curso reiniciado exitosamente para ${userId}. El colaborador ha avanzado al Ciclo ${prevCiclo + 1}.`,
+            isNewAssignment,
+            message: isNewAssignment
+                ? `Curso "${cap.tema}" asignado exitosamente a ${userId}.`
+                : `Curso reiniciado exitosamente para ${userId}. El colaborador ha avanzado al Ciclo ${prevCiclo + 1}.`,
             capacitacion: updatedCap
         });
     } catch (error) {
-        console.error('[RESET-CAPACITACION] Error:', error);
-        return res.status(500).json({ error: 'Error al reiniciar curso: ' + error.message });
+        console.error('[RESET/ASSIGN-CAPACITACION] Error:', error);
+        return res.status(500).json({ error: 'Error al procesar asignación/reinicio de curso: ' + error.message });
     }
+});
+
+// Alias para asignación directa de cursos a colaboradores
+app.post('/api/capacitaciones/:id/assign-user', authenticateToken, async (req, res) => {
+    // Redirige al handler unificado de asignación / reinicio
+    return app._router.handle({ ...req, url: `/api/capacitaciones/${req.params.id}/reset-user` }, res);
 });
 
 // Endpoint directo para eliminar capacitaciones por ID (Requisito 1)
