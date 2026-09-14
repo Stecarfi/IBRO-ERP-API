@@ -216,13 +216,74 @@ const PRISMA_ALLOWED_FIELDS = {
   ],
 
   whatsappConfig: [
-    'id', 'phone', 'status'
+    'id', 'phone', 'status', 'templates'
   ],
 
   informesConfig: [
     'id', 'margenOperativo', 'ingresoProyectos', 'gastosInstalacion',
     'anticipos', 'gastosCajaChica', 'diasHabilesMes', 'mesPresupuesto',
     'fechaCorte', 'diasTranscurridos'
+  ],
+
+  jornadaLaboral: [
+    'id', 'usuarioId', 'fecha', 'horaInicio', 'latInicio', 'lngInicio',
+    'direccionInicio', 'fotoInicio', 'odometroInicio', 'bateriaInicio',
+    'horaFin', 'latFin', 'lngFin', 'direccionFin', 'fotoFin', 'odometroFin',
+    'bateriaFin', 'estado', 'tiempoTotalMin', 'tiempoEfectivoMin',
+    'tiempoDetenidoMin', 'tiempoTransitoMin', 'distanciaKm', 'observaciones'
+  ],
+
+  pausaJornada: [
+    'id', 'jornadaId', 'tipo', 'horaInicio', 'horaFin', 'duracionMin', 'lat', 'lng', 'motivo'
+  ],
+
+  rastreoUbicacion: [
+    'id', 'usuarioId', 'jornadaId', 'lat', 'lng', 'precision', 'velocidad',
+    'rumbo', 'bateria', 'esSimulado', 'enMovimiento', 'redTipo', 'timestamp', 'sincronizadoEn'
+  ],
+
+  zonaComercial: [
+    'id', 'codigo', 'nombre', 'ciudad', 'departamento', 'descripcion',
+    'colorHex', 'metaMensual', 'activo'
+  ],
+
+  asignacionZona: [
+    'id', 'zonaId', 'usuarioId', 'fechaAsig', 'activo', 'esLider'
+  ],
+
+  geocerca: [
+    'id', 'nombre', 'tipo', 'centroLat', 'centroLng', 'radioMetros',
+    'poligonoJson', 'zonaId', 'color', 'activo'
+  ],
+
+  prospectoCampo: [
+    'id', 'codigo', 'nombreComercial', 'razonSocial', 'nitRut', 'contactoNombre',
+    'contactoTelefono', 'contactoCorreo', 'direccion', 'barrio', 'ciudad',
+    'lat', 'lng', 'etapa', 'origen', 'interesDetalle', 'presupuestoEst',
+    'probabilidadPct', 'fechaCierreEst', 'motivoPerdida', 'creadoPorId',
+    'clienteId', 'fechaCreacion'
+  ],
+
+  visitaCampo: [
+    'id', 'codigo', 'jornadaId', 'usuarioId', 'clienteId', 'prospectoId',
+    'tipoVisita', 'estado', 'fechaProgramada', 'horaEstimada', 'checkInHora',
+    'checkInLat', 'checkInLng', 'checkInPrecision', 'checkInDistanciaM',
+    'checkInFoto', 'checkOutHora', 'checkOutLat', 'checkOutLng', 'duracionMin',
+    'motivoNoEfectiva', 'contactoAtendio', 'resultadoResumen', 'compromisos',
+    'proximaVisita', 'firmaCliente', 'cotizacionId', 'ventaId', 'servicioId',
+    'evidencias', 'createdAt'
+  ],
+
+  ordenServicioCampo: [
+    'id', 'servicioId', 'tecnicoId', 'jornadaId', 'checkInHora', 'checkInLat',
+    'checkInLng', 'checkOutHora', 'checkOutLat', 'checkOutLng', 'duracionMin',
+    'evidenciasAntes', 'evidenciasDespues', 'materialesUsados', 'firmaCliente',
+    'nombreReceptor', 'cedulaReceptor', 'calificacion', 'observaciones'
+  ],
+
+  metaComercialCampo: [
+    'id', 'usuarioId', 'periodo', 'metaVentas', 'metaVisitas', 'metaProspectos',
+    'metaCotiz', 'ejecVentas', 'ejecVisitas', 'ejecProspectos', 'ejecCotiz', 'cumplimiento'
   ]
 };
 
@@ -263,7 +324,29 @@ const TABLE_TO_MODEL = {
   user: 'user',
   users: 'user',
   whatsappConfig: 'whatsappConfig',
-  informesConfig: 'informesConfig'
+  informesConfig: 'informesConfig',
+  jornadaLaboral: 'jornadaLaboral',
+  jornadasLaborales: 'jornadaLaboral',
+  jornadas: 'jornadaLaboral',
+  pausaJornada: 'pausaJornada',
+  pausasJornada: 'pausaJornada',
+  rastreoUbicacion: 'rastreoUbicacion',
+  rastreosUbicacion: 'rastreoUbicacion',
+  zonaComercial: 'zonaComercial',
+  zonasComerciales: 'zonaComercial',
+  asignacionZona: 'asignacionZona',
+  asignacionesZona: 'asignacionZona',
+  geocerca: 'geocerca',
+  geocercas: 'geocerca',
+  prospectoCampo: 'prospectoCampo',
+  prospectosCampo: 'prospectoCampo',
+  visitaCampo: 'visitaCampo',
+  visitasCampo: 'visitaCampo',
+  visitas: 'visitaCampo',
+  ordenServicioCampo: 'ordenServicioCampo',
+  ordenesServicioCampo: 'ordenServicioCampo',
+  metaComercialCampo: 'metaComercialCampo',
+  metasComercialCampo: 'metaComercialCampo'
 };
 
 /**
@@ -694,6 +777,9 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.id = 1;
     cleaned.phone = cleaned.phone ? String(cleaned.phone).trim() : '573000000000';
     cleaned.status = cleaned.status ? String(cleaned.status).trim() : 'Activo';
+    if (cleaned.templates !== undefined) {
+      cleaned.templates = cleaned.templates === null ? null : (typeof cleaned.templates === 'string' ? cleaned.templates : JSON.stringify(cleaned.templates));
+    }
   } else if (modelKey === 'informesConfig') {
     cleaned.id = 1;
     cleaned.margenOperativo = parseFloat(cleaned.margenOperativo !== undefined ? cleaned.margenOperativo : 72) || 72;

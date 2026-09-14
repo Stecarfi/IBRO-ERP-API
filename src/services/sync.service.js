@@ -469,7 +469,13 @@ class SyncService {
 
     // WhatsApp Config
     const config = await prisma.whatsappConfig.findFirst();
-    const whatsappConfig = config ? { phone: config.phone, status: config.status } : { phone: '', status: 'Activo' };
+    let parsedTemplates = null;
+    if (config && config.templates) {
+      try {
+        parsedTemplates = typeof config.templates === 'string' ? JSON.parse(config.templates) : config.templates;
+      } catch (e) { parsedTemplates = null; }
+    }
+    const whatsappConfig = config ? { phone: config.phone, status: config.status, templates: parsedTemplates } : { phone: '', status: 'Activo', templates: null };
     const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
     
     // Configuraci├│n general combinada
@@ -538,10 +544,25 @@ class SyncService {
     });
 
     const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
+
+    // Operaciones en Campo (Colecciones livianas para soporte offline)
+    const geocercas = await prisma.geocerca.findMany({ where: { activo: true }, orderBy: { id: 'asc' } });
+    const zonasComerciales = await prisma.zonaComercial.findMany({ where: { activo: true }, orderBy: { id: 'asc' } });
+    const prospectosCampo = await prisma.prospectoCampo.findMany({
+      orderBy: { fechaCreacion: 'desc' },
+      take: 100
+    });
+    const visitasCampo = await prisma.visitaCampo.findMany({
+      orderBy: { fechaProgramada: 'desc' },
+      take: 100,
+      include: { cliente: true, prospecto: true }
+    });
+
     return {
       users, roles, clientes, inventario, ventas, pqrs, servicios,
       solicitudes, procesosDisciplinarios, evaluaciones, anuncios,
-      cotizaciones, chatGroups, chat, auditoria, notificaciones, cuentasCobro, comisionistas, informesConfig, capacitaciones, pendingResets, config: appConfig, whatsappConfig
+      cotizaciones, chatGroups, chat, auditoria, notificaciones, cuentasCobro, comisionistas, informesConfig, capacitaciones, pendingResets, config: appConfig, whatsappConfig,
+      geocercas, zonasComerciales, prospectosCampo, visitasCampo
     };
   }
 

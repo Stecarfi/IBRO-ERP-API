@@ -1,0 +1,43 @@
+const express = require('express');
+const router = express.Router();
+const campoController = require('../controllers/campo.controller');
+const authenticateToken = require('../middlewares/auth.middleware');
+
+// Todas las rutas de operaciones de campo requieren sesión activa
+router.use(authenticateToken);
+
+// 1. Jornadas
+router.post('/jornada/iniciar', (req, res) => campoController.iniciarJornada(req, res));
+router.post('/jornada/pausa', (req, res) => campoController.iniciarPausa(req, res));
+router.post('/jornada/reanudar', (req, res) => campoController.reanudarPausa(req, res));
+router.post('/jornada/finalizar', (req, res) => campoController.finalizarJornada(req, res));
+router.get('/jornada/activa', (req, res) => campoController.getJornadaActiva(req, res));
+
+// 2. Telemetría y Tracking
+router.post('/tracking/ping', (req, res) => campoController.pingUbicacion(req, res));
+router.post('/tracking/batch', (req, res) => campoController.batchUbicaciones(req, res));
+router.get('/tracking/en-vivo', (req, res) => campoController.getUltimasUbicaciones(req, res));
+router.get('/tracking/historial/:usuarioId?', (req, res) => campoController.getHistorialRecorrido(req, res));
+
+// 3. Visitas Comerciales y Técnicas
+router.post('/visitas/programar', (req, res) => campoController.programarVisita(req, res));
+router.get('/visitas/agenda', (req, res) => campoController.getAgenda(req, res));
+router.post('/visitas/check-in', (req, res) => campoController.checkInVisita(req, res));
+router.post('/visitas/check-out', (req, res) => campoController.checkOutVisita(req, res));
+
+// 4. Prospectos de Campo
+router.post('/prospectos', (req, res) => campoController.crearProspecto(req, res));
+router.get('/prospectos', (req, res) => campoController.getProspectos(req, res));
+router.post('/prospectos/:id/convertir', (req, res) => campoController.convertirProspecto(req, res));
+
+// 5. Productividad y Rankings
+router.get('/productividad/dashboard', (req, res) => campoController.getDashboardProductividad(req, res));
+router.get('/productividad/ranking', (req, res) => campoController.getRanking(req, res));
+
+// 6. Geocercas y Zonas
+router.get('/geocercas', (req, res) => campoController.getGeocercas(req, res));
+router.post('/geocercas', (req, res) => campoController.crearGeocerca(req, res));
+router.get('/zonas', (req, res) => campoController.getZonas(req, res));
+router.post('/zonas', (req, res) => campoController.crearZona(req, res));
+
+module.exports = router;

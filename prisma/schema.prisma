@@ -87,6 +87,14 @@ model User {
   comisionistas         Comisionista[]
   pendingResets         PendingReset[]
   capacitacionesCreadas Capacitacion[]         @relation("CapacitacionCreador")
+
+  // Operaciones en Campo
+  jornadas              JornadaLaboral[]
+  visitasCampo          VisitaCampo[]
+  asignacionesZona      AsignacionZona[]
+  metasCampo            MetaComercialCampo[]
+  prospectosCampo       ProspectoCampo[]       @relation("ProspectoVendedor")
+  ordenesServicioCampo  OrdenServicioCampo[]
 }
 
 // 3. Clientes
@@ -148,6 +156,7 @@ model Cliente {
   cotizaciones Cotizacion[]
   pqrs         PQR[]
   servicios    Servicio[]
+  visitasCampo VisitaCampo[]
 
   @@index([doc])
   @@index([nom])
@@ -222,8 +231,9 @@ model Venta {
   equipos              Json?
   materiales           Json?
 
-  pqrs      PQR[]
-  servicios Servicio[]
+  pqrs         PQR[]
+  servicios    Servicio[]
+  visitasCampo VisitaCampo[]
 }
 
 model VentaItem {
@@ -319,8 +329,10 @@ model Servicio {
   etapaActual    String?
   evidencias     Json? // Reemplaza String @db.Text
   trazabilidad   Json? // Reemplaza String @db.Text
-  aplicaGarantia Boolean? @default(false)
-  costoServicio  Float?   @default(0)
+  aplicaGarantia Boolean?            @default(false)
+  costoServicio  Float?              @default(0)
+  visitasCampo   VisitaCampo[]
+  ordenCampo     OrdenServicioCampo?
 }
 
 // 8. Solicitudes Laborales (Empleados)
@@ -455,8 +467,9 @@ model Cotizacion {
   vendedorMovil        String?
   vendedorCodigoAsesor String?
 
-  pqrs      PQR[]
-  servicios Servicio[]
+  pqrs         PQR[]
+  servicios    Servicio[]
+  visitasCampo VisitaCampo[]
 }
 
 model CotizacionItem {
@@ -663,3 +676,276 @@ model Capacitacion {
   estado        String  @default("Programada") // Programada, En Curso, Finalizada
   lockedBy      String?
 }
+
+// =========================================================================
+// MÓDULO: OPERACIONES EXTERNAS Y GESTIÓN COMERCIAL DE CAMPO
+// =========================================================================
+
+// 22. Jornadas Laborales de Campo
+model JornadaLaboral {
+  id                 String    @id @default(uuid())
+  usuarioId          String
+  usuario            User      @relation(fields: [usuarioId], references: [id])
+  fecha              DateTime  @default(now())
+  
+  // Apertura
+  horaInicio         DateTime  @default(now())
+  latInicio          Float
+  lngInicio          Float
+  direccionInicio    String?
+  fotoInicio         String?
+  odometroInicio     Float?
+  bateriaInicio      Int?
+  
+  // Cierre
+  horaFin            DateTime?
+  latFin             Float?
+  lngFin             Float?
+  direccionFin       String?
+  fotoFin            String?
+  odometroFin        Float?
+  bateriaFin         Int?
+  
+  // Métricas Consolidadas
+  estado             String    @default("Iniciada") // "Iniciada" | "En Pausa" | "Finalizada" | "Cierre Automatico"
+  tiempoTotalMin     Int       @default(0)
+  tiempoEfectivoMin  Int       @default(0)
+  tiempoDetenidoMin  Int       @default(0)
+  tiempoTransitoMin  Int       @default(0)
+  distanciaKm        Float     @default(0)
+  
+  observaciones      String?   @db.Text
+  
+  // Relaciones
+  pausas             PausaJornada[]
+  ubicaciones        RastreoUbicacion[]
+  visitas            VisitaCampo[]
+  ordenesServicio    OrdenServicioCampo[]
+
+  @@index([usuarioId, fecha])
+  @@index([estado])
+}
+
+// 23. Pausas y Descansos de la Jornada
+model PausaJornada {
+  id           String         @id @default(uuid())
+  jornadaId    String
+  jornada      JornadaLaboral @relation(fields: [jornadaId], references: [id], onDelete: Cascade)
+  tipo         String         // "Almuerzo" | "Descanso" | "Capacitacion" | "Incidente"
+  horaInicio   DateTime       @default(now())
+  horaFin      DateTime?
+  duracionMin  Int            @default(0)
+  lat          Float?
+  lng          Float?
+  motivo       String?
+}
+
+// 24. Telemetría GPS Continua (Breadcrumbs)
+model RastreoUbicacion {
+  id              String          @id @default(uuid())
+  usuarioId       String
+  jornadaId       String?
+  jornada         JornadaLaboral? @relation(fields: [jornadaId], references: [id], onDelete: Cascade)
+  lat             Float
+  lng             Float
+  precision       Float?          // en metros
+  velocidad       Float?          // en km/h
+  rumbo           Float?          // grados (heading)
+  bateria         Int?            // porcentaje (0-100)
+  esSimulado      Boolean         @default(false) // Anti Fake GPS
+  enMovimiento    Boolean         @default(false)
+  redTipo         String?         // "WiFi" | "4G" | "Offline-Cached"
+  timestamp       DateTime        @default(now())
+  sincronizadoEn  DateTime        @default(now())
+
+  @@index([usuarioId, timestamp])
+  @@index([jornadaId, timestamp])
+}
+
+// 25. Zonas Comerciales y Territorios
+model ZonaComercial {
+  id           String           @id @default(uuid())
+  codigo       String           @unique
+  nombre       String
+  ciudad       String?
+  departamento String?
+  descripcion  String?
+  colorHex     String?          @default("#002060")
+  metaMensual  Float            @default(0)
+  activo       Boolean          @default(true)
+  
+  asignaciones AsignacionZona[]
+  geocercas    Geocerca[]
+}
+
+model AsignacionZona {
+  id          String        @id @default(uuid())
+  zonaId      String
+  zona        ZonaComercial @relation(fields: [zonaId], references: [id], onDelete: Cascade)
+  usuarioId   String
+  usuario     User          @relation(fields: [usuarioId], references: [id])
+  fechaAsig   DateTime      @default(now())
+  activo      Boolean       @default(true)
+  esLider     Boolean       @default(false)
+
+  @@unique([zonaId, usuarioId])
+}
+
+// 26. Geocercas Operativas
+model Geocerca {
+  id           String         @id @default(uuid())
+  nombre       String
+  tipo         String         @default("Circular") // "Circular" | "Poligonal"
+  centroLat    Float?
+  centroLng    Float?
+  radioMetros  Float?
+  poligonoJson Json?          // Arreglo de coordenadas [[lat, lng], ...]
+  zonaId       String?
+  zona         ZonaComercial? @relation(fields: [zonaId], references: [id])
+  color        String?        @default("#34D399")
+  activo       Boolean        @default(true)
+}
+
+// 27. Prospectos de Campo
+model ProspectoCampo {
+  id               String        @id @default(uuid())
+  codigo           String        @unique
+  nombreComercial  String
+  razonSocial      String?
+  nitRut           String?
+  contactoNombre   String
+  contactoTelefono String
+  contactoCorreo   String?
+  direccion        String
+  barrio           String?
+  ciudad           String
+  lat              Float
+  lng              Float
+  etapa            String        @default("Prospecto") // "Prospecto" | "Contacto" | "Visita" | "Oportunidad" | "Cotizacion" | "Negociacion" | "Cerrado Ganado" | "Cerrado Perdido"
+  origen           String        @default("En Frio / Puerta a Puerta")
+  interesDetalle   String?       @db.Text
+  presupuestoEst   Float?        @default(0)
+  probabilidadPct  Int?          @default(20)
+  fechaCierreEst   DateTime?
+  motivoPerdida    String?
+  creadoPorId      String
+  creadoPor        User          @relation("ProspectoVendedor", fields: [creadoPorId], references: [id])
+  clienteId        String?       // Si se convierte en cliente del ERP
+  fechaCreacion    DateTime      @default(now())
+  
+  visitas          VisitaCampo[]
+
+  @@index([creadoPorId])
+  @@index([etapa])
+}
+
+// 28. Visitas de Campo (Comerciales, Técnicas, Auditorías)
+model VisitaCampo {
+  id                 String          @id @default(uuid())
+  codigo             String          @unique
+  jornadaId          String?
+  jornada            JornadaLaboral? @relation(fields: [jornadaId], references: [id])
+  usuarioId          String
+  usuario            User            @relation(fields: [usuarioId], references: [id])
+  
+  // Destinatario (Cliente existente o Prospecto nuevo)
+  clienteId          String?
+  cliente            Cliente?        @relation(fields: [clienteId], references: [id])
+  prospectoId        String?
+  prospecto          ProspectoCampo? @relation(fields: [prospectoId], references: [id])
+  
+  tipoVisita         String          @default("Comercial Prospeccion") // "Comercial Prospeccion" | "Comercial Seguimiento" | "Comercial Cierre" | "Cobranza" | "Servicio Tecnico" | "Auditoria"
+  estado             String          @default("Programada") // "Programada" | "En Curso" | "Realizada" | "No Efectiva" | "Cancelada"
+  
+  fechaProgramada    DateTime
+  horaEstimada       String?
+  
+  // Check-In Geoverificado
+  checkInHora        DateTime?
+  checkInLat         Float?
+  checkInLng         Float?
+  checkInPrecision   Float?
+  checkInDistanciaM  Float?          // Distancia en metros respecto a ubicación del cliente
+  checkInFoto        String?
+  
+  // Check-Out
+  checkOutHora       DateTime?
+  checkOutLat        Float?
+  checkOutLng        Float?
+  duracionMin        Int             @default(0)
+  
+  // Resultados y Compromisos
+  motivoNoEfectiva   String?
+  contactoAtendio    String?
+  resultadoResumen   String?         @db.Text
+  compromisos        String?         @db.Text
+  proximaVisita      DateTime?
+  firmaCliente       String?         // URL o datauri de firma digital
+  
+  // Documentos ERP Asociados
+  cotizacionId       String?
+  cotizacion         Cotizacion?     @relation(fields: [cotizacionId], references: [id])
+  ventaId            String?
+  venta              Venta?          @relation(fields: [ventaId], references: [id])
+  servicioId         String?
+  servicio           Servicio?       @relation(fields: [servicioId], references: [id])
+
+  evidencias         Json?           // URLs de fotografías tomadas en sitio
+
+  createdAt          DateTime        @default(now())
+
+  @@index([usuarioId, fechaProgramada])
+  @@index([estado])
+}
+
+// 29. Extensión de Órdenes Técnicas de Campo
+model OrdenServicioCampo {
+  id                 String          @id @default(uuid())
+  servicioId         String          @unique
+  servicio           Servicio        @relation(fields: [servicioId], references: [id], onDelete: Cascade)
+  tecnicoId          String
+  tecnico            User            @relation(fields: [tecnicoId], references: [id])
+  jornadaId          String?
+  jornada            JornadaLaboral? @relation(fields: [jornadaId], references: [id])
+  
+  checkInHora        DateTime?
+  checkInLat         Float?
+  checkInLng         Float?
+  checkOutHora       DateTime?
+  checkOutLat        Float?
+  checkOutLng        Float?
+  duracionMin        Int             @default(0)
+  
+  evidenciasAntes    Json?           // Fotos pre-intervención
+  evidenciasDespues  Json?           // Fotos post-intervención
+  materialesUsados   Json?           // [{ materialId, nombre, cant, serial }]
+  
+  firmaCliente       String?
+  nombreReceptor     String?
+  cedulaReceptor     String?
+  calificacion       Int?            // 1 a 5 estrellas
+  observaciones      String?         @db.Text
+}
+
+// 30. Metas Comerciales de Campo
+model MetaComercialCampo {
+  id             String   @id @default(uuid())
+  usuarioId      String
+  usuario        User     @relation(fields: [usuarioId], references: [id])
+  periodo        String   // "YYYY-MM"
+  
+  metaVentas     Float    @default(0)
+  metaVisitas    Int      @default(0)
+  metaProspectos Int      @default(0)
+  metaCotiz      Int      @default(0)
+  
+  ejecVentas     Float    @default(0)
+  ejecVisitas    Int      @default(0)
+  ejecProspectos Int      @default(0)
+  ejecCotiz      Int      @default(0)
+  
+  cumplimiento   Float    @default(0) // porcentaje consolidado
+
+  @@unique([usuarioId, periodo])
+}
+
