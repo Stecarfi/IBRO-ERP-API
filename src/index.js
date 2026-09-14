@@ -1725,7 +1725,13 @@ app.get('/api/db', authenticateToken, async (req, res) => {
 
     // WhatsApp Config (Línea oficial eliminada)
     const config = await prisma.whatsappConfig.findFirst();
-    const whatsappConfig = config && config.phone ? { phone: config.phone, status: config.status } : null;
+    let parsedTemplates = null;
+    if (config && config.templates) {
+      try {
+        parsedTemplates = typeof config.templates === 'string' ? JSON.parse(config.templates) : config.templates;
+      } catch (e) { parsedTemplates = null; }
+    }
+    const whatsappConfig = config && config.phone ? { phone: config.phone, status: config.status, templates: parsedTemplates } : null;
     const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
     
     // Configuración general combinada
@@ -2284,6 +2290,214 @@ app.get('/api/paginated/:model', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Error in /api/paginated:', err);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// ==========================================
+// 📱 MÓDULO WHATSAPP COMERCIAL & OMNICANAL
+// ==========================================
+
+const DEFAULT_WHATSAPP_TEMPLATES = [
+  {
+    id: 'tpl-saludo',
+    titulo: 'Saludo Inicial & Prospección',
+    categoria: 'Comercial',
+    badge: 'Ventas',
+    icon: 'fa-hand',
+    texto: 'Hola {{cliente}}, un gusto saludarte. Nos comunicamos de parte de nuestro equipo comercial para dar seguimiento a tu solicitud y brindarte la mejor asesoría técnica. ¿Tienes un momento para conversar?'
+  },
+  {
+    id: 'tpl-cotizacion',
+    titulo: 'Envío de Propuesta Comercial',
+    categoria: 'Ventas',
+    badge: 'Cotización',
+    icon: 'fa-file-invoice-dollar',
+    texto: 'Estimado(a) {{cliente}}, adjuntamos la propuesta comercial formal con las mejores condiciones y disponibilidad inmediata. Quedamos muy atentos a tus comentarios para proceder con la reserva.'
+  },
+  {
+    id: 'tpl-garantia',
+    titulo: 'Soporte Postventa & Garantía',
+    categoria: 'Soporte',
+    badge: 'Garantía',
+    icon: 'fa-shield-halved',
+    texto: 'Hola {{cliente}}, te informamos que tu solicitud de garantía y revisión técnica ha sido procesada exitosamente por nuestro departamento de calidad. Estamos atentos a tus indicaciones.'
+  },
+  {
+    id: 'tpl-cobro',
+    titulo: 'Recordatorio Amable de Cartera',
+    categoria: 'Cartera',
+    badge: 'Cobro',
+    icon: 'fa-receipt',
+    texto: 'Estimado(a) {{cliente}}, le recordamos cordialmente que su estado de cuenta presenta un saldo pendiente para conciliar. Agradecemos su confirmación de pago o soporte para actualizar su ficha en el sistema.'
+  },
+  {
+    id: 'tpl-despacho',
+    titulo: 'Confirmación de Despacho Logístico',
+    categoria: 'Logística',
+    badge: 'Entrega',
+    icon: 'fa-truck-fast',
+    texto: '¡Buenas noticias {{cliente}}! Tu pedido se encuentra programado para despacho. Si necesitas instrucciones especiales para la entrega, por favor respóndenos por este medio.'
+  }
+];
+
+// GET /api/whatsapp/templates - Obtener plantillas
+app.get('/api/whatsapp/templates', authenticateToken, async (req, res) => {
+  try {
+    const config = await prisma.whatsappConfig.findFirst();
+    let templates = DEFAULT_WHATSAPP_TEMPLATES;
+    if (config && config.templates) {
+      try {
+        const parsed = typeof config.templates === 'string' ? JSON.parse(config.templates) : config.templates;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          templates = parsed;
+        }
+      } catch (e) {}
+    }
+    res.json({ success: true, templates });
+  } catch (err) {
+    console.error('Error fetching WhatsApp templates:', err);
+    res.status(500).json({ error: 'Error al consultar plantillas' });
+  }
+});
+
+// POST /api/whatsapp/templates - Crear o actualizar plantilla
+app.post('/api/whatsapp/templates', authenticateToken, async (req, res) => {
+  try {
+    const { template } = req.body;
+    if (!template || !template.titulo || !template.texto) {
+      return res.status(400).json({ error: 'Título y texto son obligatorios' });
+    }
+
+    const config = await prisma.whatsappConfig.findFirst();
+    let currentTemplates = [...DEFAULT_WHATSAPP_TEMPLATES];
+    if (config && config.templates) {
+      try {
+        const parsed = typeof config.templates === 'string' ? JSON.parse(config.templates) : config.templates;
+        if (Array.isArray(parsed)) currentTemplates = parsed;
+      } catch (e) {}
+    }
+
+    const tplId = template.id || `tpl-${Date.now()}`;
+    const newTpl = {
+      id: tplId,
+      titulo: String(template.titulo).trim(),
+      categoria: String(template.categoria || 'General').trim(),
+      badge: String(template.badge || template.categoria || 'Plantilla').trim(),
+      icon: String(template.icon || 'fa-message').trim(),
+      texto: String(template.texto).trim(),
+      creadoPor: req.user?.user || 'Sistema',
+      actualizadoEn: new Date().toISOString()
+    };
+
+    const existingIdx = currentTemplates.findIndex(t => t.id === tplId);
+    if (existingIdx >= 0) {
+      currentTemplates[existingIdx] = newTpl;
+    } else {
+      currentTemplates.push(newTpl);
+    }
+
+    await prisma.whatsappConfig.upsert({
+      where: { id: 1 },
+      update: { templates: JSON.stringify(currentTemplates) },
+      create: { id: 1, phone: '573000000000', status: 'Activo', templates: JSON.stringify(currentTemplates) }
+    });
+
+    res.json({ success: true, template: newTpl, templates: currentTemplates });
+  } catch (err) {
+    console.error('Error saving WhatsApp template:', err);
+    res.status(500).json({ error: 'Error al guardar plantilla' });
+  }
+});
+
+// DELETE /api/whatsapp/templates/:id - Eliminar plantilla
+app.delete('/api/whatsapp/templates/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const config = await prisma.whatsappConfig.findFirst();
+    let currentTemplates = [...DEFAULT_WHATSAPP_TEMPLATES];
+    if (config && config.templates) {
+      try {
+        const parsed = typeof config.templates === 'string' ? JSON.parse(config.templates) : config.templates;
+        if (Array.isArray(parsed)) currentTemplates = parsed;
+      } catch (e) {}
+    }
+
+    currentTemplates = currentTemplates.filter(t => t.id !== id);
+
+    await prisma.whatsappConfig.upsert({
+      where: { id: 1 },
+      update: { templates: JSON.stringify(currentTemplates) },
+      create: { id: 1, phone: '573000000000', status: 'Activo', templates: JSON.stringify(currentTemplates) }
+    });
+
+    res.json({ success: true, templates: currentTemplates });
+  } catch (err) {
+    console.error('Error deleting WhatsApp template:', err);
+    res.status(500).json({ error: 'Error al eliminar plantilla' });
+  }
+});
+
+// POST /api/whatsapp/log - Registrar despacho de mensaje en bitácora
+app.post('/api/whatsapp/log', authenticateToken, async (req, res) => {
+  try {
+    const { telefono, contactoNombre, tipoContacto, mensaje, plantillaUsada } = req.body;
+    if (!telefono) {
+      return res.status(400).json({ error: 'El teléfono es requerido' });
+    }
+
+    let validUserId = req.user?.id;
+    if (!validUserId) {
+      const firstUser = await prisma.user.findFirst({ select: { id: true } });
+      validUserId = firstUser?.id;
+    }
+
+    const logEntry = {
+      id: `aud_wp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      userId: validUserId,
+      fecha: new Date(),
+      action: 'WHATSAPP_ENVIADO',
+      modulo: 'whatsapp_comercial',
+      recordDetails: JSON.stringify({
+        telefono: String(telefono).trim(),
+        destinatario: contactoNombre || 'Contacto directo',
+        tipoContacto: tipoContacto || 'Cliente',
+        plantilla: plantillaUsada || 'Manual',
+        mensaje: String(mensaje || '').trim(),
+        estado: 'Despachado a WhatsApp Web'
+      }),
+      shadowingData: {
+        telefono: String(telefono).trim(),
+        destinatario: contactoNombre || 'Contacto directo',
+        asesor: req.user?.user || 'Comercial',
+        fechaEnvio: new Date().toISOString()
+      },
+      hash: Buffer.from(`${Date.now()}_WHATSAPP_${telefono}`).toString('base64')
+    };
+
+    const createdAudit = await prisma.auditoria.create({
+      data: logEntry
+    });
+
+    res.json({ success: true, log: createdAudit });
+  } catch (err) {
+    console.error('Error logging WhatsApp message:', err);
+    res.status(500).json({ error: 'Error al registrar bitácora de WhatsApp' });
+  }
+});
+
+// GET /api/whatsapp/logs - Consultar historial de mensajes
+app.get('/api/whatsapp/logs', authenticateToken, async (req, res) => {
+  try {
+    const logs = await prisma.auditoria.findMany({
+      where: { modulo: 'whatsapp_comercial' },
+      orderBy: { fecha: 'desc' },
+      take: 50,
+      include: { user: { select: { id: true, user: true, nombre: true, apellido: true } } }
+    });
+    res.json({ success: true, logs });
+  } catch (err) {
+    console.error('Error fetching WhatsApp logs:', err);
+    res.status(500).json({ error: 'Error al consultar bitácora de WhatsApp' });
   }
 });
 
