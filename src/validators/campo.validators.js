@@ -139,7 +139,7 @@ const zonaComercialSchema = z.object({
   ciudad: z.string().optional().nullable(),
   departamento: z.string().optional().nullable(),
   descripcion: z.string().optional().nullable(),
-  colorHex: z.string().optional().default('#002060'),
+  colorHex: z.string().optional().default('#2563eb'),
   metaMensual: z.coerce.number().optional().default(0),
   activo: z.boolean().optional().default(true)
 });
