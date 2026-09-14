@@ -17,7 +17,8 @@ router.get('/jornada/activa', (req, res) => campoController.getJornadaActiva(req
 router.post('/tracking/ping', (req, res) => campoController.pingUbicacion(req, res));
 router.post('/tracking/batch', (req, res) => campoController.batchUbicaciones(req, res));
 router.get('/tracking/en-vivo', (req, res) => campoController.getUltimasUbicaciones(req, res));
-router.get('/tracking/historial/:usuarioId?', (req, res) => campoController.getHistorialRecorrido(req, res));
+router.get('/tracking/historial', (req, res) => campoController.getHistorialRecorrido(req, res));
+router.get('/tracking/historial/:usuarioId', (req, res) => campoController.getHistorialRecorrido(req, res));
 
 // 3. Visitas Comerciales y Técnicas
 router.post('/visitas/programar', (req, res) => campoController.programarVisita(req, res));
