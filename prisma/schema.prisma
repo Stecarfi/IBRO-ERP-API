@@ -69,6 +69,10 @@ model User {
   // Datos Adicionales
   codigoAsesor String?
 
+  // Roles Operativos y de Control en Campo
+  esComercialCampo   Boolean   @default(false)
+  esDelegadoGerencia Boolean   @default(false)
+
   // Relaciones Inversas
   ventas                Venta[]
   pqrs                  PQR[]                  @relation("PQRUsuario")
@@ -89,16 +93,18 @@ model User {
   capacitacionesCreadas Capacitacion[]         @relation("CapacitacionCreador")
 
   // Operaciones en Campo
-  jornadas              JornadaLaboral[]
-  visitasCampo          VisitaCampo[]
-  actividadesCampo      ActividadCampo[]       @relation("ActividadUsuario")
-  actividadesAsignadas  ActividadCampo[]       @relation("ActividadAsignadaPor")
-  evidenciasCampo       EvidenciaCampo[]       @relation("EvidenciaUsuario")
-  seguimientosCampo     SeguimientoCampo[]     @relation("SeguimientoUsuario")
-  asignacionesZona      AsignacionZona[]
-  metasCampo            MetaComercialCampo[]
-  prospectosCampo       ProspectoCampo[]       @relation("ProspectoVendedor")
-  ordenesServicioCampo  OrdenServicioCampo[]
+  jornadas                   JornadaLaboral[]
+  visitasCampo               VisitaCampo[]
+  actividadesCampo           ActividadCampo[]           @relation("ActividadUsuario")
+  actividadesAsignadas       ActividadCampo[]           @relation("ActividadAsignadaPor")
+  evidenciasCampo            EvidenciaCampo[]           @relation("EvidenciaUsuario")
+  seguimientosCampo          SeguimientoCampo[]         @relation("SeguimientoUsuario")
+  asignacionesZona           AsignacionZona[]
+  metasCampo                 MetaComercialCampo[]
+  prospectosCampo            ProspectoCampo[]           @relation("ProspectoVendedor")
+  ordenesServicioCampo       OrdenServicioCampo[]
+  evaluacionesCampoHechas    EvaluacionComercialCampo[] @relation("EvaluacionesCampoEvaluador")
+  evaluacionesCampoRecibidas EvaluacionComercialCampo[] @relation("EvaluacionesCampoEvaluado")
 }
 
 // 3. Clientes
@@ -713,6 +719,12 @@ model JornadaLaboral {
   dispositivo        String?
   totalVisitas       Int       @default(0)
   totalActividades   Int       @default(0)
+
+  // Trazabilidad Horaria y Asistencia
+  horaAlmuerzoInicio     DateTime?
+  horaAlmuerzoFin        DateTime?
+  retrasoMin             Int       @default(0)
+  cumplimientoHorarioPct Float     @default(100)
   
   // Métricas Consolidadas
   estado             String    @default("Iniciada") // "Iniciada" | "En Pausa" | "Finalizada" | "Cierre Automatico"
@@ -1049,6 +1061,38 @@ model SeguimientoCampo {
 
   @@index([clienteId, fechaHora])
   @@index([usuarioId, fechaHora])
+}
+
+// 34. Evaluaciones de Desempeño Comercial en Campo
+model EvaluacionComercialCampo {
+  id                    String    @id @default(uuid())
+  evaluadorId           String
+  evaluador             User      @relation("EvaluacionesCampoEvaluador", fields: [evaluadorId], references: [id])
+  usuarioId             String
+  usuario               User      @relation("EvaluacionesCampoEvaluado", fields: [usuarioId], references: [id])
+  periodo               String    // Formato "YYYY-MM"
+  fecha                 DateTime  @default(now())
+  grupoCargo            String    // "Dirección Comercial" | "Coordinador Comercial Externo" | "Asesor Comercial Externo"
+  calificacionGeneral   Float     // 0 a 100
+  estadoCumplimiento    String    // "No Cumple" | "Cumple Parcialmente" | "Cumple" | "Supera lo Esperado"
+  
+  // Detalle estructurado de indicadores (Grupo A 24 items, Grupo B/C 20 items)
+  indicadoresDetalle    Json
+  
+  // Síntesis Cualitativa
+  fortalezasGenerales    String?   @db.Text
+  debilidadesGenerales   String?   @db.Text
+  oportunidadesMejora    String?   @db.Text
+  planAccionGeneral      String?   @db.Text
+  fechaSeguimiento       DateTime?
+  aprobadoDelegado       Boolean   @default(true)
+  observacionesGenerales String?   @db.Text
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([usuarioId, periodo])
+  @@index([evaluadorId])
 }
 
 

@@ -6,6 +6,7 @@ const productividadService = require('../services/campo/productividad.service');
 const actividadesService = require('../services/campo/actividades.service');
 const evidenciasService = require('../services/campo/evidencias.service');
 const reportesService = require('../services/campo/reportes.service');
+const evaluacionesCampoService = require('../services/campo/evaluacionesCampo.service');
 const {
   iniciarJornadaSchema,
   pausaJornadaSchema,
@@ -22,9 +23,16 @@ const {
 } = require('../validators/campo.validators');
 
 class CampoController {
-  // Helper de auditoría
-  async registrarAuditoria(userId, action, recordDetails, shadowingData = null) {
+  // Helper de permisos del Delegado de Gerencia
+  esDelegado(user) {
+    if (!user) return false;
+    return String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin' || Boolean(user.esDelegadoGerencia);
+  }
+
+  // Helper de auditoría inmutable
+  async registrarAuditoria(userId, action, recordDetails, shadowingData = null, req = null) {
     try {
+      const ip = req?.ip || req?.headers?.['x-forwarded-for'] || '127.0.0.1';
       await prisma.auditoria.create({
         data: {
           userId,
@@ -32,7 +40,10 @@ class CampoController {
           action,
           modulo: 'operaciones_campo',
           recordDetails: typeof recordDetails === 'object' ? JSON.stringify(recordDetails) : String(recordDetails),
-          shadowingData,
+          shadowingData: {
+            ip,
+            ...(typeof shadowingData === 'object' && shadowingData !== null ? shadowingData : { meta: shadowingData })
+          },
           hash: Buffer.from(`${Date.now()}_${action}_${userId}`).toString('base64')
         }
       });
@@ -434,6 +445,152 @@ class CampoController {
     try {
       const result = await reportesService.generarReporte(req.user.id, req.query, req.user.role);
       res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- 9. DELEGADO DE GERENCIA Y EVALUACIÓN DE DESEMPEÑO COMERCIAL ---
+  async getDashboardDelegado(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Acceso restringido: Función exclusiva para el Delegado de Gerencia.' });
+      }
+      const data = await evaluacionesCampoService.getTableroDelegado(req.query.periodo);
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getIndicadoresComercial(req, res) {
+    try {
+      const requestedId = req.params.usuarioId || req.query.usuarioId;
+      let targetUserId = req.user.id;
+
+      if (this.esDelegado(req.user)) {
+        targetUserId = requestedId || req.user.id;
+      } else {
+        // Los cargos comerciales de campo (67, 68, 69) únicamente pueden consultar sus propios indicadores
+        if (requestedId && requestedId !== req.user.id) {
+          return res.status(403).json({ error: 'Acceso denegado: Solo puede visualizar sus propios indicadores comerciales.' });
+        }
+        targetUserId = req.user.id;
+      }
+
+      const data = await evaluacionesCampoService.calcularIndicadoresComercial(targetUserId, req.query.periodo);
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async guardarEvaluacion(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Operación denegada: Solo el Delegado de Gerencia tiene facultades para calificar y emitir evaluaciones.' });
+      }
+
+      const evaluacion = await evaluacionesCampoService.guardarEvaluacion(req.user.id, req.body);
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_EVALUACION_EMITIDA', {
+        evaluacionId: evaluacion.id,
+        usuarioEvaluadoId: req.body.usuarioId,
+        periodo: evaluacion.periodo,
+        calificacionGeneral: evaluacion.calificacionGeneral,
+        estadoCumplimiento: evaluacion.estadoCumplimiento
+      }, {
+        evaluadorNombre: `${req.user.nombre} ${req.user.apellido}`,
+        accion: 'Calificación y Aprobación de Indicadores'
+      }, req);
+
+      res.json({ success: true, evaluacion });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getHistorialEvaluaciones(req, res) {
+    try {
+      let requestedId = req.params.usuarioId || req.query.usuarioId;
+      if (requestedId === 'historial') requestedId = req.query.usuarioId || null;
+      let targetUserId = null;
+
+      if (this.esDelegado(req.user)) {
+        targetUserId = requestedId || null;
+      } else {
+        targetUserId = req.user.id;
+      }
+
+      const evaluaciones = await evaluacionesCampoService.getHistorialEvaluaciones(targetUserId, req.query.periodo);
+      res.json(evaluaciones);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getComercialesEnCampo(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Acceso restringido al Delegado de Gerencia.' });
+      }
+
+      const comerciales = await prisma.user.findMany({
+        where: {
+          OR: [
+            { esComercialCampo: true },
+            { roleId: { in: ['67', '68', '69'] } },
+            { cargo: { contains: 'comercial', mode: 'insensitive' } },
+            { cargo: { contains: 'asesor', mode: 'insensitive' } },
+            { cargo: { contains: 'coordinador', mode: 'insensitive' } },
+            { cargo: { contains: 'director', mode: 'insensitive' } }
+          ],
+          AND: [
+            { NOT: { roleId: '1' } },
+            { NOT: { esDelegadoGerencia: true } }
+          ]
+        },
+        select: {
+          id: true,
+          nombre: true,
+          apellido: true,
+          user: true,
+          cargo: true,
+          roleId: true,
+          codigoAsesor: true,
+          foto: true,
+          meta_p: true,
+          meta_u: true,
+          esComercialCampo: true,
+          role: { select: { id: true, name: true } }
+        },
+        orderBy: { nombre: 'asc' }
+      });
+
+      res.json(comerciales);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getAuditoriaCampo(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Acceso restringido a la auditoría del módulo.' });
+      }
+
+      const logs = await prisma.auditoria.findMany({
+        where: { modulo: 'operaciones_campo' },
+        include: {
+          user: {
+            select: { id: true, nombre: true, apellido: true, cargo: true, user: true, roleId: true }
+          }
+        },
+        orderBy: { fecha: 'desc' },
+        take: 200
+      });
+
+      res.json(logs);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -29,6 +29,10 @@ class JornadaService {
       dispositivo = 'Web / Móvil'
     } = data;
 
+    const ahora = new Date();
+    const minDesdeMedianoche = ahora.getHours() * 60 + ahora.getMinutes();
+    const retrasoMin = minDesdeMedianoche > 480 ? minDesdeMedianoche - 480 : 0; // 08:00 AM
+
     const nuevaJornada = await prisma.jornadaLaboral.create({
       data: {
         usuarioId,
@@ -40,8 +44,10 @@ class JornadaService {
         bateriaInicio: bateriaInicio ? parseInt(bateriaInicio) : null,
         dispositivo,
         estado: 'Iniciada',
-        horaInicio: new Date(),
-        fecha: new Date()
+        horaInicio: ahora,
+        fecha: ahora,
+        retrasoMin,
+        cumplimientoHorarioPct: 100
       }
     });
 
@@ -82,9 +88,13 @@ class JornadaService {
       }
     });
 
+    const esAlmuerzo = String(tipo).toLowerCase().includes('almuerzo');
     await prisma.jornadaLaboral.update({
       where: { id: jornadaId },
-      data: { estado: 'En Pausa' }
+      data: {
+        estado: 'En Pausa',
+        ...(esAlmuerzo ? { horaAlmuerzoInicio: new Date() } : {})
+      }
     });
 
     return { success: true, pausa };
@@ -116,9 +126,13 @@ class JornadaService {
       }
     });
 
+    const esAlmuerzo = String(pausa.tipo).toLowerCase().includes('almuerzo');
     const jornadaActualizada = await prisma.jornadaLaboral.update({
       where: { id: pausa.jornadaId },
-      data: { estado: 'Iniciada' }
+      data: {
+        estado: 'Iniciada',
+        ...(esAlmuerzo ? { horaAlmuerzoFin: ahora } : {})
+      }
     });
 
     return { success: true, jornada: jornadaActualizada };
@@ -212,6 +226,9 @@ class JornadaService {
       });
     } catch (e) {}
 
+    const tiempoTrabajadoNeto = Math.max(0, tiempoTotalMin - (jornada.retrasoMin || 0));
+    const cumplimientoHorarioPct = Math.min(100, Math.max(0, Math.round((tiempoTrabajadoNeto / 480) * 100)));
+
     const jornadaCerrada = await prisma.jornadaLaboral.update({
       where: { id: jornadaId },
       data: {
@@ -227,10 +244,10 @@ class JornadaService {
         tiempoEfectivoMin,
         tiempoDetenidoMin,
         tiempoTransitoMin,
-        distanciaKm,
-        totalVisitas,
-        totalActividades,
-        observaciones
+        distanciaKm: Number((distanciaTotalM / 1000).toFixed(2)),
+        totalVisitas: jornada.visitas.length,
+        observaciones,
+        cumplimientoHorarioPct
       }
     });
 

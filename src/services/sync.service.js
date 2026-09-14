@@ -18,7 +18,8 @@ class SyncService {
         ejec_p: true, soundsEnabled: true, cumpleanos: true,
         habeasDataAccepted: true, failedLoginAttempts: true, isLocked: true,
         lastLogin: true, isOnline: true, foto: true, firma: true, lat: true, lng: true,
-        lastLocationUpdate: true, codigoAsesor: true
+        lastLocationUpdate: true, codigoAsesor: true,
+        esComercialCampo: true, esDelegadoGerencia: true
       },
       orderBy: { id: 'asc' }
     });

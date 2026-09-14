@@ -212,7 +212,8 @@ const PRISMA_ALLOWED_FIELDS = {
     'id', 'nombre', 'apellido', 'cedula', 'tipoDoc', 'correo', 'cargo', 'telefono',
     'observaciones', 'user', 'pass', 'roleId', 'meta_u', 'ejec_u', 'meta_p',
     'ejec_p', 'soundsEnabled', 'cumpleanos', 'habeasDataAccepted', 'failedLoginAttempts',
-    'isLocked', 'lastLogin', 'isOnline', 'foto', 'firma', 'lat', 'lng', 'lastLocationUpdate', 'codigoAsesor'
+    'isLocked', 'lastLogin', 'isOnline', 'foto', 'firma', 'lat', 'lng', 'lastLocationUpdate', 'codigoAsesor',
+    'esComercialCampo', 'esDelegadoGerencia'
   ],
 
   whatsappConfig: [
@@ -230,7 +231,8 @@ const PRISMA_ALLOWED_FIELDS = {
     'direccionInicio', 'fotoInicio', 'odometroInicio', 'bateriaInicio',
     'horaFin', 'latFin', 'lngFin', 'direccionFin', 'fotoFin', 'odometroFin',
     'bateriaFin', 'estado', 'tiempoTotalMin', 'tiempoEfectivoMin',
-    'tiempoDetenidoMin', 'tiempoTransitoMin', 'distanciaKm', 'observaciones'
+    'tiempoDetenidoMin', 'tiempoTransitoMin', 'distanciaKm', 'observaciones',
+    'horaAlmuerzoInicio', 'horaAlmuerzoFin', 'retrasoMin', 'cumplimientoHorarioPct'
   ],
 
   pausaJornada: [
@@ -284,6 +286,14 @@ const PRISMA_ALLOWED_FIELDS = {
   metaComercialCampo: [
     'id', 'usuarioId', 'periodo', 'metaVentas', 'metaVisitas', 'metaProspectos',
     'metaCotiz', 'ejecVentas', 'ejecVisitas', 'ejecProspectos', 'ejecCotiz', 'cumplimiento'
+  ],
+
+  evaluacionComercialCampo: [
+    'id', 'evaluadorId', 'usuarioId', 'periodo', 'fecha', 'grupoCargo',
+    'calificacionGeneral', 'estadoCumplimiento', 'indicadoresDetalle',
+    'fortalezasGenerales', 'debilidadesGenerales', 'oportunidadesMejora',
+    'planAccionGeneral', 'fechaSeguimiento', 'aprobadoDelegado',
+    'observacionesGenerales', 'createdAt', 'updatedAt'
   ]
 };
 
@@ -328,6 +338,9 @@ const TABLE_TO_MODEL = {
   jornadaLaboral: 'jornadaLaboral',
   jornadasLaborales: 'jornadaLaboral',
   jornadas: 'jornadaLaboral',
+  evaluacionComercialCampo: 'evaluacionComercialCampo',
+  evaluacionesComercialCampo: 'evaluacionComercialCampo',
+  evaluacionesCampo: 'evaluacionComercialCampo',
   pausaJornada: 'pausaJornada',
   pausasJornada: 'pausaJornada',
   rastreoUbicacion: 'rastreoUbicacion',

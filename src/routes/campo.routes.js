@@ -58,4 +58,15 @@ router.get('/seguimientos', (req, res) => campoController.getSeguimientos(req, r
 router.get('/reportes', (req, res) => campoController.getReportes(req, res));
 router.get('/reportes/resumen', (req, res) => campoController.getReportes(req, res));
 
+// 11. Delegado de Gerencia, Indicadores y Evaluaciones
+router.get('/delegado/dashboard', (req, res) => campoController.getDashboardDelegado(req, res));
+router.get('/indicadores', (req, res) => campoController.getIndicadoresComercial(req, res));
+router.get('/indicadores/:usuarioId', (req, res) => campoController.getIndicadoresComercial(req, res));
+router.post('/evaluaciones', (req, res) => campoController.guardarEvaluacion(req, res));
+router.get('/evaluaciones', (req, res) => campoController.getHistorialEvaluaciones(req, res));
+router.get('/evaluaciones/historial', (req, res) => campoController.getHistorialEvaluaciones(req, res));
+router.get('/evaluaciones/:usuarioId', (req, res) => campoController.getHistorialEvaluaciones(req, res));
+router.get('/comerciales', (req, res) => campoController.getComercialesEnCampo(req, res));
+router.get('/auditoria', (req, res) => campoController.getAuditoriaCampo(req, res));
+
 module.exports = router;
