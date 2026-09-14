@@ -26,6 +26,8 @@ class CampoController {
   // Helper de permisos del Delegado de Gerencia
   esDelegado(user) {
     if (!user) return false;
+    // Roles comerciales de campo (67: Dirección Comercial, 68: Coordinador Comercial, 69: Asesor) NO son supervisores ni evaluadores
+    if (['67', '68', '69'].includes(String(user.roleId))) return false;
     return String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin' || Boolean(user.esDelegadoGerencia);
   }
 

@@ -57,11 +57,16 @@ class AuthService {
             });
         }
 
-        const token = jwt.sign(
-            { id: dbUser.id, user: dbUser.user, roleId: dbUser.roleId },
-            JWT_SECRET,
-            { expiresIn: '15m' }
-        );
+        const tokenPayload = {
+            id: dbUser.id,
+            user: dbUser.user,
+            roleId: dbUser.roleId,
+            cargo: dbUser.cargo || '',
+            esComercialCampo: Boolean(dbUser.esComercialCampo),
+            esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
+        };
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '15m' });
 
         const refreshToken = jwt.sign(
             { id: dbUser.id, user: dbUser.user },
@@ -113,11 +118,16 @@ class AuthService {
             throw new Error('INVALID_REFRESH_TOKEN');
         }
 
-        const token = jwt.sign(
-            { id: dbUser.id, user: dbUser.user, roleId: dbUser.roleId },
-            JWT_SECRET,
-            { expiresIn: '15m' }
-        );
+        const tokenPayload = {
+            id: dbUser.id,
+            user: dbUser.user,
+            roleId: dbUser.roleId,
+            cargo: dbUser.cargo || '',
+            esComercialCampo: Boolean(dbUser.esComercialCampo),
+            esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
+        };
+
+        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '15m' });
 
         return token;
     }
