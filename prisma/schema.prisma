@@ -584,9 +584,10 @@ model Comisionista {
 
 // 17. WhatsApp Configuración (Objeto único)
 model WhatsappConfig {
-  id     Int    @id @default(1)
-  phone  String @default("573000000000")
-  status String @default("Activo")
+  id        Int     @id @default(1)
+  phone     String  @default("573000000000")
+  status    String  @default("Activo")
+  templates String?
 }
 
 // 18. Restablecimientos de contraseña pendientes

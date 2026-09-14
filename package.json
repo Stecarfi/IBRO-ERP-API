@@ -5,10 +5,10 @@
   "main": "index.js",
   "private": true,
   "scripts": {
-    "start": "npx prisma generate && npx prisma db push && node src/temp-reset.js && node src/index.js",
+    "start": "npx prisma generate && npx prisma db push --accept-data-loss && node src/temp-reset.js && node src/index.js",
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
-    "migrate": "npx prisma generate && npx prisma db push",
+    "migrate": "npx prisma generate && npx prisma db push --accept-data-loss",
     "build": "prisma generate"
   },
   "keywords": ["erp", "ibro", "backend"],
