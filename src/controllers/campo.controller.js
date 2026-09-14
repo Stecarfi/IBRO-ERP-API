@@ -3,6 +3,9 @@ const jornadaService = require('../services/campo/jornada.service');
 const trackingService = require('../services/campo/tracking.service');
 const visitasService = require('../services/campo/visitas.service');
 const productividadService = require('../services/campo/productividad.service');
+const actividadesService = require('../services/campo/actividades.service');
+const evidenciasService = require('../services/campo/evidencias.service');
+const reportesService = require('../services/campo/reportes.service');
 const {
   iniciarJornadaSchema,
   pausaJornadaSchema,
@@ -332,6 +335,107 @@ class CampoController {
       res.json({ success: true, zona });
     } catch (err) {
       res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+    }
+  }
+
+  // --- 3. ACTIVIDADES DEL DÍA ---
+  async getActividades(req, res) {
+    try {
+      const result = await actividadesService.listarActividades(req.user.id, req.query, req.user.role);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async crearActividad(req, res) {
+    try {
+      const result = await actividadesService.crearActividad(req.user.id, req.body);
+      if (!result.success) return res.status(400).json(result);
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_ACTIVIDAD_CREAR', {
+        actividadId: result.actividad.id,
+        titulo: req.body.titulo
+      });
+
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async actualizarEstadoActividad(req, res) {
+    try {
+      const { id } = req.params;
+      const result = await actividadesService.actualizarEstado(req.user.id, id, req.body);
+      if (!result.success) return res.status(400).json(result);
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_ACTIVIDAD_ESTADO', {
+        actividadId: id,
+        nuevoEstado: req.body.estado
+      });
+
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async agregarComentarioActividad(req, res) {
+    try {
+      const { id } = req.params;
+      const result = await actividadesService.agregarComentario(req.user.id, id, req.body.texto);
+      if (!result.success) return res.status(400).json(result);
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // --- 4. EVIDENCIAS MULTIMEDIA ---
+  async getEvidencias(req, res) {
+    try {
+      const result = await evidenciasService.listarEvidencias(req.user.id, req.query, req.user.role);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async registrarEvidencia(req, res) {
+    try {
+      const result = await evidenciasService.registrarEvidencia(req.user.id, req.body);
+      if (!result.success) return res.status(400).json(result);
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_EVIDENCIA_CARGAR', {
+        evidenciaId: result.evidencia.id,
+        tipo: req.body.tipo,
+        visitaId: req.body.visitaId
+      });
+
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // --- 5. SEGUIMIENTO CONTINUO ---
+  async getSeguimientos(req, res) {
+    try {
+      const result = await evidenciasService.listarSeguimientos(req.user.id, req.query, req.user.role);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- 8. REPORTES OPERATIVOS CONSOLIDADOS ---
+  async getReportes(req, res) {
+    try {
+      const result = await reportesService.generarReporte(req.user.id, req.query, req.user.role);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   }
 }

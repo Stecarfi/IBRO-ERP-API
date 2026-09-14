@@ -91,6 +91,10 @@ model User {
   // Operaciones en Campo
   jornadas              JornadaLaboral[]
   visitasCampo          VisitaCampo[]
+  actividadesCampo      ActividadCampo[]       @relation("ActividadUsuario")
+  actividadesAsignadas  ActividadCampo[]       @relation("ActividadAsignadaPor")
+  evidenciasCampo       EvidenciaCampo[]       @relation("EvidenciaUsuario")
+  seguimientosCampo     SeguimientoCampo[]     @relation("SeguimientoUsuario")
   asignacionesZona      AsignacionZona[]
   metasCampo            MetaComercialCampo[]
   prospectosCampo       ProspectoCampo[]       @relation("ProspectoVendedor")
@@ -152,11 +156,12 @@ model Cliente {
   adjuntos                 Json?
 
   // Relaciones inversas
-  ventas       Venta[]
-  cotizaciones Cotizacion[]
-  pqrs         PQR[]
-  servicios    Servicio[]
-  visitasCampo VisitaCampo[]
+  ventas            Venta[]
+  cotizaciones      Cotizacion[]
+  pqrs              PQR[]
+  servicios         Servicio[]
+  visitasCampo      VisitaCampo[]
+  seguimientosCampo SeguimientoCampo[]
 
   @@index([doc])
   @@index([nom])
@@ -705,6 +710,9 @@ model JornadaLaboral {
   fotoFin            String?
   odometroFin        Float?
   bateriaFin         Int?
+  dispositivo        String?
+  totalVisitas       Int       @default(0)
+  totalActividades   Int       @default(0)
   
   // Métricas Consolidadas
   estado             String    @default("Iniciada") // "Iniciada" | "En Pausa" | "Finalizada" | "Cierre Automatico"
@@ -720,6 +728,8 @@ model JornadaLaboral {
   pausas             PausaJornada[]
   ubicaciones        RastreoUbicacion[]
   visitas            VisitaCampo[]
+  actividades        ActividadCampo[]
+  evidencias         EvidenciaCampo[]
   ordenesServicio    OrdenServicioCampo[]
 
   @@index([usuarioId, fecha])
@@ -834,6 +844,7 @@ model ProspectoCampo {
   fechaCreacion    DateTime      @default(now())
   
   visitas          VisitaCampo[]
+  seguimientos     SeguimientoCampo[]
 
   @@index([creadoPorId])
   @@index([etapa])
@@ -875,24 +886,34 @@ model VisitaCampo {
   duracionMin        Int             @default(0)
   
   // Resultados y Compromisos
-  motivoNoEfectiva   String?
-  contactoAtendio    String?
-  resultadoResumen   String?         @db.Text
-  compromisos        String?         @db.Text
-  proximaVisita      DateTime?
-  firmaCliente       String?         // URL o datauri de firma digital
+  motivoNoEfectiva       String?
+  contactoAtendio        String?
+  resultadoResumen       String?         @db.Text
+  resultadoVisita        String?
+  observaciones          String?         @db.Text
+  actividadesRealizadas  String?         @db.Text
+  hallazgos              String?         @db.Text
+  compromisosAdquiridos  String?         @db.Text
+  situacionesObservadas  String?         @db.Text
+  recomendaciones        String?         @db.Text
+  compromisos            String?         @db.Text
+  proximaVisita          DateTime?
+  firmaCliente           String?         // URL o datauri de firma digital
   
   // Documentos ERP Asociados
-  cotizacionId       String?
-  cotizacion         Cotizacion?     @relation(fields: [cotizacionId], references: [id])
-  ventaId            String?
-  venta              Venta?          @relation(fields: [ventaId], references: [id])
-  servicioId         String?
-  servicio           Servicio?       @relation(fields: [servicioId], references: [id])
+  cotizacionId           String?
+  cotizacion             Cotizacion?     @relation(fields: [cotizacionId], references: [id])
+  ventaId                String?
+  venta                  Venta?          @relation(fields: [ventaId], references: [id])
+  servicioId             String?
+  servicio               Servicio?       @relation(fields: [servicioId], references: [id])
 
-  evidencias         Json?           // URLs de fotografías tomadas en sitio
+  evidencias             Json?           // URLs de fotografías tomadas en sitio
+  evidenciasRelacionadas EvidenciaCampo[]
+  seguimientos           SeguimientoCampo[]
+  actividades            ActividadCampo[]
 
-  createdAt          DateTime        @default(now())
+  createdAt              DateTime        @default(now())
 
   @@index([usuarioId, fechaProgramada])
   @@index([estado])
@@ -948,4 +969,86 @@ model MetaComercialCampo {
 
   @@unique([usuarioId, periodo])
 }
+
+// 31. Actividades del Día en Campo
+model ActividadCampo {
+  id                String          @id @default(uuid())
+  codigo            String          @unique
+  usuarioId         String
+  usuario           User            @relation("ActividadUsuario", fields: [usuarioId], references: [id])
+  asignadoPorId     String?
+  asignadoPor       User?           @relation("ActividadAsignadaPor", fields: [asignadoPorId], references: [id])
+  jornadaId         String?
+  jornada           JornadaLaboral? @relation(fields: [jornadaId], references: [id])
+  visitaId          String?
+  visita            VisitaCampo?    @relation(fields: [visitaId], references: [id])
+  
+  titulo            String
+  descripcion       String?         @db.Text
+  prioridad         String          @default("Normal") // "Alta" | "Media" | "Normal" | "Urgente"
+  fechaProgramada   DateTime
+  horaEstimada      String?
+  estado            String          @default("Pendiente") // "Pendiente" | "En ejecucion" | "Finalizada" | "Reprogramada"
+  fechaFinalizacion DateTime?
+  
+  comentarios       Json?           // [{ fecha, usuario, texto }]
+  evidencias        Json?           // [{ url, tipo, fecha, lat, lng }]
+  evidenciasCampo   EvidenciaCampo[]
+  createdAt         DateTime        @default(now())
+
+  @@index([usuarioId, fechaProgramada])
+  @@index([estado])
+}
+
+// 32. Evidencias Multimedia de Campo
+model EvidenciaCampo {
+  id            String          @id @default(uuid())
+  usuarioId     String
+  usuario       User            @relation("EvidenciaUsuario", fields: [usuarioId], references: [id])
+  jornadaId     String?
+  jornada       JornadaLaboral? @relation(fields: [jornadaId], references: [id])
+  visitaId      String?
+  visita        VisitaCampo?    @relation(fields: [visitaId], references: [id])
+  actividadId   String?
+  actividad     ActividadCampo? @relation(fields: [actividadId], references: [id])
+  
+  tipo          String          // "Fotografia" | "Video" | "Documento" | "PDF" | "Audio"
+  url           String
+  nombreArchivo String
+  tamanoBytes   Int?
+  lat           Float?
+  lng           Float?
+  direccion     String?
+  fechaHora     DateTime        @default(now())
+  observaciones String?         @db.Text
+
+  @@index([usuarioId, fechaHora])
+  @@index([visitaId])
+  @@index([actividadId])
+}
+
+// 33. Historial y Seguimiento Continuo de Clientes en Campo
+model SeguimientoCampo {
+  id               String          @id @default(uuid())
+  visitaId         String?
+  visita           VisitaCampo?    @relation(fields: [visitaId], references: [id])
+  clienteId        String?
+  cliente          Cliente?        @relation(fields: [clienteId], references: [id])
+  prospectoId      String?
+  prospecto        ProspectoCampo? @relation(fields: [prospectoId], references: [id])
+  usuarioId        String
+  usuario          User            @relation("SeguimientoUsuario", fields: [usuarioId], references: [id])
+  
+  fechaHora        DateTime        @default(now())
+  resultado        String
+  observaciones    String          @db.Text
+  compromisos      String?         @db.Text
+  proximaActividad String?
+  fechaProgramada  DateTime?
+  evidencias       Json?
+
+  @@index([clienteId, fechaHora])
+  @@index([usuarioId, fechaHora])
+}
+
 

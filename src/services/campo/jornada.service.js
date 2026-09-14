@@ -25,7 +25,8 @@ class JornadaService {
       direccionInicio = '',
       fotoInicio = null,
       odometroInicio = null,
-      bateriaInicio = null
+      bateriaInicio = null,
+      dispositivo = 'Web / Móvil'
     } = data;
 
     const nuevaJornada = await prisma.jornadaLaboral.create({
@@ -37,8 +38,10 @@ class JornadaService {
         fotoInicio,
         odometroInicio: odometroInicio ? parseFloat(odometroInicio) : null,
         bateriaInicio: bateriaInicio ? parseInt(bateriaInicio) : null,
+        dispositivo,
         estado: 'Iniciada',
-        horaInicio: new Date()
+        horaInicio: new Date(),
+        fecha: new Date()
       }
     });
 
@@ -149,6 +152,15 @@ class JornadaService {
       return { success: false, error: 'Jornada no encontrada o usuario no autorizado' };
     }
 
+    // 1. VALIDACIÓN OBLIGATORIA: No permitir finalizar la jornada si existen visitas abiertas
+    const visitasAbiertas = (jornada.visitas || []).filter(v => v.estado === 'En Curso' || (v.checkInHora && !v.checkOutHora));
+    if (visitasAbiertas.length > 0) {
+      return {
+        success: false,
+        error: `No es posible finalizar la jornada laboral porque tiene ${visitasAbiertas.length} visita(s) en curso abiertas. Debe registrar el resultado y finalizar cada visita antes de cerrar su turno.`
+      };
+    }
+
     const horaFin = new Date();
     const tiempoTotalMin = Math.round((horaFin - new Date(jornada.horaInicio)) / 60000);
 
@@ -180,6 +192,26 @@ class JornadaService {
     const tiempoTransitoMin = Math.max(0, Math.round(distanciaKm * 3.5)); // ~17 km/h promedio en ciudad
     const tiempoDetenidoMin = Math.max(0, tiempoTotalMin - (tiempoEfectivoMin + tiempoPausasMin + tiempoTransitoMin));
 
+    // Contabilizar totales ejecutados
+    const totalVisitas = jornada.visitas.length;
+    let totalActividades = 0;
+    try {
+      totalActividades = await prisma.actividadCampo.count({
+        where: {
+          usuarioId,
+          OR: [
+            { jornadaId },
+            {
+              createdAt: {
+                gte: new Date(new Date(jornada.horaInicio).setHours(0, 0, 0, 0)),
+                lte: horaFin
+              }
+            }
+          ]
+        }
+      });
+    } catch (e) {}
+
     const jornadaCerrada = await prisma.jornadaLaboral.update({
       where: { id: jornadaId },
       data: {
@@ -196,6 +228,8 @@ class JornadaService {
         tiempoDetenidoMin,
         tiempoTransitoMin,
         distanciaKm,
+        totalVisitas,
+        totalActividades,
         observaciones
       }
     });

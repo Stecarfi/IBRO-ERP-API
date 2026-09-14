@@ -174,6 +174,14 @@ class VisitasService {
       lat,
       lng,
       resultadoResumen,
+      resultadoVisita,
+      observaciones,
+      actividadesRealizadas,
+      hallazgos,
+      compromisosAdquiridos,
+      situacionesObservadas,
+      recomendaciones,
+      proximaActividad,
       compromisos = '',
       proximaVisita = null,
       contactoAtendio = '',
@@ -183,6 +191,14 @@ class VisitasService {
       cotizacionId = null,
       ventaId = null
     } = data;
+
+    const obsText = (observaciones || resultadoResumen || '').trim();
+    if (!obsText) {
+      return {
+        success: false,
+        error: 'Las observaciones son obligatorias para finalizar la visita. Registre las actividades realizadas, hallazgos, compromisos o recomendaciones.'
+      };
+    }
 
     const visita = await prisma.visitaCampo.findUnique({ where: { id: visitaId } });
     if (!visita || visita.usuarioId !== usuarioId) {
@@ -194,6 +210,7 @@ class VisitasService {
     const duracionMin = Math.max(1, Math.round((checkOutHora - inicio) / 60000));
 
     const estadoFinal = motivoNoEfectiva ? 'No Efectiva' : 'Realizada';
+    const resultadoFinal = resultadoVisita || (motivoNoEfectiva ? 'Cliente no encontrado' : 'Visita realizada exitosamente');
 
     const visitaFinalizada = await prisma.visitaCampo.update({
       where: { id: visitaId },
@@ -203,8 +220,15 @@ class VisitasService {
         checkOutLat: parseFloat(lat),
         checkOutLng: parseFloat(lng),
         duracionMin,
-        resultadoResumen,
-        compromisos,
+        resultadoResumen: obsText,
+        resultadoVisita: resultadoFinal,
+        observaciones: obsText,
+        actividadesRealizadas: actividadesRealizadas || null,
+        hallazgos: hallazgos || null,
+        compromisosAdquiridos: compromisosAdquiridos || compromisos || null,
+        situacionesObservadas: situacionesObservadas || null,
+        recomendaciones: recomendaciones || null,
+        compromisos: compromisosAdquiridos || compromisos,
         proximaVisita: proximaVisita ? new Date(proximaVisita) : null,
         contactoAtendio,
         firmaCliente,
@@ -218,6 +242,26 @@ class VisitasService {
         prospecto: true
       }
     });
+
+    // Registrar historial de seguimiento permanente
+    try {
+      await prisma.seguimientoCampo.create({
+        data: {
+          visitaId,
+          clienteId: visita.clienteId,
+          prospectoId: visita.prospectoId,
+          usuarioId,
+          resultado: resultadoFinal,
+          observaciones: obsText,
+          compromisos: compromisosAdquiridos || compromisos || null,
+          proximaActividad: proximaActividad || null,
+          fechaProgramada: proximaVisita ? new Date(proximaVisita) : null,
+          evidencias: Array.isArray(evidencias) ? evidencias : []
+        }
+      });
+    } catch (segErr) {
+      console.warn('[Seguimiento Auto Error]', segErr.message);
+    }
 
     // Si generó próxima visita sugerida, agendarla automáticamente
     if (proximaVisita) {

@@ -41,4 +41,21 @@ router.post('/geocercas', (req, res) => campoController.crearGeocerca(req, res))
 router.get('/zonas', (req, res) => campoController.getZonas(req, res));
 router.post('/zonas', (req, res) => campoController.crearZona(req, res));
 
+// 7. Actividades del Día
+router.get('/actividades', (req, res) => campoController.getActividades(req, res));
+router.post('/actividades', (req, res) => campoController.crearActividad(req, res));
+router.put('/actividades/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
+router.post('/actividades/:id/comentarios', (req, res) => campoController.agregarComentarioActividad(req, res));
+
+// 8. Evidencias Multimedia
+router.get('/evidencias', (req, res) => campoController.getEvidencias(req, res));
+router.post('/evidencias', (req, res) => campoController.registrarEvidencia(req, res));
+
+// 9. Historial y Seguimiento Continuo
+router.get('/seguimientos', (req, res) => campoController.getSeguimientos(req, res));
+
+// 10. Reportes Consolidados de Personal en Campo
+router.get('/reportes', (req, res) => campoController.getReportes(req, res));
+router.get('/reportes/resumen', (req, res) => campoController.getReportes(req, res));
+
 module.exports = router;
