@@ -597,6 +597,595 @@ class CampoController {
       res.status(500).json({ error: err.message });
     }
   }
+
+  // --- SEGUIMIENTO COMERCIAL MANUAL ---
+  async crearSeguimiento(req, res) {
+    try {
+      const {
+        clienteId,
+        prospectoId,
+        visitaId,
+        resultado,
+        observaciones = '',
+        compromisos = '',
+        proximaActividad = null,
+        fechaProgramada = null
+      } = req.body;
+
+      if (!observaciones && !compromisos && !resultado) {
+        return res.status(400).json({ error: 'Debe especificar al menos un resultado, observación o compromiso.' });
+      }
+
+      const nuevoSeguimiento = await prisma.seguimientoCampo.create({
+        data: {
+          usuarioId: req.user.id,
+          clienteId: clienteId || null,
+          prospectoId: prospectoId || null,
+          visitaId: visitaId || null,
+          resultado: resultado || 'Seguimiento registrado',
+          observaciones: observaciones || compromisos || 'Seguimiento comercial',
+          compromisos: compromisos || null,
+          proximaActividad: proximaActividad || null,
+          fechaProgramada: fechaProgramada ? new Date(fechaProgramada) : null
+        },
+        include: {
+          cliente: true,
+          prospecto: true,
+          usuario: { select: { id: true, nombre: true, apellido: true } }
+        }
+      });
+
+      // Si se definió próxima fecha programada, crear la actividad de seguimiento
+      if (fechaProgramada) {
+        const count = await prisma.actividadCampo.count();
+        await prisma.actividadCampo.create({
+          data: {
+            codigo: `ACT-${String(count + 1).padStart(5, '0')}`,
+            usuarioId: req.user.id,
+            asignadoPorId: req.user.id,
+            titulo: `Seguimiento: ${proximaActividad || 'Contacto Comercial'}`,
+            descripcion: compromisos || observaciones,
+            prioridad: 'Normal',
+            fechaProgramada: new Date(fechaProgramada),
+            estado: 'Pendiente'
+          }
+        });
+      }
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_SEGUIMIENTO_CREADO', {
+        seguimientoId: nuevoSeguimiento.id,
+        clienteId
+      });
+
+      res.json({ success: true, seguimiento: nuevoSeguimiento });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // --- GESTIÓN AVANZADA DE ACTIVIDADES Y TAREAS ---
+  async modificarActividad(req, res) {
+    try {
+      const { id } = req.params;
+      const { titulo, descripcion, prioridad, fechaProgramada, horaEstimada, usuarioId, estado } = req.body;
+
+      const actExistente = await prisma.actividadCampo.findUnique({ where: { id } });
+      if (!actExistente) {
+        return res.status(404).json({ error: 'Actividad / Tarea no encontrada' });
+      }
+
+      const esAdminODelegado = this.esDelegado(req.user);
+      if (!esAdminODelegado && actExistente.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No tiene permisos para modificar esta actividad.' });
+      }
+
+      const updateData = {};
+      if (titulo !== undefined) updateData.titulo = titulo.trim();
+      if (descripcion !== undefined) updateData.descripcion = descripcion.trim();
+      if (prioridad !== undefined) updateData.prioridad = prioridad;
+      if (fechaProgramada !== undefined) updateData.fechaProgramada = new Date(fechaProgramada);
+      if (horaEstimada !== undefined) updateData.horaEstimada = horaEstimada;
+      if (estado !== undefined) {
+        updateData.estado = estado;
+        if (estado === 'Finalizada') updateData.fechaFinalizacion = new Date();
+      }
+      if (usuarioId !== undefined && esAdminODelegado) {
+        updateData.usuarioId = usuarioId;
+      }
+
+      const actividadActualizada = await prisma.actividadCampo.update({
+        where: { id },
+        data: updateData,
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true } },
+          asignadoPor: { select: { id: true, nombre: true, apellido: true } }
+        }
+      });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_ACTIVIDAD_MODIFICADA', {
+        actividadId: id,
+        camposModificados: Object.keys(updateData)
+      });
+
+      res.json({ success: true, actividad: actividadActualizada });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarActividad(req, res) {
+    try {
+      const { id } = req.params;
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar actividades/tareas asignadas.' });
+      }
+
+      await prisma.actividadCampo.delete({ where: { id } });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_ACTIVIDAD_ELIMINADA', { actividadId: id });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // --- ASIGNACIÓN DE RUTAS ---
+  async asignarRuta(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Acceso restringido: Solo el Delegado de Gerencia puede asignar rutas.' });
+      }
+
+      const {
+        nombreRuta,
+        zonaId,
+        usuarioId,
+        fecha,
+        prioridad = 'Alta',
+        clientesIds = [],
+        instrucciones = ''
+      } = req.body;
+
+      if (!usuarioId) return res.status(400).json({ error: 'Debe seleccionar un comercial responsable para la ruta.' });
+      if (!fecha) return res.status(400).json({ error: 'Debe especificar la fecha de la ruta.' });
+      if (!Array.isArray(clientesIds) || clientesIds.length === 0) {
+        return res.status(400).json({ error: 'Debe seleccionar al menos un cliente para la ruta.' });
+      }
+
+      const fechaRuta = new Date(fecha);
+      const countAct = await prisma.actividadCampo.count();
+      const codigoRuta = `RUT-${String(countAct + 1).padStart(5, '0')}`;
+
+      // 1. Crear actividad matriz de la ruta
+      const actividadRuta = await prisma.actividadCampo.create({
+        data: {
+          codigo: codigoRuta,
+          usuarioId,
+          asignadoPorId: req.user.id,
+          titulo: `Ruta: ${nombreRuta || 'Ruta Comercial'}`,
+          descripcion: `Instrucciones del Delegado: ${instrucciones}\nClientes asignados: ${clientesIds.length} paradas.`,
+          prioridad,
+          fechaProgramada: fechaRuta,
+          estado: 'Pendiente',
+          comentarios: [
+            {
+              fecha: new Date(),
+              usuario: `${req.user.nombre} ${req.user.apellido}`,
+              texto: `Ruta asignada con ${clientesIds.length} clientes por el Delegado de Gerencia.`
+            }
+          ]
+        }
+      });
+
+      // 2. Programar las visitas asociadas a la ruta
+      const visitasCreadas = [];
+      for (let i = 0; i < clientesIds.length; i++) {
+        const clienteId = clientesIds[i];
+        const countVis = await prisma.visitaCampo.count();
+        const codigoVis = `VIS-${String(countVis + 1).padStart(5, '0')}`;
+
+        const horaEstimadaMin = 8 * 60 + i * 60; // 08:00 AM + 1h por parada
+        const h = Math.floor(horaEstimadaMin / 60);
+        const m = horaEstimadaMin % 60;
+        const horaEstimadaStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+
+        const vis = await prisma.visitaCampo.create({
+          data: {
+            codigo: codigoVis,
+            usuarioId,
+            clienteId,
+            tipoVisita: 'Comercial Prospeccion',
+            estado: 'Programada',
+            fechaProgramada: fechaRuta,
+            horaEstimada: horaEstimadaStr,
+            compromisos: `Parada #${i + 1} de la ruta: ${nombreRuta || 'Asignada'}. ${instrucciones}`
+          }
+        });
+        visitasCreadas.push(vis);
+      }
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_RUTA_ASIGNADA', {
+        actividadRutaId: actividadRuta.id,
+        usuarioAsignadoId: usuarioId,
+        totalClientes: clientesIds.length,
+        fecha
+      });
+
+      res.json({
+        success: true,
+        actividadRuta,
+        totalVisitas: visitasCreadas.length
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getRutasAsignadas(req, res) {
+    try {
+      const { usuarioId, fecha } = req.query;
+      const where = {
+        titulo: { startsWith: 'Ruta:' }
+      };
+
+      if (this.esDelegado(req.user)) {
+        if (usuarioId) where.usuarioId = usuarioId;
+      } else {
+        where.usuarioId = req.user.id;
+      }
+
+      if (fecha) {
+        const start = new Date(fecha);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(fecha);
+        end.setHours(23, 59, 59, 999);
+        where.fechaProgramada = { gte: start, lte: end };
+      }
+
+      const rutas = await prisma.actividadCampo.findMany({
+        where,
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
+          asignadoPor: { select: { id: true, nombre: true, apellido: true } }
+        },
+        orderBy: { fechaProgramada: 'desc' }
+      });
+
+      res.json(rutas);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- TRAZABILIDAD COMPLETA DE CALLE POR FECHA ---
+  async getHistorialDiaCompleto(req, res) {
+    try {
+      const { usuarioId, fecha } = req.query;
+      const targetUserId = this.esDelegado(req.user) ? (usuarioId || req.user.id) : req.user.id;
+      const fechaConsulta = fecha || new Date().toISOString().split('T')[0];
+
+      const startOfDay = new Date(`${fechaConsulta}T00:00:00.000Z`);
+      const endOfDay = new Date(`${fechaConsulta}T23:59:59.999Z`);
+
+      // 1. Jornada laboral de ese día
+      const jornada = await prisma.jornadaLaboral.findFirst({
+        where: {
+          usuarioId: targetUserId,
+          fecha: { gte: startOfDay, lte: endOfDay }
+        },
+        include: {
+          pausas: true
+        },
+        orderBy: { horaInicio: 'asc' }
+      });
+
+      // 2. Visitas comerciales programadas / ejecutadas de ese día
+      const visitas = await prisma.visitaCampo.findMany({
+        where: {
+          usuarioId: targetUserId,
+          fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        },
+        include: {
+          cliente: true,
+          prospecto: true,
+          seguimientos: true
+        },
+        orderBy: { checkInHora: 'asc' }
+      });
+
+      // 3. Recorrido GPS y paradas
+      const trackingData = await trackingService.getHistorialRecorrido(targetUserId, fechaConsulta);
+
+      // 4. Actividades del día
+      const actividades = await prisma.actividadCampo.findMany({
+        where: {
+          usuarioId: targetUserId,
+          fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        },
+        include: {
+          asignadoPor: { select: { id: true, nombre: true, apellido: true } }
+        }
+      });
+
+      // 5. Construir Timeline cronológico integrado
+      const timeline = [];
+      if (jornada) {
+        timeline.push({
+          tipo: 'JORNADA_INICIO',
+          hora: jornada.horaInicio,
+          titulo: 'Inicio de Jornada Laboral',
+          descripcion: jornada.direccionInicio || 'Punto de partida',
+          lat: jornada.latInicio,
+          lng: jornada.lngInicio,
+          dispositivo: jornada.dispositivo
+        });
+
+        (jornada.pausas || []).forEach(p => {
+          timeline.push({
+            tipo: 'PAUSA_INICIO',
+            hora: p.horaInicio,
+            titulo: `Inicio de ${p.tipo || 'Pausa'}`,
+            descripcion: p.motivo || '',
+            lat: p.lat,
+            lng: p.lng
+          });
+          if (p.horaFin) {
+            timeline.push({
+              tipo: 'PAUSA_FIN',
+              hora: p.horaFin,
+              titulo: `Fin de ${p.tipo || 'Pausa'}`,
+              descripcion: `Duración: ${p.duracionMin || 0} min`,
+              lat: p.lat,
+              lng: p.lng
+            });
+          }
+        });
+      }
+
+      visitas.forEach(v => {
+        const clienteNom = v.cliente?.nom || v.prospecto?.nombreComercial || 'Cliente';
+        if (v.checkInHora) {
+          timeline.push({
+            tipo: 'VISITA_LLEGADA',
+            hora: v.checkInHora,
+            titulo: `Llegada a Visita: ${clienteNom}`,
+            descripcion: `Check-in geoverificado (${v.tipoVisita})`,
+            lat: v.checkInLat,
+            lng: v.checkInLng,
+            visitaId: v.id,
+            clienteNom
+          });
+        }
+        if (v.checkOutHora) {
+          timeline.push({
+            tipo: 'VISITA_SALIDA',
+            hora: v.checkOutHora,
+            titulo: `Salida de Visita: ${clienteNom}`,
+            descripcion: `Resultado: ${v.resultadoVisita || 'Realizada'} - Estancia: ${v.duracionMin} min`,
+            lat: v.checkOutLat,
+            lng: v.checkOutLng,
+            resultado: v.resultadoVisita,
+            duracionMin: v.duracionMin,
+            observaciones: v.observaciones,
+            firmaCliente: v.firmaCliente,
+            evidencias: v.evidencias
+          });
+        }
+      });
+
+      if (jornada && jornada.horaFin) {
+        timeline.push({
+          tipo: 'JORNADA_FIN',
+          hora: jornada.horaFin,
+          titulo: 'Cierre de Jornada Laboral',
+          descripcion: `Tiempo trabajado: ${Math.round(jornada.tiempoTotalMin / 60)}h ${jornada.tiempoTotalMin % 60}m. Distancia: ${jornada.distanciaKm} km`,
+          lat: jornada.latFin,
+          lng: jornada.lngFin
+        });
+      }
+
+      // Ordenar cronológicamente
+      timeline.sort((a, b) => new Date(a.hora) - new Date(b.hora));
+
+      res.json({
+        success: true,
+        fecha: fechaConsulta,
+        usuarioId: targetUserId,
+        jornada,
+        visitas,
+        recorrido: trackingData,
+        timeline,
+        actividades
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- PANEL OPERATIVO EN VIVO PARA EL DELEGADO DE GERENCIA ---
+  async getPanelOperativo(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Acceso restringido al Delegado de Gerencia.' });
+      }
+
+      const ahora = new Date();
+      const startOfDay = new Date(ahora);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(ahora);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // 1. Obtener todos los comerciales de campo
+      const comerciales = await prisma.user.findMany({
+        where: {
+          OR: [
+            { esComercialCampo: true },
+            { roleId: { in: ['67', '68', '69'] } },
+            { cargo: { contains: 'comercial', mode: 'insensitive' } },
+            { cargo: { contains: 'asesor', mode: 'insensitive' } },
+            { cargo: { contains: 'coordinador', mode: 'insensitive' } },
+            { cargo: { contains: 'director', mode: 'insensitive' } }
+          ],
+          AND: [
+            { NOT: { roleId: '1' } },
+            { NOT: { esDelegadoGerencia: true } }
+          ]
+        },
+        select: {
+          id: true,
+          nombre: true,
+          apellido: true,
+          cargo: true,
+          user: true,
+          telefono: true,
+          foto: true,
+          lat: true,
+          lng: true,
+          lastLocationUpdate: true,
+          roleId: true
+        }
+      });
+
+      const comercialesIds = comerciales.map(c => c.id);
+
+      // 2. Jornadas activas hoy
+      const jornadasActivas = await prisma.jornadaLaboral.findMany({
+        where: {
+          usuarioId: { in: comercialesIds },
+          fecha: { gte: startOfDay, lte: endOfDay },
+          estado: { in: ['Iniciada', 'En Pausa'] }
+        }
+      });
+
+      const jornadasPorUsuario = new Map();
+      jornadasActivas.forEach(j => jornadasPorUsuario.set(j.usuarioId, j));
+
+      // 3. Visitas del día
+      const visitasHoy = await prisma.visitaCampo.findMany({
+        where: {
+          usuarioId: { in: comercialesIds },
+          fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        },
+        include: { cliente: true, prospecto: true }
+      });
+
+      const visitasEnCursoPorUsuario = new Map();
+      visitasHoy.filter(v => v.estado === 'En Curso').forEach(v => {
+        visitasEnCursoPorUsuario.set(v.usuarioId, v);
+      });
+
+      // 4. Clasificar comerciales
+      let conectadosCount = 0;
+      let enVisitaCount = 0;
+      let disponiblesCount = 0;
+
+      const comercialesDetalle = comerciales.map(c => {
+        const jActiva = jornadasPorUsuario.get(c.id);
+        const vEnCurso = visitasEnCursoPorUsuario.get(c.id);
+
+        let estadoOperativo = 'desconectado'; // 'desconectado' | 'en_jornada' | 'en_visita'
+        let detalleVisita = null;
+
+        if (jActiva) {
+          conectadosCount++;
+          if (vEnCurso) {
+            estadoOperativo = 'en_visita';
+            enVisitaCount++;
+            const minutosEnVisita = vEnCurso.checkInHora
+              ? Math.max(1, Math.round((ahora - new Date(vEnCurso.checkInHora)) / 60000))
+              : 0;
+            detalleVisita = {
+              visitaId: vEnCurso.id,
+              clienteNombre: vEnCurso.cliente?.nom || vEnCurso.prospecto?.nombreComercial || 'Cliente',
+              minutosEnVisita,
+              tipoVisita: vEnCurso.tipoVisita
+            };
+          } else {
+            estadoOperativo = 'en_jornada';
+            disponiblesCount++;
+          }
+        }
+
+        return {
+          ...c,
+          nombreCompleto: `${c.nombre} ${c.apellido}`.trim(),
+          estadoOperativo,
+          jornadaActivaId: jActiva?.id || null,
+          horaInicioJornada: jActiva?.horaInicio || null,
+          detalleVisita
+        };
+      });
+
+      // 5. Métricas de visitas de hoy
+      const totalVisitasHoy = visitasHoy.length;
+      const realizadasHoy = visitasHoy.filter(v => v.estado === 'Realizada').length;
+      const noEfectivasHoy = visitasHoy.filter(v => v.estado === 'No Efectiva').length;
+      const programadasHoy = visitasHoy.filter(v => v.estado === 'Programada').length;
+
+      // 6. Ventas y cotizaciones de hoy originadas en visitas
+      let ventasMontoHoy = 0;
+      let ventasCantidadHoy = 0;
+      visitasHoy.forEach(v => {
+        if (v.resultadoVisita === 'Venta realizada') ventasCantidadHoy++;
+      });
+
+      // 7. Seguimientos pendientes hoy
+      const seguimientosPendientes = await prisma.seguimientoCampo.count({
+        where: {
+          usuarioId: { in: comercialesIds },
+          fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        }
+      });
+
+      // 8. Rutas activas hoy
+      const rutasActivas = await prisma.actividadCampo.count({
+        where: {
+          titulo: { startsWith: 'Ruta:' },
+          fechaProgramada: { gte: startOfDay, lte: endOfDay },
+          estado: { not: 'Finalizada' }
+        }
+      });
+
+      // 9. Actividades asignadas hoy
+      const actividadesHoy = await prisma.actividadCampo.findMany({
+        where: {
+          usuarioId: { in: comercialesIds },
+          fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        }
+      });
+      const actAsignadasCount = actividadesHoy.length;
+      const actCumplidasCount = actividadesHoy.filter(a => a.estado === 'Finalizada').length;
+      const pctCumplimiento = actAsignadasCount > 0
+        ? Math.round((actCumplidasCount / actAsignadasCount) * 100)
+        : (totalVisitasHoy > 0 ? Math.round((realizadasHoy / totalVisitasHoy) * 100) : 100);
+
+      res.json({
+        success: true,
+        fecha: ahora.toISOString().split('T')[0],
+        metricas: {
+          comercialesTotal: comerciales.length,
+          conectados: conectadosCount,
+          enVisita: enVisitaCount,
+          disponibles: disponiblesCount,
+          totalVisitasHoy,
+          visitasRealizadas: realizadasHoy,
+          visitasEnCurso: enVisitaCount,
+          visitasProgramadas: programadasHoy,
+          visitasNoEfectivas: noEfectivasHoy,
+          ventasCantidadHoy,
+          ventasMontoHoy,
+          seguimientosPendientes,
+          rutasActivas,
+          actividadesAsignadas: actAsignadasCount,
+          actividadesCumplidas: actCumplidasCount,
+          pctCumplimiento
+        },
+        comerciales: comercialesDetalle
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
 }
 
 module.exports = new CampoController();

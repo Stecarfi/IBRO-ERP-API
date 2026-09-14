@@ -251,7 +251,42 @@ class JornadaService {
       }
     });
 
-    return { success: true, jornada: jornadaCerrada };
+    // Computar balance de cierre operativo para el comercial
+    const clientesSet = new Set();
+    let totalVentasCount = 0;
+    (jornada.visitas || []).forEach(v => {
+      const cId = v.clienteId || v.prospectoId;
+      if (cId) clientesSet.add(cId);
+      if (v.resultadoVisita === 'Venta realizada' || v.ventaId) totalVentasCount++;
+    });
+
+    let totalSeguimientos = 0;
+    try {
+      totalSeguimientos = await prisma.seguimientoCampo.count({
+        where: {
+          usuarioId,
+          fechaHora: {
+            gte: new Date(new Date(jornada.horaInicio).setHours(0, 0, 0, 0)),
+            lte: horaFin
+          }
+        }
+      });
+    } catch (e) {}
+
+    const horas = Math.floor(tiempoTotalMin / 60);
+    const mins = tiempoTotalMin % 60;
+    const balanceCierre = {
+      horaInicio: jornada.horaInicio,
+      horaFin,
+      tiempoTrabajadoMin: tiempoTotalMin,
+      tiempoTrabajadoTexto: `${horas}h ${mins}m`,
+      totalVisitas,
+      totalClientesVisitados: clientesSet.size,
+      totalVentas: totalVentasCount,
+      totalSeguimientosGenerados: totalSeguimientos
+    };
+
+    return { success: true, jornada: jornadaCerrada, balanceCierre };
   }
 
   /**

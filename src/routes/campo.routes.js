@@ -41,9 +41,11 @@ router.post('/geocercas', (req, res) => campoController.crearGeocerca(req, res))
 router.get('/zonas', (req, res) => campoController.getZonas(req, res));
 router.post('/zonas', (req, res) => campoController.crearZona(req, res));
 
-// 7. Actividades del Día
+// 7. Actividades del Día y Tareas
 router.get('/actividades', (req, res) => campoController.getActividades(req, res));
 router.post('/actividades', (req, res) => campoController.crearActividad(req, res));
+router.put('/actividades/:id', (req, res) => campoController.modificarActividad(req, res));
+router.delete('/actividades/:id', (req, res) => campoController.eliminarActividad(req, res));
 router.put('/actividades/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
 router.post('/actividades/:id/comentarios', (req, res) => campoController.agregarComentarioActividad(req, res));
 
@@ -53,12 +55,19 @@ router.post('/evidencias', (req, res) => campoController.registrarEvidencia(req,
 
 // 9. Historial y Seguimiento Continuo
 router.get('/seguimientos', (req, res) => campoController.getSeguimientos(req, res));
+router.post('/seguimientos', (req, res) => campoController.crearSeguimiento(req, res));
 
 // 10. Reportes Consolidados de Personal en Campo
 router.get('/reportes', (req, res) => campoController.getReportes(req, res));
 router.get('/reportes/resumen', (req, res) => campoController.getReportes(req, res));
 
-// 11. Delegado de Gerencia, Indicadores y Evaluaciones
+// 11. Asignación de Rutas y Operación
+router.post('/rutas/asignar', (req, res) => campoController.asignarRuta(req, res));
+router.get('/rutas', (req, res) => campoController.getRutasAsignadas(req, res));
+router.get('/trazabilidad/dia', (req, res) => campoController.getHistorialDiaCompleto(req, res));
+router.get('/operacion/panel', (req, res) => campoController.getPanelOperativo(req, res));
+
+// 12. Delegado de Gerencia, Indicadores y Evaluaciones
 router.get('/delegado/dashboard', (req, res) => campoController.getDashboardDelegado(req, res));
 router.get('/indicadores', (req, res) => campoController.getIndicadoresComercial(req, res));
 router.get('/indicadores/:usuarioId', (req, res) => campoController.getIndicadoresComercial(req, res));
