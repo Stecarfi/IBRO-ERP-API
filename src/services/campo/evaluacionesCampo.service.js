@@ -4,70 +4,61 @@ const prisma = require('../../prisma');
 // DEFINICIÓN NORMATIVA DE INDICADORES POR CARGO (MATRICES OFICIALES)
 // =================================================================
 
-// 1. DIRECCIÓN COMERCIAL (28 Indicadores)
+// 1. DIRECCIÓN COMERCIAL (Perfil 67 - 24 Indicadores Oficiales)
 const INDICADORES_DIRECCION = [
   { id: 'IND_DIR_01', nombre: 'Prospectación de clientes nuevos', tipo: 'auto', unidad: 'clientes', metaDefecto: 15 },
-  { id: 'IND_DIR_02', nombre: 'Cantidad de visitas realizadas', tipo: 'auto', unidad: 'visitas', metaDefecto: 40 },
+  { id: 'IND_DIR_02', nombre: 'Visitas comerciales realizadas', tipo: 'auto', unidad: 'visitas', metaDefecto: 40 },
   { id: 'IND_DIR_03', nombre: 'Negocios cerrados', tipo: 'auto', unidad: 'cierres', metaDefecto: 10 },
   { id: 'IND_DIR_04', nombre: 'Cumplimiento de metas mensuales', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_DIR_05', nombre: 'Superación de metas mensuales', tipo: 'auto', unidad: '%', metaDefecto: 110 },
+  { id: 'IND_DIR_05', nombre: 'Superación de metas', tipo: 'auto', unidad: '%', metaDefecto: 110 },
   { id: 'IND_DIR_06', nombre: 'Apertura de nuevas cuentas comerciales', tipo: 'auto', unidad: 'cuentas', metaDefecto: 5 },
   { id: 'IND_DIR_07', nombre: 'Incremento de clientes activos', tipo: 'auto', unidad: '%', metaDefecto: 8 },
   { id: 'IND_DIR_08', nombre: 'Identificación de nuevas zonas comerciales', tipo: 'manual', unidad: 'zonas', metaDefecto: 2 },
-  { id: 'IND_DIR_09', nombre: 'Identificación de nuevos sectores económicos', tipo: 'manual', unidad: 'sectores', metaDefecto: 3 },
-  { id: 'IND_DIR_10', nombre: 'Identificación de nuevos nichos de mercado', tipo: 'manual', unidad: 'nichos', metaDefecto: 2 },
-  { id: 'IND_DIR_11', nombre: 'Posicionamiento comercial de la empresa', tipo: 'manual', unidad: 'pts', metaDefecto: 90 },
-  { id: 'IND_DIR_12', nombre: 'Incremento de la facturación', tipo: 'auto', unidad: '$', metaDefecto: 50000000 },
-  { id: 'IND_DIR_13', nombre: 'Incremento de ventas por cliente', tipo: 'auto', unidad: '$', metaDefecto: 5000000 },
-  { id: 'IND_DIR_14', nombre: 'Seguimiento efectivo a oportunidades', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 30 },
-  { id: 'IND_DIR_15', nombre: 'Negociaciones estratégicas realizadas', tipo: 'manual', unidad: 'acuerdos', metaDefecto: 4 },
-  { id: 'IND_DIR_16', nombre: 'Cierres comerciales de alto valor', tipo: 'auto', unidad: 'cierres', metaDefecto: 3 },
-  { id: 'IND_DIR_17', nombre: 'Calidad de información comercial obtenida', tipo: 'manual', unidad: 'pts', metaDefecto: 90 },
-  { id: 'IND_DIR_18', nombre: 'Información de mercado recopilada', tipo: 'auto', unidad: 'reportes', metaDefecto: 4 },
-  { id: 'IND_DIR_19', nombre: 'Información de competidores recopilada', tipo: 'manual', unidad: 'reportes', metaDefecto: 3 },
-  { id: 'IND_DIR_20', nombre: 'Oportunidades comerciales detectadas', tipo: 'auto', unidad: 'oportunidades', metaDefecto: 20 },
-  { id: 'IND_DIR_21', nombre: 'Propuestas de mejora comercial', tipo: 'manual', unidad: 'propuestas', metaDefecto: 2 },
-  { id: 'IND_DIR_22', nombre: 'Coordinación efectiva con áreas internas', tipo: 'manual', unidad: 'pts', metaDefecto: 95 },
-  { id: 'IND_DIR_23', nombre: 'Seguimiento a pedidos', tipo: 'auto', unidad: 'pedidos', metaDefecto: 25 },
-  { id: 'IND_DIR_24', nombre: 'Seguimiento a entregas', tipo: 'auto', unidad: 'entregas', metaDefecto: 20 },
-  { id: 'IND_DIR_25', nombre: 'Cumplimiento del presupuesto propio', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_DIR_26', nombre: 'Cumplimiento del presupuesto general asignado', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_DIR_27', nombre: 'Cumplimiento de actividades asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_DIR_28', nombre: 'Cumplimiento de rutas asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 }
+  { id: 'IND_DIR_09', nombre: 'Identificación de nuevos sectores', tipo: 'manual', unidad: 'sectores', metaDefecto: 3 },
+  { id: 'IND_DIR_10', nombre: 'Identificación de nichos de mercado', tipo: 'manual', unidad: 'nichos', metaDefecto: 2 },
+  { id: 'IND_DIR_11', nombre: 'Posicionamiento comercial', tipo: 'manual', unidad: 'pts', metaDefecto: 90 },
+  { id: 'IND_DIR_12', nombre: 'Incremento de facturación', tipo: 'auto', unidad: '$', metaDefecto: 50000000 },
+  { id: 'IND_DIR_13', nombre: 'Incremento de ventas', tipo: 'auto', unidad: '$', metaDefecto: 5000000 },
+  { id: 'IND_DIR_14', nombre: 'Seguimiento de oportunidades', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 30 },
+  { id: 'IND_DIR_15', nombre: 'Negociaciones estratégicas', tipo: 'manual', unidad: 'acuerdos', metaDefecto: 4 },
+  { id: 'IND_DIR_16', nombre: 'Cierres de alto valor', tipo: 'auto', unidad: 'cierres', metaDefecto: 3 },
+  { id: 'IND_DIR_17', nombre: 'Información de mercado recopilada', tipo: 'auto', unidad: 'reportes', metaDefecto: 4 },
+  { id: 'IND_DIR_18', nombre: 'Información de competencia recopilada', tipo: 'manual', unidad: 'reportes', metaDefecto: 3 },
+  { id: 'IND_DIR_19', nombre: 'Oportunidades detectadas', tipo: 'auto', unidad: 'oportunidades', metaDefecto: 20 },
+  { id: 'IND_DIR_20', nombre: 'Coordinación con áreas internas', tipo: 'manual', unidad: 'pts', metaDefecto: 95 },
+  { id: 'IND_DIR_21', nombre: 'Seguimiento a pedidos', tipo: 'auto', unidad: 'pedidos', metaDefecto: 25 },
+  { id: 'IND_DIR_22', nombre: 'Seguimiento a entregas', tipo: 'auto', unidad: 'entregas', metaDefecto: 20 },
+  { id: 'IND_DIR_23', nombre: 'Cumplimiento presupuestal', tipo: 'auto', unidad: '%', metaDefecto: 100 },
+  { id: 'IND_DIR_24', nombre: 'Cumplimiento de metas asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 }
 ];
 
-// 2. COORDINADOR COMERCIAL EXTERNO (27 Indicadores)
+// 2. COORDINADOR COMERCIAL EXTERNO (Perfil 68 - 22 Indicadores Oficiales)
 const INDICADORES_COORDINADOR = [
   { id: 'IND_COO_01', nombre: 'Clientes prospectados', tipo: 'auto', unidad: 'prospectos', metaDefecto: 20 },
   { id: 'IND_COO_02', nombre: 'Clientes nuevos captados', tipo: 'auto', unidad: 'clientes', metaDefecto: 8 },
-  { id: 'IND_COO_03', nombre: 'Oportunidades comerciales identificadas', tipo: 'auto', unidad: 'oportunidades', metaDefecto: 25 },
-  { id: 'IND_COO_04', nombre: 'Visitas realizadas', tipo: 'auto', unidad: 'visitas', metaDefecto: 45 },
+  { id: 'IND_COO_03', nombre: 'Oportunidades identificadas', tipo: 'auto', unidad: 'oportunidades', metaDefecto: 25 },
+  { id: 'IND_COO_04', nombre: 'Visitas comerciales', tipo: 'auto', unidad: 'visitas', metaDefecto: 45 },
   { id: 'IND_COO_05', nombre: 'Reuniones realizadas', tipo: 'auto', unidad: 'reuniones', metaDefecto: 30 },
-  { id: 'IND_COO_06', nombre: 'Presentaciones comerciales realizadas', tipo: 'manual', unidad: 'presentaciones', metaDefecto: 15 },
+  { id: 'IND_COO_06', nombre: 'Presentaciones realizadas', tipo: 'manual', unidad: 'presentaciones', metaDefecto: 15 },
   { id: 'IND_COO_07', nombre: 'Cotizaciones elaboradas', tipo: 'auto', unidad: 'cotizaciones', metaDefecto: 25 },
   { id: 'IND_COO_08', nombre: 'Cotizaciones enviadas', tipo: 'auto', unidad: 'cotizaciones', metaDefecto: 25 },
-  { id: 'IND_COO_09', nombre: 'Seguimiento a cotizaciones', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 40 },
-  { id: 'IND_COO_10', nombre: 'Ventas cerradas', tipo: 'auto', unidad: 'ventas', metaDefecto: 12 },
+  { id: 'IND_COO_09', nombre: 'Seguimiento de cotizaciones', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 40 },
+  { id: 'IND_COO_10', nombre: 'Negocios cerrados', tipo: 'auto', unidad: 'ventas', metaDefecto: 12 },
   { id: 'IND_COO_11', nombre: 'Valor vendido', tipo: 'auto', unidad: '$', metaDefecto: 35000000 },
-  { id: 'IND_COO_12', nombre: 'Cumplimiento presupuestal', tipo: 'auto', unidad: '%', metaDefecto: 100 },
+  { id: 'IND_COO_12', nombre: 'Cumplimiento de presupuesto', tipo: 'auto', unidad: '%', metaDefecto: 100 },
   { id: 'IND_COO_13', nombre: 'Cumplimiento de metas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
   { id: 'IND_COO_14', nombre: 'Seguimientos realizados', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 35 },
   { id: 'IND_COO_15', nombre: 'Fidelización de clientes', tipo: 'manual', unidad: 'pts', metaDefecto: 90 },
   { id: 'IND_COO_16', nombre: 'Calidad de atención', tipo: 'manual', unidad: 'pts', metaDefecto: 95 },
   { id: 'IND_COO_17', nombre: 'Informes entregados', tipo: 'auto', unidad: 'informes', metaDefecto: 4 },
   { id: 'IND_COO_18', nombre: 'Información comercial registrada', tipo: 'auto', unidad: 'registros', metaDefecto: 30 },
-  { id: 'IND_COO_19', nombre: 'Información de mercado reportada', tipo: 'manual', unidad: 'reportes', metaDefecto: 4 },
-  { id: 'IND_COO_20', nombre: 'Información de la competencia reportada', tipo: 'manual', unidad: 'reportes', metaDefecto: 3 },
-  { id: 'IND_COO_21', nombre: 'Gestión de solicitudes de clientes', tipo: 'auto', unidad: 'solicitudes', metaDefecto: 15 },
-  { id: 'IND_COO_22', nombre: 'Gestión de reclamos', tipo: 'auto', unidad: 'reclamos', metaDefecto: 5 },
-  { id: 'IND_COO_23', nombre: 'Cumplimiento de actividades asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_COO_24', nombre: 'Cumplimiento de rutas asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_COO_25', nombre: 'Actualización de clientes', tipo: 'auto', unidad: 'clientes', metaDefecto: 15 },
-  { id: 'IND_COO_26', nombre: 'Calidad del seguimiento comercial', tipo: 'manual', unidad: 'pts', metaDefecto: 90 },
-  { id: 'IND_COO_27', nombre: 'Cumplimiento de compromisos adquiridos', tipo: 'auto', unidad: '%', metaDefecto: 100 }
+  { id: 'IND_COO_19', nombre: 'Gestión de solicitudes', tipo: 'auto', unidad: 'solicitudes', metaDefecto: 15 },
+  { id: 'IND_COO_20', nombre: 'Gestión de reclamos', tipo: 'auto', unidad: 'reclamos', metaDefecto: 5 },
+  { id: 'IND_COO_21', nombre: 'Cumplimiento de actividades', tipo: 'auto', unidad: '%', metaDefecto: 100 },
+  { id: 'IND_COO_22', nombre: 'Cumplimiento de rutas', tipo: 'auto', unidad: '%', metaDefecto: 100 }
 ];
 
-// 3. ASESOR COMERCIAL EXTERNO (20 Indicadores)
+// 3. ASESOR COMERCIAL EXTERNO (Perfil 69 - 18 Indicadores Oficiales)
 const INDICADORES_ASESOR = [
   { id: 'IND_ASE_01', nombre: 'Clientes prospectados', tipo: 'auto', unidad: 'prospectos', metaDefecto: 25 },
   { id: 'IND_ASE_02', nombre: 'Clientes nuevos captados', tipo: 'auto', unidad: 'clientes', metaDefecto: 6 },
@@ -75,20 +66,18 @@ const INDICADORES_ASESOR = [
   { id: 'IND_ASE_04', nombre: 'Visitas realizadas', tipo: 'auto', unidad: 'visitas', metaDefecto: 50 },
   { id: 'IND_ASE_05', nombre: 'Cotizaciones generadas', tipo: 'auto', unidad: 'cotizaciones', metaDefecto: 20 },
   { id: 'IND_ASE_06', nombre: 'Seguimientos realizados', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 30 },
-  { id: 'IND_ASE_07', nombre: 'Negocios cerrados', tipo: 'auto', unidad: 'ventas', metaDefecto: 10 },
-  { id: 'IND_ASE_08', nombre: 'Valor total vendido', tipo: 'auto', unidad: '$', metaDefecto: 25000000 },
+  { id: 'IND_ASE_07', nombre: 'Ventas cerradas', tipo: 'auto', unidad: 'ventas', metaDefecto: 10 },
+  { id: 'IND_ASE_08', nombre: 'Valor vendido', tipo: 'auto', unidad: '$', metaDefecto: 25000000 },
   { id: 'IND_ASE_09', nombre: 'Cumplimiento de presupuesto', tipo: 'auto', unidad: '%', metaDefecto: 100 },
   { id: 'IND_ASE_10', nombre: 'Cumplimiento de metas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_ASE_11', nombre: 'Actualización de información de clientes', tipo: 'auto', unidad: 'clientes', metaDefecto: 15 },
-  { id: 'IND_ASE_12', nombre: 'Cumplimiento de actividades asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_ASE_13', nombre: 'Cumplimiento de rutas asignadas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_ASE_14', nombre: 'Efectividad de visitas', tipo: 'auto', unidad: '%', metaDefecto: 25 },
-  { id: 'IND_ASE_15', nombre: 'Calidad de registros', tipo: 'auto', unidad: 'pts', metaDefecto: 90 },
-  { id: 'IND_ASE_16', nombre: 'Calidad de evidencias cargadas', tipo: 'auto', unidad: '%', metaDefecto: 90 },
-  { id: 'IND_ASE_17', nombre: 'Cantidad de seguimientos efectivos', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 20 },
-  { id: 'IND_ASE_18', nombre: 'Satisfacción de clientes', tipo: 'manual', unidad: 'pts', metaDefecto: 95 },
-  { id: 'IND_ASE_19', nombre: 'Cumplimiento de compromisos', tipo: 'auto', unidad: '%', metaDefecto: 100 },
-  { id: 'IND_ASE_20', nombre: 'Productividad diaria', tipo: 'auto', unidad: 'visitas/día', metaDefecto: 4 }
+  { id: 'IND_ASE_11', nombre: 'Actualización de clientes', tipo: 'auto', unidad: 'clientes', metaDefecto: 15 },
+  { id: 'IND_ASE_12', nombre: 'Cumplimiento de actividades', tipo: 'auto', unidad: '%', metaDefecto: 100 },
+  { id: 'IND_ASE_13', nombre: 'Cumplimiento de rutas', tipo: 'auto', unidad: '%', metaDefecto: 100 },
+  { id: 'IND_ASE_14', nombre: 'Calidad de registros', tipo: 'auto', unidad: 'pts', metaDefecto: 90 },
+  { id: 'IND_ASE_15', nombre: 'Calidad de evidencias', tipo: 'auto', unidad: '%', metaDefecto: 90 },
+  { id: 'IND_ASE_16', nombre: 'Satisfacción de clientes', tipo: 'manual', unidad: 'pts', metaDefecto: 95 },
+  { id: 'IND_ASE_17', nombre: 'Cumplimiento de compromisos', tipo: 'auto', unidad: '%', metaDefecto: 100 },
+  { id: 'IND_ASE_18', nombre: 'Productividad diaria', tipo: 'auto', unidad: 'visitas/día', metaDefecto: 4 }
 ];
 
 class EvaluacionesCampoService {
@@ -176,113 +165,44 @@ class EvaluacionesCampoService {
 
     const { grupo, nombreGrupo, perfilId, indicadoresBase } = this.obtenerGrupoCargo(usuario);
 
-    // Consultas reales del ERP y de Operación Externa en paralelo
-    const [
-      visitas,
-      prospectosLegacy,
-      clientesExternos,
-      cotizacionesLegacy,
-      cotizacionesExternas,
-      ventasLegacy,
-      ventasExternas,
-      jornadas,
-      seguimientos,
-      actividades,
-      rutas,
-      evidencias,
-      novedades,
-      ultimaEval,
-      historialEvals
-    ] = await Promise.all([
-      prisma.visitaCampo.findMany({
-        where: {
-          usuarioId,
-          fechaProgramada: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.prospectoCampo.findMany({
-        where: {
-          creadoPorId: usuarioId,
-          fechaCreacion: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.clienteExternoCampo.findMany({
-        where: {
-          comercialId: usuarioId,
-          createdAt: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.cotizacion.findMany({
-        where: {
-          vendedorId: usuarioId,
-          fecha: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.cotizacionExternaCampo.findMany({
-        where: {
-          comercialId: usuarioId,
-          fecha: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.venta.findMany({
-        where: {
-          vendedorId: usuarioId,
-          fecha: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.ventaExternaCampo.findMany({
-        where: {
-          comercialId: usuarioId,
-          fecha: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.jornadaLaboral.findMany({
-        where: {
-          usuarioId,
-          fecha: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.seguimientoCampo.findMany({
-        where: {
-          usuarioId,
-          fechaHora: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.actividadCampo.findMany({
-        where: {
-          usuarioId,
-          fechaProgramada: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.actividadCampo.findMany({
-        where: {
-          usuarioId,
-          titulo: { startsWith: 'Ruta:' },
-          fechaProgramada: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.evidenciaCampo.findMany({
-        where: {
-          usuarioId,
-          fechaHora: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.novedadDelegadoCampo.findMany({
-        where: {
-          usuarioId,
-          fecha: { gte: fechaInicio, lte: fechaFin }
-        }
-      }),
-      prisma.evaluacionComercialCampo.findFirst({
-        where: { usuarioId, periodo: periodoActual },
-        orderBy: { createdAt: 'desc' }
-      }),
-      prisma.evaluacionComercialCampo.findMany({
-        where: { usuarioId },
-        orderBy: { periodo: 'desc' },
-        take: 5
-      })
-    ]);
+    const safeQuery = async (fn, fallback = []) => {
+      try {
+        return await fn();
+      } catch (err) {
+        console.warn('[Evaluaciones Campo Query Warning]:', err.message);
+        return fallback;
+      }
+    };
+
+    let visitas = [], prospectosLegacy = [], clientesExternos = [], cotizacionesLegacy = [],
+        cotizacionesExternas = [], ventasLegacy = [], ventasExternas = [], jornadas = [],
+        seguimientos = [], actividades = [], rutas = [], evidencias = [], novedades = [],
+        ultimaEval = null, historialEvals = [];
+
+    try {
+      // Lote 1: Operaciones de campo principales
+      visitas = await safeQuery(() => prisma.visitaCampo.findMany({ where: { usuarioId, fechaProgramada: { gte: fechaInicio, lte: fechaFin } } }));
+      prospectosLegacy = await safeQuery(() => prisma.prospectoCampo.findMany({ where: { creadoPorId: usuarioId, fechaCreacion: { gte: fechaInicio, lte: fechaFin } } }));
+      clientesExternos = await safeQuery(() => prisma.clienteExternoCampo.findMany({ where: { comercialId: usuarioId, createdAt: { gte: fechaInicio, lte: fechaFin } } }));
+      cotizacionesLegacy = await safeQuery(() => prisma.cotizacion.findMany({ where: { vendedorId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+      cotizacionesExternas = await safeQuery(() => prisma.cotizacionExternaCampo.findMany({ where: { comercialId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+
+      // Lote 2: Ventas y jornadas
+      ventasLegacy = await safeQuery(() => prisma.venta.findMany({ where: { vendedorId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+      ventasExternas = await safeQuery(() => prisma.ventaExternaCampo.findMany({ where: { comercialId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+      jornadas = await safeQuery(() => prisma.jornadaLaboral.findMany({ where: { usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+      seguimientos = await safeQuery(() => prisma.seguimientoCampo.findMany({ where: { usuarioId, fechaHora: { gte: fechaInicio, lte: fechaFin } } }));
+
+      // Lote 3: Actividades, rutas, novedades y evaluaciones
+      actividades = await safeQuery(() => prisma.actividadCampo.findMany({ where: { usuarioId, fechaProgramada: { gte: fechaInicio, lte: fechaFin } } }));
+      rutas = await safeQuery(() => prisma.actividadCampo.findMany({ where: { usuarioId, titulo: { startsWith: 'Ruta:' }, fechaProgramada: { gte: fechaInicio, lte: fechaFin } } }));
+      evidencias = await safeQuery(() => prisma.evidenciaCampo.findMany({ where: { usuarioId, fechaHora: { gte: fechaInicio, lte: fechaFin } } }));
+      novedades = await safeQuery(() => prisma.novedadDelegadoCampo.findMany({ where: { usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+      ultimaEval = await safeQuery(() => prisma.evaluacionComercialCampo.findFirst({ where: { usuarioId, periodo: periodoActual }, orderBy: { createdAt: 'desc' } }), null);
+      historialEvals = await safeQuery(() => prisma.evaluacionComercialCampo.findMany({ where: { usuarioId }, orderBy: { periodo: 'desc' }, take: 5 }));
+    } catch (err) {
+      console.warn('[Evaluaciones Campo Fallback]:', err.message);
+    }
 
     // Métricas calculadas integrando Operación Externa de Campo
     const totalProspectos = prospectosLegacy.length + clientesExternos.filter(c => c.tipoRegistro === 'Prospecto' || c.etapaEmbudo === 'Prospecto').length;
@@ -451,6 +371,7 @@ class EvaluacionesCampoService {
         fortalezas: evalPrevia.fortalezas || '',
         debilidades: evalPrevia.debilidades || '',
         compromisos: evalPrevia.compromisos || '',
+        accionesCorrectivas: evalPrevia.accionesCorrectivas || '',
         planMejora: evalPrevia.planMejora || ''
       };
     });

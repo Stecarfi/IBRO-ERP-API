@@ -12,6 +12,10 @@ if (databaseUrl) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
     databaseUrl += `${separator}connect_timeout=30`;
   }
+  if (!databaseUrl.includes('connection_limit=')) {
+    const separator = databaseUrl.includes('?') ? '&' : '?';
+    databaseUrl += `${separator}connection_limit=5`;
+  }
 }
 
 const prisma = new PrismaClient({
