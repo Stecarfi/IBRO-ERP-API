@@ -215,6 +215,9 @@ class TrackingService {
    */
   async getUltimasUbicacionesPersonal() {
     const users = await prisma.user.findMany({
+      where: {
+        esComercialCampo: true
+      },
       select: {
         id: true,
         user: true,

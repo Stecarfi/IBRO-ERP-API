@@ -621,23 +621,7 @@ class EvaluacionesCampoService {
     // Obtener todos los comerciales de campo
     const comerciales = await prisma.user.findMany({
       where: {
-        OR: [
-          { esComercialCampo: true },
-          { roleId: { in: ['67', '68', '69'] } },
-          { cargo: { contains: 'comercial', mode: 'insensitive' } },
-          { cargo: { contains: 'asesor', mode: 'insensitive' } },
-          { cargo: { contains: 'coordinador', mode: 'insensitive' } },
-          { cargo: { contains: 'director', mode: 'insensitive' } }
-        ],
-        AND: [
-          { NOT: { roleId: '1' } }, // Excluir Master Admin
-          {
-            OR: [
-              { esComercialCampo: true },
-              { esDelegadoGerencia: false }
-            ]
-          }
-        ]
+        esComercialCampo: true
       },
       include: { role: true },
       orderBy: { nombre: 'asc' }

@@ -100,6 +100,9 @@ class ProductividadService {
     const fechaFin = new Date(parseInt(anio), parseInt(mes), 0, 23, 59, 59, 999);
 
     const usuarios = await prisma.user.findMany({
+      where: {
+        esComercialCampo: true
+      },
       select: {
         id: true,
         user: true,
