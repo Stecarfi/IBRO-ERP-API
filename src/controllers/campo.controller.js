@@ -31,6 +31,20 @@ class CampoController {
     if (user.esDelegadoGerencia === true || user.esDelegadoGerencia === 'true') return true;
     // Administrador principal o usuario admin
     if (String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin') return true;
+    // Derivación por nombre de Rol o Cargo
+    const roleName = String(user.role?.name || user.roleName || '').toLowerCase();
+    const cargo = String(user.cargo || '').toLowerCase();
+    if (
+      roleName.includes('delegad') ||
+      roleName.includes('director comercial') ||
+      roleName.includes('dirección comercial') ||
+      roleName.includes('coordinador comercial') ||
+      cargo.includes('director comercial') ||
+      cargo.includes('directora comercial') ||
+      cargo.includes('delegado')
+    ) {
+      return true;
+    }
     return false;
   }
 
@@ -613,7 +627,20 @@ class CampoController {
 
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true
+          OR: [
+            { esComercialCampo: true },
+            {
+              role: {
+                name: {
+                  contains: 'asesor comercial',
+                  mode: 'insensitive'
+                }
+              }
+            }
+          ],
+          NOT: {
+            esDelegadoGerencia: true
+          }
         },
         select: {
           id: true,
@@ -1087,7 +1114,20 @@ class CampoController {
       // 1. Obtener todos los comerciales de campo
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true
+          OR: [
+            { esComercialCampo: true },
+            {
+              role: {
+                name: {
+                  contains: 'asesor comercial',
+                  mode: 'insensitive'
+                }
+              }
+            }
+          ],
+          NOT: {
+            esDelegadoGerencia: true
+          }
         },
         select: {
           id: true,
@@ -1112,10 +1152,22 @@ class CampoController {
       const comercialesIds = comerciales.map(c => c.id);
 
       // Delegado de Gerencia supervisor activo
-      const delegadoSupervisor = await prisma.user.findFirst({
+      let delegadoSupervisor = await prisma.user.findFirst({
         where: { esDelegadoGerencia: true },
         select: { nombre: true, apellido: true, cargo: true }
       });
+      if (!delegadoSupervisor) {
+        delegadoSupervisor = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { roleId: '1' },
+              { role: { name: { contains: 'director comercial', mode: 'insensitive' } } },
+              { role: { name: { contains: 'dirección comercial', mode: 'insensitive' } } }
+            ]
+          },
+          select: { nombre: true, apellido: true, cargo: true }
+        });
+      }
       const delegadoResponsableTexto = delegadoSupervisor
         ? `${delegadoSupervisor.nombre} ${delegadoSupervisor.apellido || ''}`.trim() + (delegadoSupervisor.cargo ? ` (${delegadoSupervisor.cargo})` : ' (Delegado de Gerencia)')
         : 'Delegación General de Gerencia';
@@ -1155,7 +1207,7 @@ class CampoController {
       });
 
       // 4. Últimos pings GPS registrados hoy
-      const ultimosPingsHoy = await prisma.ubicacionCampo.findMany({
+      const ultimosPingsHoy = await prisma.rastreoUbicacion.findMany({
         where: {
           usuarioId: { in: comercialesIds },
           timestamp: { gte: startOfDay }

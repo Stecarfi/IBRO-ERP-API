@@ -840,7 +840,14 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       }
 
       const token = jwt.sign(
-        { id: dbUser.id, user: dbUser.user, roleId: dbUser.roleId },
+        { 
+          id: dbUser.id, 
+          user: dbUser.user, 
+          roleId: dbUser.roleId,
+          cargo: dbUser.cargo || '',
+          esComercialCampo: Boolean(dbUser.esComercialCampo),
+          esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
+        },
         process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
         { expiresIn: '15m' } // 15 minutos para accessToken (Alta seguridad)
       );
@@ -977,7 +984,14 @@ app.post('/api/refresh', async (req, res) => {
 
     // Emitir nuevo access token
     const token = jwt.sign(
-      { id: dbUser.id, user: dbUser.user, roleId: dbUser.roleId },
+      { 
+        id: dbUser.id, 
+        user: dbUser.user, 
+        roleId: dbUser.roleId,
+        cargo: dbUser.cargo || '',
+        esComercialCampo: Boolean(dbUser.esComercialCampo),
+        esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
+      },
       process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
       { expiresIn: '15m' }
     );
