@@ -176,19 +176,23 @@ class EvaluacionesCampoService {
 
     const { grupo, nombreGrupo, perfilId, indicadoresBase } = this.obtenerGrupoCargo(usuario);
 
-    // Consultas reales del ERP en paralelo
+    // Consultas reales del ERP y de Operación Externa en paralelo
     const [
       visitas,
-      prospectos,
-      cotizaciones,
-      ventas,
+      prospectosLegacy,
+      clientesExternos,
+      cotizacionesLegacy,
+      cotizacionesExternas,
+      ventasLegacy,
+      ventasExternas,
       jornadas,
       seguimientos,
       actividades,
       rutas,
       evidencias,
       novedades,
-      ultimaEval
+      ultimaEval,
+      historialEvals
     ] = await Promise.all([
       prisma.visitaCampo.findMany({
         where: {
@@ -202,15 +206,33 @@ class EvaluacionesCampoService {
           fechaCreacion: { gte: fechaInicio, lte: fechaFin }
         }
       }),
+      prisma.clienteExternoCampo.findMany({
+        where: {
+          comercialId: usuarioId,
+          createdAt: { gte: fechaInicio, lte: fechaFin }
+        }
+      }),
       prisma.cotizacion.findMany({
         where: {
           vendedorId: usuarioId,
           fecha: { gte: fechaInicio, lte: fechaFin }
         }
       }),
+      prisma.cotizacionExternaCampo.findMany({
+        where: {
+          comercialId: usuarioId,
+          fecha: { gte: fechaInicio, lte: fechaFin }
+        }
+      }),
       prisma.venta.findMany({
         where: {
           vendedorId: usuarioId,
+          fecha: { gte: fechaInicio, lte: fechaFin }
+        }
+      }),
+      prisma.ventaExternaCampo.findMany({
+        where: {
+          comercialId: usuarioId,
           fecha: { gte: fechaInicio, lte: fechaFin }
         }
       }),
@@ -254,23 +276,33 @@ class EvaluacionesCampoService {
       prisma.evaluacionComercialCampo.findFirst({
         where: { usuarioId, periodo: periodoActual },
         orderBy: { createdAt: 'desc' }
+      }),
+      prisma.evaluacionComercialCampo.findMany({
+        where: { usuarioId },
+        orderBy: { periodo: 'desc' },
+        take: 5
       })
     ]);
 
-    // Métricas calculadas en base a datos reales
-    const totalProspectos = prospectos.length;
-    const prospectosGanados = prospectos.filter(p => p.etapa === 'Cerrado Ganado').length;
+    // Métricas calculadas integrando Operación Externa de Campo
+    const totalProspectos = prospectosLegacy.length + clientesExternos.filter(c => c.tipoRegistro === 'Prospecto' || c.etapaEmbudo === 'Prospecto').length;
+    const prospectosGanados = prospectosLegacy.filter(p => p.etapa === 'Cerrado Ganado').length + clientesExternos.filter(c => c.etapaEmbudo === 'Venta' || c.etapaEmbudo === 'Fidelizacion').length;
+    const clientesGestionados = clientesExternos.length + visitas.filter(v => v.clienteExternoId || v.clienteId).length;
+
     const totalVisitas = visitas.length;
     const visitasRealizadas = visitas.filter(v => v.estado === 'Realizada' || v.horaCheckOut != null).length;
     const visitasConCierre = visitas.filter(v => (v.resultadoVisita || '').toLowerCase().includes('venta')).length;
     const visitasConCotiz = visitas.filter(v => (v.resultadoVisita || '').toLowerCase().includes('cotiz')).length;
     const efectividadVisitas = totalVisitas > 0 ? Math.round(((visitasConCierre + visitasConCotiz) / totalVisitas) * 100) : 0;
     
-    const totalCotizaciones = cotizaciones.length;
-    const cotizacionesEnviadas = cotizaciones.filter(c => c.estado !== 'Borrador').length || totalCotizaciones;
-    const totalVentasCerradas = ventas.length + prospectosGanados;
-    const valorVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.total) || 0), 0);
-    const ventasAltoValor = ventas.filter(v => (parseFloat(v.total) || 0) >= 10000000).length;
+    const totalCotizaciones = cotizacionesLegacy.length + cotizacionesExternas.length;
+    const cotizacionesEnviadas = cotizacionesLegacy.filter(c => c.estado !== 'Borrador').length + cotizacionesExternas.filter(c => c.estado !== 'Borrador').length;
+    const totalVentasCerradas = ventasLegacy.length + ventasExternas.length + prospectosGanados;
+    
+    const valorVendidoLegacy = ventasLegacy.reduce((acc, v) => acc + (parseFloat(v.total) || 0), 0);
+    const valorVendidoExterno = ventasExternas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
+    const valorVendido = valorVendidoLegacy + valorVendidoExterno;
+    const ventasAltoValor = ventasLegacy.filter(v => (parseFloat(v.total) || 0) >= 10000000).length + ventasExternas.filter(v => (parseFloat(v.valorVendido) || 0) >= 10000000).length;
 
     const metaPresupuesto = parseFloat(usuario.meta_p) || (grupo === 'DIRECCION' ? 50000000 : (grupo === 'COORDINADOR' ? 35000000 : 25000000));
     const metaUnidades = parseInt(usuario.meta_u) || (grupo === 'DIRECCION' ? 15 : (grupo === 'COORDINADOR' ? 12 : 10));
@@ -314,7 +346,7 @@ class EvaluacionesCampoService {
       });
     }
 
-    // Procesar cada indicador normativo de la matriz correspondiente
+    // Procesar cada indicador normativo de la matriz correspondiente con los 5 campos cualitativos individuales
     const indicadoresProcesados = indicadoresBase.map(ind => {
       let resultadoCalculado = 0;
       let metaFinal = ind.metaDefecto;
@@ -381,7 +413,7 @@ class EvaluacionesCampoService {
       } else if (n.includes('oportunidades comerciales') || n.includes('oportunidades registradas')) {
         resultadoCalculado = totalProspectos + totalCotizaciones;
       } else if (n.includes('actualización de clientes') || n.includes('actualización de información')) {
-        resultadoCalculado = Math.min(totalVisitas, 15);
+        resultadoCalculado = Math.min(totalVisitas + clientesExternos.length, 15);
       } else {
         // Indicadores cualitativos o manuales: usar valor previamente guardado o meta por defecto
         resultadoCalculado = evalDetalleMap[ind.id]?.resultado !== undefined 
@@ -416,7 +448,10 @@ class EvaluacionesCampoService {
         calificacion,
         estado,
         observaciones: evalPrevia.observaciones || '',
-        comentarios: evalPrevia.comentarios || ''
+        fortalezas: evalPrevia.fortalezas || '',
+        debilidades: evalPrevia.debilidades || '',
+        compromisos: evalPrevia.compromisos || '',
+        planMejora: evalPrevia.planMejora || ''
       };
     });
 
@@ -426,6 +461,48 @@ class EvaluacionesCampoService {
       : 0;
 
     const estadoCumplimiento = this.calcularEstado(promedioGeneral);
+
+    // EXPEDIENTE OPERATIVO COMPLETO DEL COMERCIAL PARA EL DELEGADO DE GERENCIA
+    const expediente = {
+      informacionGeneral: {
+        id: usuario.id,
+        nombreCompleto: `${usuario.nombre} ${usuario.apellido}`,
+        user: usuario.user,
+        correo: usuario.correo,
+        telefono: usuario.telefono || 'No registrado',
+        cedula: usuario.cedula,
+        cargo: usuario.cargo || nombreGrupo,
+        fechaIngreso: usuario.createdAt,
+        foto: usuario.foto,
+        codigoAsesor: usuario.codigoAsesor || usuario.user
+      },
+      cargo: usuario.cargo || nombreGrupo,
+      fechaIngreso: usuario.createdAt,
+      jornadaLaboral: {
+        diasTrabajados: diasJornada,
+        horasTotales: totalHorasTrabajadas,
+        retrasosMin: totalRetrasosMin,
+        promedioHorasDia: diasJornada > 0 ? (totalHorasTrabajadas / diasJornada).toFixed(1) : 0
+      },
+      visitasRealizadas,
+      totalVisitas,
+      clientesGestionados,
+      cotizacionesRealizadas: totalCotizaciones,
+      ventasRealizadas: totalVentasCerradas,
+      valorVendido,
+      actividadesCumplidas: actividadesFinalizadas,
+      totalActividades,
+      rutasCumplidas: rutasCompletadas,
+      totalRutas,
+      seguimientosRealizados: totalSeguimientos,
+      historial: historialEvals.map(h => ({
+        id: h.id,
+        periodo: h.periodo,
+        fecha: h.fecha,
+        calificacionGeneral: h.calificacionGeneral,
+        estadoCumplimiento: h.estadoCumplimiento
+      }))
+    };
 
     return {
       usuario: {
@@ -437,8 +514,10 @@ class EvaluacionesCampoService {
         codigoAsesor: usuario.codigoAsesor,
         meta_p: usuario.meta_p,
         meta_u: usuario.meta_u,
-        foto: usuario.foto
+        foto: usuario.foto,
+        createdAt: usuario.createdAt
       },
+      expediente,
       periodo: periodoActual,
       grupo,
       nombreGrupo,
@@ -466,6 +545,7 @@ class EvaluacionesCampoService {
       resumenOperativo: {
         totalProspectos,
         prospectosGanados,
+        clientesGestionados,
         totalVisitas,
         visitasRealizadas,
         efectividadVisitas,
@@ -648,8 +728,19 @@ class EvaluacionesCampoService {
       jornadaPorUsuario[j.usuarioId] = j;
     });
 
-    // Tareas vencidas y pendientes
-    const [actividadesPendientes, tareasVencidas, seguimientosPendientes, visitasHoy, ventasHoy] = await Promise.all([
+    // Tareas vencidas, pendientes y operaciones de hoy
+    const [
+      actividadesPendientes,
+      tareasVencidas,
+      seguimientosPendientes,
+      visitasHoy,
+      ventasLegacyHoy,
+      ventasExternasHoy,
+      totalClientesExternos,
+      totalProspectosExternos,
+      totalCotizacionesExternas,
+      totalVentasExternas
+    ] = await Promise.all([
       prisma.actividadCampo.count({
         where: { estado: { in: ['Pendiente', 'En ejecucion'] } }
       }),
@@ -671,10 +762,26 @@ class EvaluacionesCampoService {
       prisma.venta.findMany({
         where: { fecha: { gte: hoyInicio, lte: hoyFin } },
         select: { total: true }
-      })
+      }),
+      prisma.ventaExternaCampo.findMany({
+        where: { fecha: { gte: hoyInicio, lte: hoyFin } },
+        select: { valorVendido: true }
+      }),
+      prisma.clienteExternoCampo.count(),
+      prisma.clienteExternoCampo.count({
+        where: {
+          OR: [
+            { tipoRegistro: 'Prospecto' },
+            { etapaEmbudo: 'Prospecto' }
+          ]
+        }
+      }),
+      prisma.cotizacionExternaCampo.count(),
+      prisma.ventaExternaCampo.count()
     ]);
 
-    const totalVentasHoy = ventasHoy.reduce((acc, v) => acc + (parseFloat(v.total) || 0), 0);
+    const totalVentasHoy = ventasLegacyHoy.reduce((acc, v) => acc + (parseFloat(v.total) || 0), 0) +
+      ventasExternasHoy.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
 
     const resumenEquipo = [];
     let totalPresupuestoEquipo = 0;
@@ -775,6 +882,10 @@ class EvaluacionesCampoService {
       comercialesActivos: totalComerciales,
       comercialesEnJornada: enJornadaCount,
       comercialesSinIniciar: sinIniciarCount,
+      clientesGestionados: totalClientesExternos,
+      prospectosGenerados: totalProspectosExternos,
+      cotizacionesGeneradas: totalCotizacionesExternas,
+      ventasCerradas: totalVentasExternas,
       actividadesPendientes,
       tareasVencidas,
       seguimientosPendientes,

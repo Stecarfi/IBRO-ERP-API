@@ -7,6 +7,7 @@ const actividadesService = require('../services/campo/actividades.service');
 const evidenciasService = require('../services/campo/evidencias.service');
 const reportesService = require('../services/campo/reportes.service');
 const evaluacionesCampoService = require('../services/campo/evaluacionesCampo.service');
+const operacionExternaService = require('../services/campo/operacionExterna.service');
 const {
   iniciarJornadaSchema,
   pausaJornadaSchema,
@@ -1253,6 +1254,156 @@ class CampoController {
         },
         comerciales: comercialesDetalle
       });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // =================================================================
+  // --- OPERACIÓN COMERCIAL EXTERNA INDEPENDIENTE ---
+  // =================================================================
+
+  async getClientesExternos(req, res) {
+    try {
+      const { etapa, tipo, search, usuarioId } = req.query;
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? usuarioId : req.user.id;
+      const data = await operacionExternaService.getClientesExternos({
+        usuarioId: targetUserId,
+        etapa,
+        tipo,
+        search,
+        esDelegado: esDel
+      });
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getClienteExternoById(req, res) {
+    try {
+      const data = await operacionExternaService.getClienteExternoById(req.params.id);
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async crearClienteExterno(req, res) {
+    try {
+      const data = await operacionExternaService.crearClienteExterno(req.user.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'CREAR_CLIENTE_EXTERNO', { id: data.id, nombre: data.nombre }, null, req);
+      res.status(201).json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async actualizarClienteExterno(req, res) {
+    try {
+      const data = await operacionExternaService.actualizarClienteExterno(req.params.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_CLIENTE_EXTERNO', { id: data.id }, null, req);
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async cambiarEtapaEmbudo(req, res) {
+    try {
+      const { nuevaEtapa, nota } = req.body;
+      const data = await operacionExternaService.cambiarEtapaEmbudo(req.params.id, req.user.id, nuevaEtapa, nota);
+      await this.registrarAuditoria(req.user.id, 'CAMBIO_ETAPA_EMBUDO', { id: req.params.id, nuevaEtapa }, null, req);
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getCotizacionesExternas(req, res) {
+    try {
+      const { clienteExternoId, estado, usuarioId } = req.query;
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? usuarioId : req.user.id;
+      const data = await operacionExternaService.getCotizacionesExternas({
+        usuarioId: targetUserId,
+        clienteExternoId,
+        estado,
+        esDelegado: esDel
+      });
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async crearCotizacionExterna(req, res) {
+    try {
+      const data = await operacionExternaService.crearCotizacionExterna(req.user.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'CREAR_COTIZACION_EXTERNA', { id: data.id, codigo: data.codigo, total: data.total }, null, req);
+      res.status(201).json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async cambiarEstadoCotizacion(req, res) {
+    try {
+      const { nuevoEstado, nota } = req.body;
+      const data = await operacionExternaService.cambiarEstadoCotizacion(req.params.id, req.user.id, nuevoEstado, nota);
+      await this.registrarAuditoria(req.user.id, 'CAMBIO_ESTADO_COTIZACION', { id: req.params.id, nuevoEstado }, null, req);
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async agregarSeguimientoCotizacion(req, res) {
+    try {
+      const data = await operacionExternaService.agregarSeguimientoCotizacion(req.params.id, req.user.id, {
+        ...req.body,
+        usuarioNombre: `${req.user.nombre} ${req.user.apellido}`
+      });
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getVentasExternas(req, res) {
+    try {
+      const { clienteExternoId, usuarioId } = req.query;
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? usuarioId : req.user.id;
+      const data = await operacionExternaService.getVentasExternas({
+        usuarioId: targetUserId,
+        clienteExternoId,
+        esDelegado: esDel
+      });
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async registrarVentaExterna(req, res) {
+    try {
+      const data = await operacionExternaService.registrarVentaExterna(req.user.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'REGISTRAR_VENTA_EXTERNA', { id: data.id, codigo: data.codigo, valor: data.valorVendido }, null, req);
+      res.status(201).json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getMetricasEmbudo(req, res) {
+    try {
+      const { usuarioId } = req.query;
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? usuarioId : req.user.id;
+      const data = await operacionExternaService.getMetricasEmbudo(targetUserId);
+      res.json(data);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

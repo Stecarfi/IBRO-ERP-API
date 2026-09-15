@@ -107,6 +107,9 @@ model User {
   evaluacionesCampoRecibidas EvaluacionComercialCampo[] @relation("EvaluacionesCampoEvaluado")
   novedadesDelegadoCreadas   NovedadDelegadoCampo[]     @relation("NovedadDelegadoCreador")
   novedadesDelegadoRecibidas NovedadDelegadoCampo[]     @relation("NovedadDelegadoComercial")
+  clientesExternos           ClienteExternoCampo[]      @relation("ClienteExternoComercial")
+  cotizacionesExternas       CotizacionExternaCampo[]   @relation("CotizacionExternaComercial")
+  ventasExternas             VentaExternaCampo[]        @relation("VentaExternaComercial")
 }
 
 // 3. Clientes
@@ -875,9 +878,11 @@ model VisitaCampo {
   
   // Destinatario (Cliente existente o Prospecto nuevo)
   clienteId          String?
-  cliente            Cliente?        @relation(fields: [clienteId], references: [id])
+  cliente            Cliente?              @relation(fields: [clienteId], references: [id])
   prospectoId        String?
-  prospecto          ProspectoCampo? @relation(fields: [prospectoId], references: [id])
+  prospecto          ProspectoCampo?       @relation(fields: [prospectoId], references: [id])
+  clienteExternoId   String?
+  clienteExterno     ClienteExternoCampo?  @relation(fields: [clienteExternoId], references: [id])
   
   tipoVisita         String          @default("Comercial Prospeccion") // "Comercial Prospeccion" | "Comercial Seguimiento" | "Comercial Cierre" | "Cobranza" | "Servicio Tecnico" | "Auditoria"
   estado             String          @default("Programada") // "Programada" | "En Curso" | "Realizada" | "No Efectiva" | "Cancelada"
@@ -1043,25 +1048,29 @@ model EvidenciaCampo {
 
 // 33. Historial y Seguimiento Continuo de Clientes en Campo
 model SeguimientoCampo {
-  id               String          @id @default(uuid())
+  id               String               @id @default(uuid())
   visitaId         String?
-  visita           VisitaCampo?    @relation(fields: [visitaId], references: [id])
+  visita           VisitaCampo?         @relation(fields: [visitaId], references: [id])
   clienteId        String?
-  cliente          Cliente?        @relation(fields: [clienteId], references: [id])
+  cliente          Cliente?             @relation(fields: [clienteId], references: [id])
   prospectoId      String?
-  prospecto        ProspectoCampo? @relation(fields: [prospectoId], references: [id])
+  prospecto        ProspectoCampo?      @relation(fields: [prospectoId], references: [id])
+  clienteExternoId String?
+  clienteExterno   ClienteExternoCampo? @relation(fields: [clienteExternoId], references: [id])
   usuarioId        String
-  usuario          User            @relation("SeguimientoUsuario", fields: [usuarioId], references: [id])
+  usuario          User                 @relation("SeguimientoUsuario", fields: [usuarioId], references: [id])
   
-  fechaHora        DateTime        @default(now())
+  tipoAccion       String?              @default("Seguimiento") // "Llamada" | "Reunion" | "Visita" | "Cotizacion" | "Negociacion" | "Venta" | "Compromiso" | "Observacion"
+  fechaHora        DateTime             @default(now())
   resultado        String
-  observaciones    String          @db.Text
-  compromisos      String?         @db.Text
+  observaciones    String               @db.Text
+  compromisos      String?              @db.Text
   proximaActividad String?
   fechaProgramada  DateTime?
   evidencias       Json?
 
   @@index([clienteId, fechaHora])
+  @@index([clienteExternoId, fechaHora])
   @@index([usuarioId, fechaHora])
 }
 
@@ -1124,6 +1133,92 @@ model NovedadDelegadoCampo {
   @@index([usuarioId, fecha])
   @@index([tipo])
 }
+
+// 36. Clientes Externos y Cartera de Campo
+model ClienteExternoCampo {
+  id                 String    @id @default(uuid())
+  codigo             String    @unique
+  nombre             String    // Nombre comercial o Razón Social
+  nitDoc             String?   // NIT o Cédula
+  contacto           String?   // Nombre de la persona de contacto
+  telefono           String
+  correo             String?
+  ciudad             String    @default("Barranquilla")
+  direccion          String?
+  sectorEconomico    String?   // "Comercio" | "Industria" | "Salud" | "Alimentos" | "Construccion" | "Servicios" | "Otro"
+  origen             String    @default("En Frio / Puerta a Puerta")
+  tipoRegistro       String    @default("Cliente Potencial") // "Prospecto" | "Cliente Potencial" | "Cliente Activo" | "Cliente Inactivo"
+  etapaEmbudo        String    @default("Prospecto") // "Prospecto" | "Cliente Potencial" | "Visita" | "Seguimiento" | "Cotizacion" | "Negociacion" | "Venta" | "Fidelizacion"
+  comercialId        String
+  comercial          User      @relation("ClienteExternoComercial", fields: [comercialId], references: [id])
+  notas              String?   @db.Text
+  lat                Float?
+  lng                Float?
+  
+  visitas            VisitaCampo[]
+  seguimientos       SeguimientoCampo[]
+  cotizaciones       CotizacionExternaCampo[]
+  ventas             VentaExternaCampo[]
+  
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([comercialId])
+  @@index([etapaEmbudo])
+  @@index([tipoRegistro])
+}
+
+// 37. Cotizaciones Comerciales Externas de Campo
+model CotizacionExternaCampo {
+  id                 String              @id @default(uuid())
+  codigo             String              @unique
+  clienteExternoId   String
+  clienteExterno     ClienteExternoCampo @relation(fields: [clienteExternoId], references: [id])
+  comercialId        String
+  comercial          User                @relation("CotizacionExternaComercial", fields: [comercialId], references: [id])
+  fecha              DateTime            @default(now())
+  validezDias        Int                 @default(15)
+  estado             String              @default("Borrador") // "Borrador" | "Enviada" | "En Negociacion" | "Aprobada" | "Rechazada"
+  total              Float               @default(0)
+  items              Json                // [{ descripcion, cantidad, precioUnit, subtotal }]
+  observaciones      String?             @db.Text
+  seguimientos       Json?               // [{ fecha, usuario, accion, nota }]
+  historial          Json?               // [{ fecha, estadoAnterior, nuevoEstado, nota }]
+  
+  ventas             VentaExternaCampo[]
+  
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([comercialId])
+  @@index([clienteExternoId])
+  @@index([estado])
+}
+
+// 38. Ventas y Cierres Comerciales Externos de Campo
+model VentaExternaCampo {
+  id                 String                  @id @default(uuid())
+  codigo             String                  @unique
+  clienteExternoId   String
+  clienteExterno     ClienteExternoCampo     @relation(fields: [clienteExternoId], references: [id])
+  comercialId        String
+  comercial          User                    @relation("VentaExternaComercial", fields: [comercialId], references: [id])
+  cotizacionId       String?
+  cotizacion         CotizacionExternaCampo? @relation(fields: [cotizacionId], references: [id])
+  fecha              DateTime                @default(now())
+  valorVendido       Float                   @default(0)
+  metodoPago         String?                 @default("Contado") // "Contado" | "Credito 15d" | "Credito 30d" | "Transferencia"
+  observaciones      String?                 @db.Text
+  items              Json?                   // [{ descripcion, cantidad, precioUnit, subtotal }]
+  estado             String                  @default("Cerrada") // "Cerrada" | "Entregada" | "Cancelada"
+  
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  @@index([comercialId])
+  @@index([clienteExternoId])
+}
+
 
 
 

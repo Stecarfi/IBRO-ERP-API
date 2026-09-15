@@ -84,5 +84,22 @@ router.get('/novedades/:usuarioId', (req, res) => campoController.getNovedadesCo
 router.put('/novedades/:id/estado', (req, res) => campoController.actualizarEstadoNovedad(req, res));
 router.get('/ficha-historica/:usuarioId', (req, res) => campoController.getFichaHistorica(req, res));
 
+// 14. Operación Comercial Externa Independiente (Clientes, Cotizaciones, Ventas y Embudo)
+router.get('/externo/clientes', (req, res) => campoController.getClientesExternos(req, res));
+router.get('/externo/clientes/:id', (req, res) => campoController.getClienteExternoById(req, res));
+router.post('/externo/clientes', (req, res) => campoController.crearClienteExterno(req, res));
+router.put('/externo/clientes/:id', (req, res) => campoController.actualizarClienteExterno(req, res));
+router.put('/externo/clientes/:id/etapa', (req, res) => campoController.cambiarEtapaEmbudo(req, res));
+
+router.get('/externo/cotizaciones', (req, res) => campoController.getCotizacionesExternas(req, res));
+router.post('/externo/cotizaciones', (req, res) => campoController.crearCotizacionExterna(req, res));
+router.put('/externo/cotizaciones/:id/estado', (req, res) => campoController.cambiarEstadoCotizacion(req, res));
+router.post('/externo/cotizaciones/:id/seguimiento', (req, res) => campoController.agregarSeguimientoCotizacion(req, res));
+
+router.get('/externo/ventas', (req, res) => campoController.getVentasExternas(req, res));
+router.post('/externo/ventas', (req, res) => campoController.registrarVentaExterna(req, res));
+
+router.get('/externo/embudo', (req, res) => campoController.getMetricasEmbudo(req, res));
+
 module.exports = router;
 
