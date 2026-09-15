@@ -105,6 +105,8 @@ model User {
   ordenesServicioCampo       OrdenServicioCampo[]
   evaluacionesCampoHechas    EvaluacionComercialCampo[] @relation("EvaluacionesCampoEvaluador")
   evaluacionesCampoRecibidas EvaluacionComercialCampo[] @relation("EvaluacionesCampoEvaluado")
+  novedadesDelegadoCreadas   NovedadDelegadoCampo[]     @relation("NovedadDelegadoCreador")
+  novedadesDelegadoRecibidas NovedadDelegadoCampo[]     @relation("NovedadDelegadoComercial")
 }
 
 // 3. Clientes
@@ -1079,14 +1081,18 @@ model EvaluacionComercialCampo {
   // Detalle estructurado de indicadores (Grupo A 24 items, Grupo B/C 20 items)
   indicadoresDetalle    Json
   
-  // Síntesis Cualitativa
+  // Síntesis Cualitativa y Observaciones del Delegado
+  observacionesGenerales String?   @db.Text
   fortalezasGenerales    String?   @db.Text
   debilidadesGenerales   String?   @db.Text
+  recomendaciones        String?   @db.Text
+  compromisos            String?   @db.Text
+  accionesCorrectivas    String?   @db.Text
   oportunidadesMejora    String?   @db.Text
   planAccionGeneral      String?   @db.Text
   fechaSeguimiento       DateTime?
+  fechaProximaEvaluacion DateTime?
   aprobadoDelegado       Boolean   @default(true)
-  observacionesGenerales String?   @db.Text
   
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
@@ -1094,5 +1100,30 @@ model EvaluacionComercialCampo {
   @@index([usuarioId, periodo])
   @@index([evaluadorId])
 }
+
+// 35. Novedades, Observaciones y Seguimiento del Delegado de Gerencia
+model NovedadDelegadoCampo {
+  id               String    @id @default(uuid())
+  delegadoId       String
+  delegado         User      @relation("NovedadDelegadoCreador", fields: [delegadoId], references: [id])
+  usuarioId        String
+  usuario          User      @relation("NovedadDelegadoComercial", fields: [usuarioId], references: [id])
+  tipo             String    // "Observacion" | "Compromiso" | "Incumplimiento" | "Reconocimiento" | "LlamadoAtencion" | "Comentario" | "SolicitudSeguimiento" | "Objetivo"
+  titulo           String
+  descripcion      String    @db.Text
+  gravedad         String?   @default("Normal") // "Baja" | "Normal" | "Alta" | "Critica" | "Felicitacion"
+  fecha            DateTime  @default(now())
+  fechaCompromiso  DateTime?
+  estado           String    @default("Activo") // "Activo" | "Resuelto" | "En_Seguimiento"
+  accionCorrectiva String?   @db.Text
+  metadata         Json?
+  
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([usuarioId, fecha])
+  @@index([tipo])
+}
+
 
 

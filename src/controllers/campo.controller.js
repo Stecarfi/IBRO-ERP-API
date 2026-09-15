@@ -531,6 +531,77 @@ class CampoController {
     }
   }
 
+  // --- 10. NOVEDADES Y SEGUIMIENTO DEL DELEGADO DE GERENCIA ---
+  async crearNovedadDelegado(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede registrar novedades de supervisión.' });
+      }
+
+      const novedad = await evaluacionesCampoService.crearNovedadDelegado(req.user.id, req.body);
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_NOVEDAD_DELEGADO_CREADA', {
+        novedadId: novedad.id,
+        usuarioId: req.body.usuarioId,
+        tipo: req.body.tipo,
+        titulo: req.body.titulo
+      }, {
+        delegadoNombre: `${req.user.nombre} ${req.user.apellido}`
+      }, req);
+
+      res.json({ success: true, novedad });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getNovedadesComercial(req, res) {
+    try {
+      const targetUserId = req.params.usuarioId || req.query.usuarioId;
+      if (!targetUserId) return res.status(400).json({ error: 'usuarioId requerido' });
+
+      if (!this.esDelegado(req.user) && req.user.id !== targetUserId) {
+        return res.status(403).json({ error: 'Acceso denegado.' });
+      }
+
+      const novedades = await evaluacionesCampoService.getNovedadesComercial(targetUserId);
+      res.json(novedades);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async actualizarEstadoNovedad(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Operación restringida al Delegado de Gerencia.' });
+      }
+
+      const { id } = req.params;
+      const { estado, accionCorrectiva } = req.body;
+      const actualizada = await evaluacionesCampoService.actualizarEstadoNovedad(id, estado, accionCorrectiva);
+      res.json({ success: true, novedad: actualizada });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // --- 11. FICHA HISTÓRICA COMPLETA DEL COMERCIAL ---
+  async getFichaHistorica(req, res) {
+    try {
+      const targetUserId = req.params.usuarioId || req.query.usuarioId || req.user.id;
+
+      if (!this.esDelegado(req.user) && req.user.id !== targetUserId) {
+        return res.status(403).json({ error: 'Acceso denegado: Solo puede consultar su propia ficha histórica.' });
+      }
+
+      const ficha = await evaluacionesCampoService.getFichaHistoricaComercial(targetUserId);
+      res.json(ficha);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   async getComercialesEnCampo(req, res) {
     try {
       if (!this.esDelegado(req.user)) {

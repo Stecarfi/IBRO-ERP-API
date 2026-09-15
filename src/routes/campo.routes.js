@@ -78,4 +78,11 @@ router.get('/evaluaciones/:usuarioId', (req, res) => campoController.getHistoria
 router.get('/comerciales', (req, res) => campoController.getComercialesEnCampo(req, res));
 router.get('/auditoria', (req, res) => campoController.getAuditoriaCampo(req, res));
 
+// 13. Novedades, Observaciones y Ficha Histórica
+router.post('/novedades', (req, res) => campoController.crearNovedadDelegado(req, res));
+router.get('/novedades/:usuarioId', (req, res) => campoController.getNovedadesComercial(req, res));
+router.put('/novedades/:id/estado', (req, res) => campoController.actualizarEstadoNovedad(req, res));
+router.get('/ficha-historica/:usuarioId', (req, res) => campoController.getFichaHistorica(req, res));
+
 module.exports = router;
+
