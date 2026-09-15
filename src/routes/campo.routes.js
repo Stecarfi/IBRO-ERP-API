@@ -66,6 +66,7 @@ router.post('/rutas/asignar', (req, res) => campoController.asignarRuta(req, res
 router.get('/rutas', (req, res) => campoController.getRutasAsignadas(req, res));
 router.get('/trazabilidad/dia', (req, res) => campoController.getHistorialDiaCompleto(req, res));
 router.get('/operacion/panel', (req, res) => campoController.getPanelOperativo(req, res));
+router.get('/personal-campo', (req, res) => campoController.getPanelOperativo(req, res));
 
 // 12. Delegado de Gerencia, Indicadores y Evaluaciones
 router.get('/delegado/dashboard', (req, res) => campoController.getDashboardDelegado(req, res));

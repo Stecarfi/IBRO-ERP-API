@@ -27,9 +27,11 @@ class CampoController {
   // Helper de permisos del Delegado de Gerencia
   esDelegado(user) {
     if (!user) return false;
-    // Roles comerciales de campo (67: Dirección Comercial, 68: Coordinador Comercial, 69: Asesor) NO son supervisores ni evaluadores
-    if (['67', '68', '69'].includes(String(user.roleId))) return false;
-    return String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin' || Boolean(user.esDelegadoGerencia);
+    // Si tiene la bandera esDelegadoGerencia = true, es Delegado incondicionalmente
+    if (user.esDelegadoGerencia === true || user.esDelegadoGerencia === 'true') return true;
+    // Administrador principal o usuario admin
+    if (String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin') return true;
+    return false;
   }
 
   // Helper de auditoría inmutable
@@ -621,7 +623,12 @@ class CampoController {
           ],
           AND: [
             { NOT: { roleId: '1' } },
-            { NOT: { esDelegadoGerencia: true } }
+            {
+              OR: [
+                { esComercialCampo: true },
+                { esDelegadoGerencia: false }
+              ]
+            }
           ]
         },
         select: {
@@ -633,9 +640,15 @@ class CampoController {
           roleId: true,
           codigoAsesor: true,
           foto: true,
+          telefono: true,
+          correo: true,
           meta_p: true,
           meta_u: true,
           esComercialCampo: true,
+          esDelegadoGerencia: true,
+          lat: true,
+          lng: true,
+          lastLocationUpdate: true,
           role: { select: { id: true, name: true } }
         },
         orderBy: { nombre: 'asc' }
@@ -1100,7 +1113,12 @@ class CampoController {
           ],
           AND: [
             { NOT: { roleId: '1' } },
-            { NOT: { esDelegadoGerencia: true } }
+            {
+              OR: [
+                { esComercialCampo: true },
+                { esDelegadoGerencia: false }
+              ]
+            }
           ]
         },
         select: {
@@ -1110,27 +1128,49 @@ class CampoController {
           cargo: true,
           user: true,
           telefono: true,
+          correo: true,
           foto: true,
           lat: true,
           lng: true,
           lastLocationUpdate: true,
-          roleId: true
-        }
+          roleId: true,
+          esComercialCampo: true,
+          esDelegadoGerencia: true,
+          role: { select: { id: true, name: true } }
+        },
+        orderBy: { nombre: 'asc' }
       });
 
       const comercialesIds = comerciales.map(c => c.id);
 
-      // 2. Jornadas activas hoy
-      const jornadasActivas = await prisma.jornadaLaboral.findMany({
+      // Delegado de Gerencia supervisor activo
+      const delegadoSupervisor = await prisma.user.findFirst({
+        where: { esDelegadoGerencia: true },
+        select: { nombre: true, apellido: true, cargo: true }
+      });
+      const delegadoResponsableTexto = delegadoSupervisor
+        ? `${delegadoSupervisor.nombre} ${delegadoSupervisor.apellido || ''}`.trim() + (delegadoSupervisor.cargo ? ` (${delegadoSupervisor.cargo})` : ' (Delegado de Gerencia)')
+        : 'Delegación General de Gerencia';
+
+      // 2. Todas las jornadas del día (activas y finalizadas)
+      const todasJornadasHoy = await prisma.jornadaLaboral.findMany({
         where: {
           usuarioId: { in: comercialesIds },
-          fecha: { gte: startOfDay, lte: endOfDay },
-          estado: { in: ['Iniciada', 'En Pausa'] }
-        }
+          fecha: { gte: startOfDay, lte: endOfDay }
+        },
+        orderBy: { id: 'desc' }
       });
 
-      const jornadasPorUsuario = new Map();
-      jornadasActivas.forEach(j => jornadasPorUsuario.set(j.usuarioId, j));
+      const jornadasActivasPorUsuario = new Map();
+      const ultimaJornadaPorUsuario = new Map();
+      todasJornadasHoy.forEach(j => {
+        if (!ultimaJornadaPorUsuario.has(j.usuarioId)) {
+          ultimaJornadaPorUsuario.set(j.usuarioId, j);
+        }
+        if (['Iniciada', 'En Pausa'].includes(j.estado) && !jornadasActivasPorUsuario.has(j.usuarioId)) {
+          jornadasActivasPorUsuario.set(j.usuarioId, j);
+        }
+      });
 
       // 3. Visitas del día
       const visitasHoy = await prisma.visitaCampo.findMany({
@@ -1138,7 +1178,7 @@ class CampoController {
           usuarioId: { in: comercialesIds },
           fechaProgramada: { gte: startOfDay, lte: endOfDay }
         },
-        include: { cliente: true, prospecto: true }
+        include: { cliente: true, prospecto: true, clienteExterno: true }
       });
 
       const visitasEnCursoPorUsuario = new Map();
@@ -1146,44 +1186,109 @@ class CampoController {
         visitasEnCursoPorUsuario.set(v.usuarioId, v);
       });
 
-      // 4. Clasificar comerciales
+      // 4. Últimos pings GPS registrados hoy
+      const ultimosPingsHoy = await prisma.ubicacionCampo.findMany({
+        where: {
+          usuarioId: { in: comercialesIds },
+          timestamp: { gte: startOfDay }
+        },
+        orderBy: { timestamp: 'desc' }
+      });
+      const pingPorUsuario = new Map();
+      ultimosPingsHoy.forEach(p => {
+        if (!pingPorUsuario.has(p.usuarioId)) {
+          pingPorUsuario.set(p.usuarioId, p);
+        }
+      });
+
+      // Helper formateador de hora
+      const formatHora = (dateVal) => {
+        if (!dateVal) return '--';
+        const d = new Date(dateVal);
+        if (isNaN(d.getTime())) return '--';
+        return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true });
+      };
+
+      // 5. Clasificar comerciales con información integral para "PERSONAL DE CAMPO"
       let conectadosCount = 0;
       let enVisitaCount = 0;
       let disponiblesCount = 0;
 
       const comercialesDetalle = comerciales.map(c => {
-        const jActiva = jornadasPorUsuario.get(c.id);
+        const jActiva = jornadasActivasPorUsuario.get(c.id);
+        const jUltima = ultimaJornadaPorUsuario.get(c.id);
         const vEnCurso = visitasEnCursoPorUsuario.get(c.id);
+        const pingGps = pingPorUsuario.get(c.id);
 
-        let estadoOperativo = 'desconectado'; // 'desconectado' | 'en_jornada' | 'en_visita'
+        let estadoOperativo = 'desconectado';
+        let estado = 'Fuera de Turno';
+        let disponible = false;
         let detalleVisita = null;
 
         if (jActiva) {
           conectadosCount++;
           if (vEnCurso) {
             estadoOperativo = 'en_visita';
+            estado = 'Visitando cliente';
             enVisitaCount++;
             const minutosEnVisita = vEnCurso.checkInHora
               ? Math.max(1, Math.round((ahora - new Date(vEnCurso.checkInHora)) / 60000))
               : 0;
+            const nombreCliente = vEnCurso.clienteExterno?.nombre || vEnCurso.cliente?.nom || vEnCurso.prospecto?.nombreComercial || 'Cliente';
             detalleVisita = {
               visitaId: vEnCurso.id,
-              clienteNombre: vEnCurso.cliente?.nom || vEnCurso.prospecto?.nombreComercial || 'Cliente',
+              clienteNombre: nombreCliente,
               minutosEnVisita,
               tipoVisita: vEnCurso.tipoVisita
             };
+          } else if (jActiva.estado === 'En Pausa') {
+            estadoOperativo = 'en_pausa';
+            estado = 'En Pausa';
           } else {
             estadoOperativo = 'en_jornada';
+            estado = 'Disponible';
+            disponible = true;
             disponiblesCount++;
           }
+        } else if (jUltima?.estado === 'Finalizada') {
+          estadoOperativo = 'finalizada';
+          estado = 'Jornada finalizada';
         }
+
+        // Ubicación
+        let latVal = c.lat || pingGps?.lat;
+        let lngVal = c.lng || pingGps?.lng;
+        let updateTime = c.lastLocationUpdate || pingGps?.timestamp;
+        let ultimaUbicacion = 'Sin reporte GPS';
+        if (latVal && lngVal) {
+          const horaGps = updateTime ? ` (${formatHora(updateTime)})` : '';
+          ultimaUbicacion = `Lat: ${Number(latVal).toFixed(4)}, Lng: ${Number(lngVal).toFixed(4)}${horaGps}`;
+        }
+
+        // Jornada horas
+        const jornadaIniciada = jUltima?.horaInicio ? formatHora(jUltima.horaInicio) : '--';
+        const jornadaFinalizada = jUltima?.horaFin ? formatHora(jUltima.horaFin) : (jActiva ? 'En curso' : '--');
+        const visitandoCliente = vEnCurso
+          ? (vEnCurso.clienteExterno?.nombre || vEnCurso.cliente?.nom || vEnCurso.prospecto?.nombreComercial || 'Cliente en Visita')
+          : 'Ninguno';
 
         return {
           ...c,
-          nombreCompleto: `${c.nombre} ${c.apellido}`.trim(),
+          nombreCompleto: `${c.nombre} ${c.apellido || ''}`.trim(),
+          perfil: c.role?.name || c.cargo || 'Comercial en Campo',
+          cargo: c.cargo || 'Asesor Comercial',
+          estado,
           estadoOperativo,
+          disponible,
+          jornadaIniciada,
+          jornadaFinalizada,
+          ultimaUbicacion,
+          visitandoCliente,
+          delegadoResponsable: delegadoResponsableTexto,
           jornadaActivaId: jActiva?.id || null,
           horaInicioJornada: jActiva?.horaInicio || null,
+          latActual: latVal || null,
+          lngActual: lngVal || null,
           detalleVisita
         };
       });

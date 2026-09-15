@@ -631,7 +631,12 @@ class EvaluacionesCampoService {
         ],
         AND: [
           { NOT: { roleId: '1' } }, // Excluir Master Admin
-          { NOT: { esDelegadoGerencia: true } } // Excluir a los delegados
+          {
+            OR: [
+              { esComercialCampo: true },
+              { esDelegadoGerencia: false }
+            ]
+          }
         ]
       },
       include: { role: true },
