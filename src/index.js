@@ -67,7 +67,22 @@ app.use(cors({
         callback(null, true);
     },
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Accept',
+        'Origin',
+        'X-Requested-With',
+        'x-user-id',
+        'x-user',
+        'x-client-role',
+        'x-module',
+        'Range',
+        'Cache-Control',
+        'Pragma',
+        'Expires'
+    ]
 }));
 
 // 🛡️ Rate Limiting Global (Anti-DDoS)

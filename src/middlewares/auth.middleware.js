@@ -9,8 +9,11 @@ const authenticateToken = (req, res, next) => {
         const fallbackUsername = req.headers['x-user'];
         if (fallbackUserId || fallbackUsername) {
             try {
+                const orConditions = [];
+                if (fallbackUserId) orConditions.push({ id: String(fallbackUserId) });
+                if (fallbackUsername) orConditions.push({ user: { equals: String(fallbackUsername), mode: 'insensitive' } });
                 const dbU = await prisma.user.findFirst({
-                    where: fallbackUserId ? { id: fallbackUserId } : { user: fallbackUsername },
+                    where: { OR: orConditions },
                     include: { role: true }
                 });
                 if (dbU) {
