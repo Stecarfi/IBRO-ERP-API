@@ -16,7 +16,12 @@ class JornadaService {
     });
 
     if (jornadaPrevia) {
-      return { success: false, error: 'Ya tienes una jornada activa en curso', jornada: jornadaPrevia };
+      return {
+        success: true,
+        jornada: jornadaPrevia,
+        yaActiva: true,
+        message: 'Turno laboral activo recuperado con éxito'
+      };
     }
 
     const {
