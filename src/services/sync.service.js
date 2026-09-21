@@ -559,11 +559,118 @@ class SyncService {
       include: { cliente: true, prospecto: true }
     });
 
+    // Cotizaciones Externas (Ventas Externas aisladas de terreno)
+    const cotizacionesExternasRaw = await prisma.cotizacionExternaCampo.findMany({
+      include: { clienteExterno: true, comercial: true },
+      orderBy: { fecha: 'desc' },
+      take: 200
+    });
+    const cotizaciones_externas = cotizacionesExternasRaw.map(c => {
+      const extMeta = (c.items && typeof c.items === 'object' && !Array.isArray(c.items) && c.items._meta) ? c.items._meta : {};
+      const itemsList = Array.isArray(c.items) ? c.items : (Array.isArray(c.items?.items) ? c.items.items : []);
+      const equiposList = (c.items && typeof c.items === 'object' && !Array.isArray(c.items) && Array.isArray(c.items.equipos))
+        ? c.items.equipos
+        : itemsList;
+      const materialesList = (c.items && typeof c.items === 'object' && !Array.isArray(c.items) && Array.isArray(c.items.materiales))
+        ? c.items.materiales
+        : [];
+
+      return {
+        id: c.id,
+        numCotizacion: c.codigo || '',
+        codigo: c.codigo || '',
+        fecha: c.fecha ? c.fecha.toISOString().split('T')[0] : '',
+        fechaIso: c.fecha ? c.fecha.toISOString() : '',
+        vendedor: c.comercial?.user || '',
+        vendedorId: c.comercialId,
+        vendedorNombre: `${c.comercial?.nombre || ''} ${c.comercial?.apellido || ''}`.trim(),
+        clienteId: c.clienteExternoId,
+        clienteExternoId: c.clienteExternoId,
+        docCli: c.clienteExterno?.nitDoc || '',
+        cliente: c.clienteExterno?.nombre || '',
+        clienteNombre: c.clienteExterno?.nombre || '',
+        clienteDireccion: c.clienteExterno?.direccion || '',
+        clienteCiudadDpto: c.clienteExterno?.ciudad || '',
+        clienteTelefono: c.clienteExterno?.telefono || '',
+        clienteEmail: c.clienteExterno?.correo || '',
+        contacto: c.clienteExterno?.contacto || '',
+        total: c.total,
+        estado: c.estado,
+        estadoAprobacion: c.estado === 'Aprobada' ? 'aprobado' : (c.estado === 'Rechazada' ? 'rechazado' : 'pendiente_aprobacion'),
+        observacion: c.observaciones || '',
+        esVentasExternas: true,
+        origen: 'Ventas Externas',
+        items: itemsList,
+        equipos: equiposList,
+        materiales: materialesList,
+        ...extMeta
+      };
+    });
+
+    // Pedidos Externos (Ventas Externas aisladas de terreno)
+    const ventasExternasRaw = await prisma.ventaExternaCampo.findMany({
+      include: { clienteExterno: true, comercial: true, cotizacion: true },
+      orderBy: { fecha: 'desc' },
+      take: 200
+    });
+    const pedidos_externos = ventasExternasRaw.map(v => {
+      const extMeta = (v.items && typeof v.items === 'object' && !Array.isArray(v.items) && v.items._meta) ? v.items._meta : {};
+      const itemsList = Array.isArray(v.items) ? v.items : (Array.isArray(v.items?.items) ? v.items.items : []);
+      const equiposList = (v.items && typeof v.items === 'object' && !Array.isArray(v.items) && Array.isArray(v.items.equipos))
+        ? v.items.equipos
+        : itemsList;
+      const materialesList = (v.items && typeof v.items === 'object' && !Array.isArray(v.items) && Array.isArray(v.items.materiales))
+        ? v.items.materiales
+        : [];
+
+      return {
+        id: v.id,
+        numPedido: v.codigo || '',
+        codigo: v.codigo || '',
+        numeroFactura: v.codigo || '',
+        fecha: v.fecha ? v.fecha.toISOString().split('T')[0] : '',
+        fechaIso: v.fecha ? v.fecha.toISOString() : '',
+        vendedor: v.comercial?.user || '',
+        vendedorId: v.comercialId,
+        vendedorNombre: `${v.comercial?.nombre || ''} ${v.comercial?.apellido || ''}`.trim(),
+        clienteId: v.clienteExternoId,
+        clienteExternoId: v.clienteExternoId,
+        docCli: v.clienteExterno?.nitDoc || '',
+        cliente: v.clienteExterno?.nombre || '',
+        clienteNombre: v.clienteExterno?.nombre || '',
+        clienteDireccion: v.clienteExterno?.direccion || '',
+        clienteCiudadDpto: v.clienteExterno?.ciudad || '',
+        clienteTelefono: v.clienteExterno?.telefono || '',
+        clienteEmail: v.clienteExterno?.correo || '',
+        contacto: v.clienteExterno?.contacto || '',
+        total: v.valorVendido,
+        valorVendido: v.valorVendido,
+        metodoPago: v.metodoPago || 'Contado',
+        estado: v.estado,
+        cotizacionId: v.cotizacionId,
+        observaciones: v.observaciones || '',
+        esVentasExternas: true,
+        origen: 'Ventas Externas',
+        items: itemsList,
+        equipos: equiposList,
+        materiales: materialesList,
+        ...extMeta
+      };
+    });
+
+    // Cartera de Clientes Externos de Campo
+    const clientes_externos = await prisma.clienteExternoCampo.findMany({
+      include: { comercial: { select: { id: true, nombre: true, apellido: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
+
     return {
       users, roles, clientes, inventario, ventas, pqrs, servicios,
       solicitudes, procesosDisciplinarios, evaluaciones, anuncios,
       cotizaciones, chatGroups, chat, auditoria, notificaciones, cuentasCobro, comisionistas, informesConfig, capacitaciones, pendingResets, config: appConfig, whatsappConfig,
-      geocercas, zonasComerciales, prospectosCampo, visitasCampo
+      geocercas, zonasComerciales, prospectosCampo, visitasCampo,
+      cotizaciones_externas, pedidos_externos, clientes_externos
     };
   }
 
@@ -756,6 +863,47 @@ class SyncService {
         });
       }
       if (!client) client = await tx.cliente.findFirst();
+      return client;
+    };
+
+    // Helper para buscar o crear un cliente externo para cotizaciones y pedidos de campo
+    const findOrCreateClienteExterno = async (item, comercialId) => {
+      let client = null;
+      if (item.clienteExternoId) {
+        client = await tx.clienteExternoCampo.findUnique({ where: { id: item.clienteExternoId } });
+      }
+      if (!client && item.clienteId) {
+        client = await tx.clienteExternoCampo.findUnique({ where: { id: item.clienteId } });
+      }
+      if (!client && (item.docCli || item.clienteNit)) {
+        const doc = item.docCli || item.clienteNit;
+        client = await tx.clienteExternoCampo.findFirst({ where: { nitDoc: doc } });
+      }
+      if (!client && (item.clienteNombre || item.cliente)) {
+        const nom = item.clienteNombre || item.cliente;
+        client = await tx.clienteExternoCampo.findFirst({
+          where: { nombre: { equals: nom, mode: 'insensitive' } }
+        });
+      }
+      if (!client) {
+        const count = await tx.clienteExternoCampo.count();
+        const codigo = `CLEX-${String(count + 1).padStart(5, '0')}`;
+        client = await tx.clienteExternoCampo.create({
+          data: {
+            codigo,
+            nombre: item.clienteNombre || item.cliente || 'Cliente Externo Nuevo',
+            nitDoc: item.docCli || item.clienteNit || null,
+            contacto: item.contacto || null,
+            telefono: item.clienteTelefono || item.clienteMovil || item.tel || '0',
+            correo: item.clienteEmail || item.correo || null,
+            direccion: item.clienteDireccion || item.direccion || null,
+            ciudad: item.clienteCiudadDpto ? item.clienteCiudadDpto.split('/')[0].trim() : 'Barranquilla',
+            comercialId: comercialId || user?.id || '1',
+            etapaEmbudo: 'Cotizacion',
+            tipoRegistro: 'Cliente Potencial'
+          }
+        });
+      }
       return client;
     };
 
@@ -1289,6 +1437,190 @@ class SyncService {
             fechaCorte: configVal.informes.fechaCorte,
             diasTranscurridos: configVal.informes.diasTranscurridos
           },
+        });
+      }
+    }
+
+    // --- FASE EXTERNA: Módulo de Ventas Externas y Operaciones en Campo ---
+
+    // 19. Cotizaciones Externas (Ventas Externas de Campo aisladas)
+    if (diff.cotizaciones_externas) {
+      await flatDelete('cotizacionExternaCampo', diff.cotizaciones_externas.deleted || []);
+
+      for (const item of diff.cotizaciones_externas.upserted || []) {
+        const comercialId = await resolveUser(item.vendedorId || item.vendedor, true);
+        const client = await findOrCreateClienteExterno(item, comercialId);
+        const total = parseFloat(item.total) || 0;
+        const codigo = item.numCotizacion || item.codigo || `EXT-COT-${String(item.id).slice(-4)}`;
+
+        const structuredItems = {
+          items: item.items || [],
+          equipos: item.equipos || [],
+          materiales: item.materiales || [],
+          _meta: {
+            condiciones: item.condiciones || '',
+            tiempoEntrega: item.tiempoEntrega || '',
+            direccionEntrega: item.direccionEntrega || '',
+            fechaEntrega: item.fechaEntrega || '',
+            horaEntrega: item.horaEntrega || '',
+            vigencia: item.vigencia || 10,
+            garantia: item.garantia || '',
+            tipoGarantia: item.tipoGarantia || '',
+            tiempoGarantia: item.tiempoGarantia || '',
+            tiempoGarantiaDefecto: item.tiempoGarantiaDefecto || '',
+            priceTier: item.priceTier || '',
+            ivaTipo: item.ivaTipo || '',
+            cuentasBancarias: item.cuentasBancarias || '',
+            clienteNombre: item.clienteNombre || item.cliente || client.nombre,
+            clienteNit: item.clienteNit || item.docCli || client.nitDoc,
+            clienteTelefono: item.clienteTelefono || client.telefono,
+            clienteMovil: item.clienteMovil || client.telefono,
+            clienteEmail: item.clienteEmail || client.correo,
+            clienteDireccion: item.clienteDireccion || client.direccion,
+            clienteCiudadDpto: item.clienteCiudadDpto || client.ciudad,
+            clientePais: item.clientePais || 'Colombia',
+            contacto: item.contacto || client.contacto,
+            detallePagoMixto: item.detallePagoMixto || '',
+            vendedorNombre: item.vendedorNombre || '',
+            vendedorCargo: item.vendedorCargo || '',
+            vendedorEmail: item.vendedorEmail || '',
+            vendedorMovil: item.vendedorMovil || '',
+            vendedorCodigoAsesor: item.vendedorCodigoAsesor || ''
+          }
+        };
+
+        const estadoCot = item.estadoAprobacion === 'aprobado' 
+          ? 'Aprobada' 
+          : (item.estadoAprobacion === 'rechazado' ? 'Rechazada' : (item.estado || 'Enviada'));
+
+        const data = {
+          codigo,
+          clienteExternoId: client.id,
+          comercialId: comercialId,
+          fecha: item.fechaIso ? safeDate(item.fechaIso) : safeDate(item.fecha),
+          validezDias: parseInt(item.vigencia) || 15,
+          estado: estadoCot,
+          total,
+          items: structuredItems,
+          observaciones: item.observacion || item.observaciones || null,
+          historial: [
+            {
+              fecha: new Date(),
+              evento: 'Sincronización desde Módulo Comercial de Campo',
+              estado: estadoCot,
+              total
+            }
+          ]
+        };
+
+        await tx.cotizacionExternaCampo.upsert({
+          where: { id: item.id },
+          update: data,
+          create: { id: item.id, ...data }
+        });
+      }
+    }
+
+    // 20. Pedidos / Ventas Externas (Ventas de Campo aisladas)
+    if (diff.pedidos_externos) {
+      await flatDelete('ventaExternaCampo', diff.pedidos_externos.deleted || []);
+
+      for (const item of diff.pedidos_externos.upserted || []) {
+        const comercialId = await resolveUser(item.vendedorId || item.vendedor, true);
+        const client = await findOrCreateClienteExterno(item, comercialId);
+        const total = parseFloat(item.total !== undefined ? item.total : item.valorVendido) || 0;
+        const codigo = item.numPedido || item.numeroFactura || item.codigo || `EXT-PED-${String(item.id).slice(-4)}`;
+
+        const structuredItems = {
+          items: item.items || [],
+          equipos: item.equipos || [],
+          materiales: item.materiales || [],
+          _meta: {
+            numPedido: codigo,
+            condiciones: item.condiciones || item.metodoPago || '',
+            tiempoEntrega: item.tiempoEntrega || '',
+            direccionEntrega: item.direccionEntrega || '',
+            fechaEntrega: item.fechaEntrega || '',
+            horaEntrega: item.horaEntrega || '',
+            garantia: item.garantia || '',
+            tipoGarantia: item.tipoGarantia || '',
+            mesesGarantia: item.mesesGarantia || 0,
+            clienteNombre: item.clienteNombre || item.cliente || client.nombre,
+            clienteNit: item.clienteNit || item.docCli || client.nitDoc,
+            clienteTelefono: item.clienteTelefono || client.telefono,
+            clienteMovil: item.clienteMovil || client.telefono,
+            clienteEmail: item.clienteEmail || client.correo,
+            clienteDireccion: item.clienteDireccion || client.direccion,
+            clienteCiudadDpto: item.clienteCiudadDpto || client.ciudad,
+            clientePais: item.clientePais || 'Colombia',
+            contacto: item.contacto || client.contacto,
+            detallePagoMixto: item.detallePagoMixto || '',
+            vendedorNombre: item.vendedorNombre || '',
+            vendedorCargo: item.vendedorCargo || '',
+            vendedorEmail: item.vendedorEmail || '',
+            vendedorMovil: item.vendedorMovil || '',
+            vendedorCodigoAsesor: item.vendedorCodigoAsesor || ''
+          }
+        };
+
+        const data = {
+          codigo,
+          clienteExternoId: client.id,
+          comercialId: comercialId,
+          fecha: item.fechaIso ? safeDate(item.fechaIso) : safeDate(item.fecha),
+          valorVendido: total,
+          metodoPago: item.metodoPago || item.condiciones || 'Contado',
+          observaciones: item.observaciones || item.observacion || null,
+          cotizacionId: item.cotizacionId || null,
+          estado: item.estado || 'Cerrada',
+          items: structuredItems
+        };
+
+        await tx.ventaExternaCampo.upsert({
+          where: { id: item.id },
+          update: data,
+          create: { id: item.id, ...data }
+        });
+
+        // Actualizar etapa en el embudo del cliente a 'Venta' y 'Cliente Activo'
+        await tx.clienteExternoCampo.update({
+          where: { id: client.id },
+          data: { etapaEmbudo: 'Venta', tipoRegistro: 'Cliente Activo', updatedAt: new Date() }
+        });
+      }
+    }
+
+    // 21. Clientes Externos y Prospectos de Campo
+    if (diff.clientes_externos) {
+      await flatDelete('clienteExternoCampo', diff.clientes_externos.deleted || []);
+
+      for (const item of diff.clientes_externos.upserted || []) {
+        const comercialId = await resolveUser(item.comercialId || item.vendedorId || item.vendedor, true);
+        const count = await tx.clienteExternoCampo.count();
+        const codigo = item.codigo || `CLEX-${String(count + 1).padStart(5, '0')}`;
+        const data = {
+          codigo,
+          nombre: item.nombre || item.nom || 'Cliente Externo',
+          nitDoc: item.nitDoc || item.doc || null,
+          contacto: item.contacto || null,
+          telefono: item.telefono || item.tel || '0',
+          correo: item.correo || null,
+          ciudad: item.ciudad || 'Barranquilla',
+          direccion: item.direccion || null,
+          sectorEconomico: item.sectorEconomico || 'Comercio',
+          origen: item.origen || 'En Frio / Puerta a Puerta',
+          tipoRegistro: item.tipoRegistro || 'Prospecto',
+          etapaEmbudo: item.etapaEmbudo || 'Prospecto',
+          comercialId: comercialId || user?.id || '1',
+          notas: item.notas || null,
+          lat: item.lat ? parseFloat(item.lat) : null,
+          lng: item.lng ? parseFloat(item.lng) : null
+        };
+
+        await tx.clienteExternoCampo.upsert({
+          where: { id: item.id },
+          update: data,
+          create: { id: item.id, ...data }
         });
       }
     }

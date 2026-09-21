@@ -10,10 +10,12 @@ const campoRoutes = require('./campo.routes');
 
 router.use('/', authRoutes);
 router.use('/', uploadRoutes);
+router.use('/upload', uploadRoutes);
 router.use('/db', syncRoutes);
 router.use('/gemini', geminiRoutes);
 router.use('/location', locationRoutes);
 router.use('/operaciones-campo', campoRoutes);
+router.use('/campo', campoRoutes);
 
 router.get('/status', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });

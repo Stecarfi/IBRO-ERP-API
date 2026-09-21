@@ -1,44 +1,66 @@
 const { z } = require('zod');
 
 // Schema para inicio de jornada
-const iniciarJornadaSchema = z.object({
-  lat: z.coerce.number().min(-90).max(90),
-  lng: z.coerce.number().min(-180).max(180),
+const iniciarJornadaSchema = z.preprocess((val) => {
+  if (val && typeof val === 'object') {
+    const lat = val.lat !== undefined ? val.lat : val.latitud;
+    const lng = val.lng !== undefined ? val.lng : val.longitud;
+    return { ...val, ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) };
+  }
+  return val;
+}, z.object({
+  lat: z.coerce.number().min(-90).max(90).optional().default(10.9685),
+  lng: z.coerce.number().min(-180).max(180).optional().default(-74.7813),
   precision: z.coerce.number().optional().default(10),
   direccionInicio: z.string().optional().nullable(),
   fotoInicio: z.string().optional().nullable(),
   odometroInicio: z.coerce.number().optional().nullable(),
   bateriaInicio: z.coerce.number().min(0).max(100).optional().nullable()
-});
+}).default({}));
 
 // Schema para pausa de jornada
 const pausaJornadaSchema = z.object({
-  jornadaId: z.string().min(1),
-  tipo: z.enum(['Almuerzo', 'Descanso', 'Capacitacion', 'Incidente', 'Calamidad', 'Taller', 'Otro']),
+  jornadaId: z.string().optional().nullable(),
+  tipo: z.enum(['Almuerzo', 'Descanso', 'Capacitacion', 'Incidente', 'Calamidad', 'Taller', 'Otro']).optional().default('Descanso'),
   lat: z.coerce.number().optional().nullable(),
   lng: z.coerce.number().optional().nullable(),
   motivo: z.string().optional().nullable()
-});
+}).default({});
 
 // Schema para reanudar jornada
 const reanudarJornadaSchema = z.object({
-  pausaId: z.string().min(1)
-});
+  pausaId: z.string().optional().nullable(),
+  jornadaId: z.string().optional().nullable()
+}).default({});
 
 // Schema para finalizar jornada
-const finalizarJornadaSchema = z.object({
-  jornadaId: z.string().min(1),
-  lat: z.coerce.number().min(-90).max(90),
-  lng: z.coerce.number().min(-180).max(180),
+const finalizarJornadaSchema = z.preprocess((val) => {
+  if (val && typeof val === 'object') {
+    const lat = val.lat !== undefined ? val.lat : val.latitud;
+    const lng = val.lng !== undefined ? val.lng : val.longitud;
+    return { ...val, ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) };
+  }
+  return val;
+}, z.object({
+  jornadaId: z.string().optional().nullable(),
+  lat: z.coerce.number().min(-90).max(90).optional().default(10.9685),
+  lng: z.coerce.number().min(-180).max(180).optional().default(-74.7813),
   direccionFin: z.string().optional().nullable(),
   fotoFin: z.string().optional().nullable(),
   odometroFin: z.coerce.number().optional().nullable(),
   bateriaFin: z.coerce.number().min(0).max(100).optional().nullable(),
   observaciones: z.string().optional().nullable()
-});
+}).default({}));
 
 // Schema para ping de telemetría unitario
-const pingUbicacionSchema = z.object({
+const pingUbicacionSchema = z.preprocess((val) => {
+  if (val && typeof val === 'object') {
+    const lat = val.lat !== undefined ? val.lat : val.latitud;
+    const lng = val.lng !== undefined ? val.lng : val.longitud;
+    return { ...val, ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) };
+  }
+  return val;
+}, z.object({
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180),
   precision: z.coerce.number().optional().nullable(),
@@ -50,7 +72,7 @@ const pingUbicacionSchema = z.object({
   redTipo: z.string().optional().nullable(),
   jornadaId: z.string().optional().nullable(),
   timestamp: z.coerce.date().optional()
-});
+}));
 
 // Schema para ingesta masiva (batch) offline
 const batchUbicacionesSchema = z.object({
@@ -58,30 +80,48 @@ const batchUbicacionesSchema = z.object({
 });
 
 // Schema para Check-In de visita
-const checkInVisitaSchema = z.object({
+const checkInVisitaSchema = z.preprocess((val) => {
+  if (val && typeof val === 'object') {
+    const lat = val.lat !== undefined ? val.lat : val.latitud;
+    const lng = val.lng !== undefined ? val.lng : val.longitud;
+    return { ...val, ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) };
+  }
+  return val;
+}, z.object({
   visitaId: z.string().min(1),
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180),
   precision: z.coerce.number().optional().nullable(),
   foto: z.string().optional().nullable(),
   bateria: z.coerce.number().optional().nullable()
-});
+}));
 
 // Schema para Check-Out de visita
-const checkOutVisitaSchema = z.object({
+const checkOutVisitaSchema = z.preprocess((val) => {
+  if (val && typeof val === 'object') {
+    const lat = val.lat !== undefined ? val.lat : val.latitud;
+    const lng = val.lng !== undefined ? val.lng : val.longitud;
+    return { ...val, ...(lat !== undefined ? { lat } : {}), ...(lng !== undefined ? { lng } : {}) };
+  }
+  return val;
+}, z.object({
   visitaId: z.string().min(1),
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180),
-  resultadoResumen: z.string().min(1, 'El resumen del resultado es requerido'),
+  resultadoResumen: z.string().optional().nullable(),
+  resultadoVisita: z.string().optional().nullable(),
+  observaciones: z.string().optional().nullable(),
   compromisos: z.string().optional().nullable(),
   proximaVisita: z.coerce.date().optional().nullable(),
   contactoAtendio: z.string().optional().nullable(),
   firmaCliente: z.string().optional().nullable(),
-  evidencias: z.array(z.string()).optional().nullable(),
+  evidencias: z.any().optional().nullable(),
+  fotosEvidencia: z.any().optional().nullable(),
+  adjuntos: z.any().optional().nullable(),
   motivoNoEfectiva: z.string().optional().nullable(),
   cotizacionId: z.string().optional().nullable(),
   ventaId: z.string().optional().nullable()
-});
+}));
 
 // Schema para creación rápida de prospecto en campo
 const prospectoCampoSchema = z.object({
@@ -99,24 +139,22 @@ const prospectoCampoSchema = z.object({
   origen: z.string().default('En Frio / Puerta a Puerta'),
   interesDetalle: z.string().optional().nullable(),
   presupuestoEst: z.coerce.number().optional().default(0),
-  probabilidadPct: z.coerce.number().min(0).max(100).optional().default(20)
+  probabilidadPct: z.coerce.number().min(0).max(100).optional().default(20),
+  adjuntos: z.any().optional().nullable(),
+  evidencias: z.any().optional().nullable()
 });
 
 // Schema para agendar nueva visita
 const programarVisitaSchema = z.object({
   clienteId: z.string().optional().nullable(),
+  clienteExternoId: z.string().optional().nullable(),
   prospectoId: z.string().optional().nullable(),
-  tipoVisita: z.enum([
-    'Comercial Prospeccion',
-    'Comercial Seguimiento',
-    'Comercial Cierre',
-    'Cobranza',
-    'Servicio Tecnico',
-    'Auditoria'
-  ]).default('Comercial Prospeccion'),
+  tipoVisita: z.string().optional().default('Comercial Prospeccion'),
   fechaProgramada: z.coerce.date(),
   horaEstimada: z.string().optional().nullable(),
-  compromisos: z.string().optional().nullable()
+  compromisos: z.string().optional().nullable(),
+  adjuntos: z.any().optional().nullable(),
+  evidencias: z.any().optional().nullable()
 });
 
 // Schema para geocerca

@@ -8,12 +8,24 @@ class VisitasService {
   async programarVisita(usuarioId, data) {
     const {
       clienteId,
+      clienteExternoId: reqClienteExternoId,
       prospectoId,
       tipoVisita = 'Comercial Prospeccion',
       fechaProgramada,
       horaEstimada = '09:00',
       compromisos = ''
     } = data;
+
+    let resolvedClienteId = clienteId || null;
+    let resolvedClienteExternoId = reqClienteExternoId || null;
+
+    if (clienteId && !resolvedClienteExternoId) {
+      const esExt = await prisma.clienteExternoCampo.findUnique({ where: { id: clienteId } });
+      if (esExt) {
+        resolvedClienteExternoId = clienteId;
+        resolvedClienteId = null;
+      }
+    }
 
     const count = await prisma.visitaCampo.count();
     const codigo = `VIS-${String(count + 1).padStart(5, '0')}`;
@@ -32,16 +44,19 @@ class VisitasService {
         codigo,
         usuarioId,
         jornadaId: jornadaHoy?.id || null,
-        clienteId: clienteId || null,
+        clienteId: resolvedClienteId,
+        clienteExternoId: resolvedClienteExternoId,
         prospectoId: prospectoId || null,
         tipoVisita,
         estado: 'Programada',
         fechaProgramada: new Date(fechaProgramada),
         horaEstimada,
-        compromisos
+        compromisos,
+        evidencias: Array.isArray(data.evidencias || data.adjuntos) ? (data.evidencias || data.adjuntos) : []
       },
       include: {
         cliente: true,
+        clienteExterno: true,
         prospecto: true
       }
     });
@@ -67,6 +82,7 @@ class VisitasService {
       },
       include: {
         cliente: true,
+        clienteExterno: true,
         prospecto: true,
         cotizacion: true,
         venta: true
@@ -85,7 +101,7 @@ class VisitasService {
 
     const visita = await prisma.visitaCampo.findUnique({
       where: { id: visitaId },
-      include: { cliente: true, prospecto: true }
+      include: { cliente: true, clienteExterno: true, prospecto: true }
     });
 
     if (!visita || visita.usuarioId !== usuarioId) {
@@ -99,6 +115,9 @@ class VisitasService {
     if (visita.cliente && visita.cliente.lat && visita.cliente.lng) {
       targetLat = visita.cliente.lat;
       targetLng = visita.cliente.lng;
+    } else if (visita.clienteExterno && visita.clienteExterno.lat && visita.clienteExterno.lng) {
+      targetLat = visita.clienteExterno.lat;
+      targetLng = visita.clienteExterno.lng;
     } else if (visita.prospecto && visita.prospecto.lat && visita.prospecto.lng) {
       targetLat = visita.prospecto.lat;
       targetLng = visita.prospecto.lng;
@@ -139,6 +158,7 @@ class VisitasService {
       },
       include: {
         cliente: true,
+        clienteExterno: true,
         prospecto: true
       }
     });
@@ -148,7 +168,7 @@ class VisitasService {
       io.emit('CAMPO_CHECKIN_EVENT', {
         visitaId,
         usuarioId,
-        clienteNombre: visita.cliente?.nom || visita.prospecto?.nombreComercial || 'Cliente',
+        clienteNombre: visita.clienteExterno?.nombre || visita.cliente?.nom || visita.prospecto?.nombreComercial || 'Cliente',
         lat: parseFloat(lat),
         lng: parseFloat(lng),
         distanciaM,

@@ -294,6 +294,47 @@ const PRISMA_ALLOWED_FIELDS = {
     'fortalezasGenerales', 'debilidadesGenerales', 'oportunidadesMejora',
     'planAccionGeneral', 'fechaSeguimiento', 'aprobadoDelegado',
     'observacionesGenerales', 'createdAt', 'updatedAt'
+  ],
+
+  clienteExternoCampo: [
+    'id', 'codigo', 'nombre', 'nitDoc', 'contacto', 'telefono', 'correo',
+    'ciudad', 'direccion', 'sectorEconomico', 'origen', 'tipoRegistro',
+    'etapaEmbudo', 'comercialId', 'notas', 'lat', 'lng', 'createdAt', 'updatedAt'
+  ],
+
+  cotizacionExternaCampo: [
+    'id', 'codigo', 'clienteExternoId', 'comercialId', 'fecha', 'validezDias',
+    'estado', 'total', 'items', 'observaciones', 'seguimientos', 'historial',
+    'createdAt', 'updatedAt'
+  ],
+
+  ventaExternaCampo: [
+    'id', 'codigo', 'clienteExternoId', 'comercialId', 'cotizacionId', 'fecha',
+    'valorVendido', 'metodoPago', 'observaciones', 'items', 'estado',
+    'createdAt', 'updatedAt'
+  ],
+
+  seguimientoCampo: [
+    'id', 'visitaId', 'clienteId', 'prospectoId', 'clienteExternoId', 'usuarioId',
+    'tipoAccion', 'fechaHora', 'resultado', 'observaciones', 'compromisos',
+    'proximaActividad', 'fechaProgramada', 'evidencias'
+  ],
+
+  actividadCampo: [
+    'id', 'codigo', 'usuarioId', 'asignadoPorId', 'jornadaId', 'visitaId',
+    'titulo', 'descripcion', 'prioridad', 'fechaProgramada', 'horaEstimada',
+    'estado', 'fechaFinalizacion', 'comentarios', 'evidencias', 'createdAt'
+  ],
+
+  evidenciaCampo: [
+    'id', 'usuarioId', 'jornadaId', 'visitaId', 'actividadId', 'tipo', 'url',
+    'nombreArchivo', 'tamanoBytes', 'lat', 'lng', 'direccion', 'fechaHora', 'observaciones'
+  ],
+
+  novedadDelegadoCampo: [
+    'id', 'delegadoId', 'usuarioId', 'tipo', 'titulo', 'descripcion', 'gravedad',
+    'fecha', 'fechaCompromiso', 'estado', 'accionCorrectiva', 'metadata',
+    'createdAt', 'updatedAt'
   ]
 };
 
@@ -359,7 +400,26 @@ const TABLE_TO_MODEL = {
   ordenServicioCampo: 'ordenServicioCampo',
   ordenesServicioCampo: 'ordenServicioCampo',
   metaComercialCampo: 'metaComercialCampo',
-  metasComercialCampo: 'metaComercialCampo'
+  metasComercialCampo: 'metaComercialCampo',
+  clienteExternoCampo: 'clienteExternoCampo',
+  clientesExternos: 'clienteExternoCampo',
+  clientes_externos: 'clienteExternoCampo',
+  cotizacionExternaCampo: 'cotizacionExternaCampo',
+  cotizacionesExternas: 'cotizacionExternaCampo',
+  cotizaciones_externas: 'cotizacionExternaCampo',
+  ventaExternaCampo: 'ventaExternaCampo',
+  ventasExternas: 'ventaExternaCampo',
+  pedidos_externos: 'ventaExternaCampo',
+  seguimientoCampo: 'seguimientoCampo',
+  seguimientosCampo: 'seguimientoCampo',
+  seguimientos: 'seguimientoCampo',
+  actividadCampo: 'actividadCampo',
+  actividadesCampo: 'actividadCampo',
+  actividades: 'actividadCampo',
+  evidenciaCampo: 'evidenciaCampo',
+  evidenciasCampo: 'evidenciaCampo',
+  novedadDelegadoCampo: 'novedadDelegadoCampo',
+  novedadesDelegadoCampo: 'novedadDelegadoCampo'
 };
 
 /**

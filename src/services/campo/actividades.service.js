@@ -62,7 +62,11 @@ class ActividadesService {
     }
 
     const count = await prisma.actividadCampo.count();
-    const codigo = `ACT-${String(count + 1).padStart(5, '0')}`;
+    let codigo = `ACT-${String(count + 1).padStart(5, '0')}`;
+    const exists = await prisma.actividadCampo.findUnique({ where: { codigo } });
+    if (exists) {
+      codigo = `ACT-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
+    }
 
     const actividad = await prisma.actividadCampo.create({
       data: {
@@ -77,7 +81,7 @@ class ActividadesService {
         horaEstimada,
         estado: 'Pendiente',
         comentarios: [],
-        evidencias: []
+        evidencias: Array.isArray(data.evidencias || data.adjuntos) ? (data.evidencias || data.adjuntos) : []
       },
       include: {
         usuario: { select: { id: true, nombre: true, apellido: true } }
@@ -91,7 +95,7 @@ class ActividadesService {
    * Actualizar estado de una actividad (Pendiente, En ejecucion, Finalizada, Reprogramada)
    */
   async actualizarEstado(usuarioId, actividadId, data) {
-    const { estado, comentario = '', nuevaFecha = null, evidencias = [] } = data;
+    const { estado, comentario = '', nuevaFecha = null, evidencias = [], adjuntos = [] } = data;
 
     const actividad = await prisma.actividadCampo.findUnique({
       where: { id: actividadId }
@@ -119,9 +123,10 @@ class ActividadesService {
       updateData.comentarios = existingComments;
     }
 
-    if (Array.isArray(evidencias) && evidencias.length > 0) {
+    const incomingEvidencias = Array.isArray(evidencias) && evidencias.length > 0 ? evidencias : (Array.isArray(adjuntos) ? adjuntos : []);
+    if (incomingEvidencias.length > 0) {
       const existingEvidencias = Array.isArray(actividad.evidencias) ? actividad.evidencias : [];
-      updateData.evidencias = [...existingEvidencias, ...evidencias];
+      updateData.evidencias = [...existingEvidencias, ...incomingEvidencias];
     }
 
     const actividadActualizada = await prisma.actividadCampo.update({

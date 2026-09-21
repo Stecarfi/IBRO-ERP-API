@@ -1102,6 +1102,7 @@ model EvaluacionComercialCampo {
   fechaSeguimiento       DateTime?
   fechaProximaEvaluacion DateTime?
   aprobadoDelegado       Boolean   @default(true)
+  metadata               Json?
   
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt

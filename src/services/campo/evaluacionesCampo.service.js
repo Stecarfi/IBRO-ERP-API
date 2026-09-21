@@ -521,8 +521,17 @@ class EvaluacionesCampoService {
       oportunidadesMejora,
       planAccionGeneral,
       fechaSeguimiento,
-      fechaProximaEvaluacion
+      fechaProximaEvaluacion,
+      metadata = null,
+      adjuntos = [],
+      evidencias = []
     } = payload;
+
+    const finalAdjuntos = Array.isArray(adjuntos) && adjuntos.length > 0 ? adjuntos : (Array.isArray(evidencias) ? evidencias : []);
+    const finalMetadata = {
+      ...(typeof metadata === 'object' && metadata !== null ? metadata : {}),
+      ...(finalAdjuntos.length > 0 ? { adjuntos: finalAdjuntos } : {})
+    };
 
     if (!usuarioId) throw new Error('usuarioId requerido');
     if (!Array.isArray(indicadoresDetalle) || indicadoresDetalle.length === 0) {
@@ -568,6 +577,7 @@ class EvaluacionesCampoService {
       planAccionGeneral: planAccionGeneral || null,
       fechaSeguimiento: fechaSeguimiento ? new Date(fechaSeguimiento) : null,
       fechaProximaEvaluacion: fechaProximaEvaluacion ? new Date(fechaProximaEvaluacion) : null,
+      metadata: Object.keys(finalMetadata).length > 0 ? finalMetadata : null,
       aprobadoDelegado: true
     };
 
@@ -845,19 +855,32 @@ class EvaluacionesCampoService {
    */
   async crearNovedadDelegado(delegadoId, payload) {
     const {
-      usuarioId,
-      tipo, // 'Observacion' | 'Compromiso' | 'Incumplimiento' | 'Reconocimiento' | 'LlamadoAtencion' | 'Comentario' | 'SolicitudSeguimiento' | 'Objetivo'
+      usuarioId: reqUsuarioId,
+      comercialId,
+      tipo, // 'Observacion' | 'Compromiso' | 'Incumplimiento' | 'Reconocimiento' | 'LlamadoAtencion' | 'Comentario' | 'SolicitudSeguimiento' | 'Objetivo' | 'Instrucción Operativa' | 'Felicitación' | 'Llamado de Atención' | 'Novedad de Campo'
       titulo,
       descripcion,
-      gravedad = 'Normal',
+      gravedad,
+      prioridad,
       fechaCompromiso = null,
       accionCorrectiva = null,
-      metadata = null
+      metadata = null,
+      adjuntos = [],
+      evidencias = []
     } = payload;
 
+    const usuarioId = reqUsuarioId || comercialId;
+    const finalGravedad = gravedad || prioridad || 'Normal';
+    const finalAdjuntos = Array.isArray(adjuntos) && adjuntos.length > 0 ? adjuntos : (Array.isArray(evidencias) ? evidencias : []);
+
     if (!usuarioId || !tipo || !titulo || !descripcion) {
-      throw new Error('usuarioId, tipo, titulo y descripcion son campos obligatorios');
+      throw new Error('Asesor comercial, tipo, título y descripción son campos obligatorios');
     }
+
+    const finalMetadata = {
+      ...(typeof metadata === 'object' && metadata !== null ? metadata : {}),
+      ...(finalAdjuntos.length > 0 ? { adjuntos: finalAdjuntos } : {})
+    };
 
     return prisma.novedadDelegadoCampo.create({
       data: {
@@ -866,10 +889,10 @@ class EvaluacionesCampoService {
         tipo,
         titulo,
         descripcion,
-        gravedad,
+        gravedad: finalGravedad,
         fechaCompromiso: fechaCompromiso ? new Date(fechaCompromiso) : null,
         accionCorrectiva: accionCorrectiva || null,
-        metadata: metadata || null,
+        metadata: Object.keys(finalMetadata).length > 0 ? finalMetadata : null,
         estado: 'Activo'
       },
       include: {
@@ -884,13 +907,17 @@ class EvaluacionesCampoService {
   }
 
   /**
-   * Obtiene las novedades registradas para un comercial
+   * Obtiene las novedades registradas para un comercial o para todo el equipo si usuarioId es null
    */
-  async getNovedadesComercial(usuarioId) {
+  async getNovedadesComercial(usuarioId = null) {
+    const where = usuarioId ? { usuarioId } : {};
     return prisma.novedadDelegadoCampo.findMany({
-      where: { usuarioId },
+      where,
       include: {
         delegado: {
+          select: { id: true, nombre: true, apellido: true, user: true }
+        },
+        usuario: {
           select: { id: true, nombre: true, apellido: true, user: true }
         }
       },

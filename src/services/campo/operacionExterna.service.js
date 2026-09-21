@@ -140,14 +140,16 @@ class OperacionExternaService {
       }
     });
 
-    // Registrar seguimiento inicial de creación
+    // Registrar seguimiento inicial de creación con evidencias y adjuntos si existen
+    const adjuntosIniciales = Array.isArray(data.evidencias || data.adjuntos) ? (data.evidencias || data.adjuntos) : [];
     await prisma.seguimientoCampo.create({
       data: {
         clienteExternoId: nuevoCliente.id,
         usuarioId: comercialId,
         tipoAccion: 'Observacion',
         resultado: `Registro Inicial (${tipoRegistro})`,
-        observaciones: `Registro creado en etapa: ${etapaEmbudo}. Origen: ${origen}.`
+        observaciones: `Registro creado en etapa: ${etapaEmbudo}. Origen: ${origen}.${data.notas ? ` Notas: ${data.notas}` : ''}`,
+        evidencias: adjuntosIniciales
       }
     });
 

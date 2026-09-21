@@ -70,16 +70,29 @@ class JornadaService {
    * Registra una pausa o descanso
    */
   async iniciarPausa(usuarioId, data) {
-    const { jornadaId, tipo, motivo = '', lat, lng } = data;
+    let { jornadaId, tipo, motivo = '', lat, lng } = data || {};
 
-    const jornada = await prisma.jornadaLaboral.findUnique({ where: { id: jornadaId } });
-    if (!jornada || jornada.usuarioId !== usuarioId || jornada.estado !== 'Iniciada') {
-      return { success: false, error: 'Jornada no encontrada o no está en estado iniciada' };
+    let jornada = null;
+    if (jornadaId) {
+      jornada = await prisma.jornadaLaboral.findUnique({ where: { id: jornadaId } });
+    }
+    if (!jornada) {
+      jornada = await prisma.jornadaLaboral.findFirst({
+        where: {
+          usuarioId,
+          estado: { in: ['Iniciada', 'En Ruta', 'En Pausa'] }
+        },
+        orderBy: { horaInicio: 'desc' }
+      });
+    }
+
+    if (!jornada || jornada.usuarioId !== usuarioId) {
+      return { success: false, error: 'No se encontró una jornada activa para pausar' };
     }
 
     const pausa = await prisma.pausaJornada.create({
       data: {
-        jornadaId,
+        jornadaId: jornada.id,
         tipo: tipo || 'Descanso',
         motivo,
         lat: lat ? parseFloat(lat) : null,
@@ -89,37 +102,73 @@ class JornadaService {
     });
 
     const esAlmuerzo = String(tipo).toLowerCase().includes('almuerzo');
-    await prisma.jornadaLaboral.update({
-      where: { id: jornadaId },
+    const jornadaActualizada = await prisma.jornadaLaboral.update({
+      where: { id: jornada.id },
       data: {
         estado: 'En Pausa',
         ...(esAlmuerzo ? { horaAlmuerzoInicio: new Date() } : {})
       }
     });
 
-    return { success: true, pausa };
+    return { success: true, pausa, jornada: jornadaActualizada };
   }
 
   /**
    * Reanuda la jornada finalizando la pausa activa
    */
   async reanudarPausa(usuarioId, data) {
-    const { pausaId } = data;
+    const { pausaId } = data || {};
 
-    const pausa = await prisma.pausaJornada.findUnique({
-      where: { id: pausaId },
-      include: { jornada: true }
-    });
+    let pausa = null;
+    if (pausaId) {
+      pausa = await prisma.pausaJornada.findUnique({
+        where: { id: pausaId },
+        include: { jornada: true }
+      });
+    }
 
-    if (!pausa || pausa.jornada.usuarioId !== usuarioId) {
-      return { success: false, error: 'Pausa no encontrada' };
+    if (!pausa) {
+      // Buscar última pausa abierta para este usuario
+      pausa = await prisma.pausaJornada.findFirst({
+        where: {
+          horaFin: null,
+          jornada: { usuarioId, estado: { in: ['En Pausa', 'Iniciada', 'En Ruta'] } }
+        },
+        include: { jornada: true },
+        orderBy: { horaInicio: 'desc' }
+      });
+    }
+
+    if (!pausa) {
+      // Si no hay pausa específica registrada, reanudar la jornada activa directamente
+      const jornada = await prisma.jornadaLaboral.findFirst({
+        where: {
+          usuarioId,
+          estado: { in: ['En Pausa', 'Iniciada', 'En Ruta'] }
+        },
+        orderBy: { horaInicio: 'desc' }
+      });
+
+      if (jornada) {
+        const jornadaActualizada = await prisma.jornadaLaboral.update({
+          where: { id: jornada.id },
+          data: { estado: 'Iniciada' }
+        });
+        return { success: true, jornada: jornadaActualizada };
+      }
+
+      return { success: false, error: 'No se encontró ninguna jornada activa o en pausa para reanudar' };
+    }
+
+    if (pausa.jornada && pausa.jornada.usuarioId !== usuarioId) {
+      return { success: false, error: 'Usuario no autorizado para reanudar esta pausa' };
     }
 
     const ahora = new Date();
     const duracionMin = Math.max(1, Math.round((ahora - new Date(pausa.horaInicio)) / 60000));
 
     await prisma.pausaJornada.update({
-      where: { id: pausaId },
+      where: { id: pausa.id },
       data: {
         horaFin: ahora,
         duracionMin
@@ -142,25 +191,43 @@ class JornadaService {
    * Cierra el turno de trabajo y computa métricas consolidadas
    */
   async finalizarJornada(usuarioId, data) {
-    const {
+    let {
       jornadaId,
-      lat,
-      lng,
+      lat = 10.9685,
+      lng = -74.7813,
       direccionFin = '',
       fotoFin = null,
       odometroFin = null,
       bateriaFin = null,
       observaciones = ''
-    } = data;
+    } = data || {};
 
-    const jornada = await prisma.jornadaLaboral.findUnique({
-      where: { id: jornadaId },
-      include: {
-        pausas: true,
-        ubicaciones: { orderBy: { timestamp: 'asc' } },
-        visitas: true
-      }
-    });
+    let jornada = null;
+    if (jornadaId) {
+      jornada = await prisma.jornadaLaboral.findUnique({
+        where: { id: jornadaId },
+        include: {
+          pausas: true,
+          ubicaciones: { orderBy: { timestamp: 'asc' } },
+          visitas: true
+        }
+      });
+    }
+
+    if (!jornada) {
+      jornada = await prisma.jornadaLaboral.findFirst({
+        where: {
+          usuarioId,
+          estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
+        },
+        include: {
+          pausas: true,
+          ubicaciones: { orderBy: { timestamp: 'asc' } },
+          visitas: true
+        },
+        orderBy: { horaInicio: 'desc' }
+      });
+    }
 
     if (!jornada || jornada.usuarioId !== usuarioId) {
       return { success: false, error: 'Jornada no encontrada o usuario no autorizado' };
@@ -214,7 +281,7 @@ class JornadaService {
         where: {
           usuarioId,
           OR: [
-            { jornadaId },
+            { jornadaId: jornada.id },
             {
               createdAt: {
                 gte: new Date(new Date(jornada.horaInicio).setHours(0, 0, 0, 0)),
@@ -230,7 +297,7 @@ class JornadaService {
     const cumplimientoHorarioPct = Math.min(100, Math.max(0, Math.round((tiempoTrabajadoNeto / 480) * 100)));
 
     const jornadaCerrada = await prisma.jornadaLaboral.update({
-      where: { id: jornadaId },
+      where: { id: jornada.id },
       data: {
         horaFin,
         latFin: parseFloat(lat),

@@ -9,6 +9,7 @@ router.use(authenticateToken);
 // 1. Jornadas
 router.post('/jornada/iniciar', (req, res) => campoController.iniciarJornada(req, res));
 router.post('/jornada/pausa', (req, res) => campoController.iniciarPausa(req, res));
+router.post('/jornada/pausar', (req, res) => campoController.iniciarPausa(req, res));
 router.post('/jornada/reanudar', (req, res) => campoController.reanudarPausa(req, res));
 router.post('/jornada/finalizar', (req, res) => campoController.finalizarJornada(req, res));
 router.get('/jornada/activa', (req, res) => campoController.getJornadaActiva(req, res));
@@ -63,6 +64,7 @@ router.get('/reportes/resumen', (req, res) => campoController.getReportes(req, r
 
 // 11. Asignación de Rutas y Operación
 router.post('/rutas/asignar', (req, res) => campoController.asignarRuta(req, res));
+router.post('/rutas', (req, res) => campoController.asignarRuta(req, res));
 router.get('/rutas', (req, res) => campoController.getRutasAsignadas(req, res));
 router.get('/trazabilidad/dia', (req, res) => campoController.getHistorialDiaCompleto(req, res));
 router.get('/operacion/panel', (req, res) => campoController.getPanelOperativo(req, res));
@@ -73,6 +75,7 @@ router.get('/delegado/dashboard', (req, res) => campoController.getDashboardDele
 router.get('/indicadores', (req, res) => campoController.getIndicadoresComercial(req, res));
 router.get('/indicadores/:usuarioId', (req, res) => campoController.getIndicadoresComercial(req, res));
 router.post('/evaluaciones', (req, res) => campoController.guardarEvaluacion(req, res));
+router.post('/delegado/evaluacion', (req, res) => campoController.guardarEvaluacion(req, res));
 router.get('/evaluaciones', (req, res) => campoController.getHistorialEvaluaciones(req, res));
 router.get('/evaluaciones/historial', (req, res) => campoController.getHistorialEvaluaciones(req, res));
 router.get('/evaluaciones/:usuarioId', (req, res) => campoController.getHistorialEvaluaciones(req, res));
@@ -81,12 +84,14 @@ router.get('/auditoria', (req, res) => campoController.getAuditoriaCampo(req, re
 
 // 13. Novedades, Observaciones y Ficha Histórica
 router.post('/novedades', (req, res) => campoController.crearNovedadDelegado(req, res));
+router.get('/novedades', (req, res) => campoController.getNovedadesComercial(req, res));
 router.get('/novedades/:usuarioId', (req, res) => campoController.getNovedadesComercial(req, res));
 router.put('/novedades/:id/estado', (req, res) => campoController.actualizarEstadoNovedad(req, res));
 router.get('/ficha-historica/:usuarioId', (req, res) => campoController.getFichaHistorica(req, res));
 
 // 14. Operación Comercial Externa Independiente (Clientes, Cotizaciones, Ventas y Embudo)
 router.get('/externo/clientes', (req, res) => campoController.getClientesExternos(req, res));
+router.get('/externo/clientes/:id/historial', (req, res) => campoController.getClienteExternoById(req, res));
 router.get('/externo/clientes/:id', (req, res) => campoController.getClienteExternoById(req, res));
 router.post('/externo/clientes', (req, res) => campoController.crearClienteExterno(req, res));
 router.put('/externo/clientes/:id', (req, res) => campoController.actualizarClienteExterno(req, res));
