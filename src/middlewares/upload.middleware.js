@@ -51,9 +51,24 @@ const uploadCourseMaterial = multer({
     }
 });
 
+const uploadCourseVideo = multer({
+    storage: storage,
+    limits: { fileSize: 500 * 1024 * 1024 }, // Hasta 500 MB por video formativo
+    fileFilter: function (req, file, cb) {
+        if (file.mimetype.startsWith('video/') ||
+            file.originalname.match(/\.(mp4|mov|webm|mkv|avi|m4v)$/i)) {
+            cb(null, true);
+        } else {
+            cb(null, true);
+        }
+    }
+});
+
 module.exports = {
     uploadAvatar,
     uploadEvidence,
     uploadCourseMaterial,
+    uploadCourseVideo,
     uploadsDir
 };
+

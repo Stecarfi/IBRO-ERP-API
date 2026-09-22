@@ -332,6 +332,69 @@ class DriveService {
     }
 
     /**
+     * Sube un video formativo (MP4, WebM, etc.) a Google Drive y retorna fileId, webViewLink y URL de streaming
+     * @param {Buffer} buffer - Buffer del archivo de video
+     * @param {string} originalName - Nombre original del archivo
+     * @param {string} mimeType - Tipo MIME (ej. 'video/mp4')
+     * @param {string[]|null} folderSegments - Segmentos de carpetas (ej. ['Capacitaciones', 'curso_1', 'Videos'])
+     * @returns {Promise<{fileId: string, webViewLink: string, streamUrl: string}>}
+     */
+    async uploadVideoFile(buffer, originalName, mimeType = 'video/mp4', folderSegments = []) {
+        if (!this.drive) throw new Error('El servicio de Google Drive no está inicializado.');
+
+        let targetFolderId = this.folderId;
+        if (folderSegments && folderSegments.length > 0) {
+            try {
+                targetFolderId = await this.resolveFolderPath(folderSegments, this.folderId);
+            } catch (fErr) {
+                console.warn('[DRIVE SERVICE] No se pudo resolver carpeta específica para video en Drive, usando carpeta base:', fErr.message);
+            }
+        }
+
+        const bufferStream = new stream.PassThrough();
+        bufferStream.end(buffer);
+
+        const safeName = `${Date.now()}-${originalName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const fileMetadata = {
+            name: safeName,
+            ...(targetFolderId ? { parents: [targetFolderId] } : {})
+        };
+        const media = { mimeType: mimeType || 'video/mp4', body: bufferStream };
+
+        try {
+            console.log(`[DRIVE SERVICE] Subiendo video ${safeName} a Google Drive (carpeta: ${targetFolderId || 'root'})...`);
+            const response = await this.drive.files.create({
+                resource: fileMetadata,
+                media: media,
+                fields: 'id, webViewLink, webContentLink',
+                supportsAllDrives: true
+            });
+
+            const fileId = response.data.id;
+            console.log(`[DRIVE SERVICE] Video subido exitosamente a Drive. ID: ${fileId}`);
+
+            try {
+                await this.drive.permissions.create({
+                    fileId: fileId,
+                    requestBody: { role: 'reader', type: 'anyone' },
+                    supportsAllDrives: true
+                });
+            } catch (e) {
+                console.warn(`[DRIVE SERVICE] No se pudo asignar permisos públicos al video ${fileId}:`, e.message);
+            }
+
+            return {
+                fileId: fileId,
+                webViewLink: response.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`,
+                streamUrl: `/api/drive-stream/${fileId}`
+            };
+        } catch (error) {
+            console.error('[DRIVE SERVICE] Error durante la subida de video a Drive:', error.message);
+            throw error;
+        }
+    }
+
+    /**
      * Elimina un archivo de Google Drive por su fileId
      * @param {string} fileId - ID del archivo
      */

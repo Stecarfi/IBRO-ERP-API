@@ -177,6 +177,41 @@ class UploadController {
             res.status(500).json({ error: error.message || 'Error uploading course material to Google Drive' });
         }
     }
+
+    async uploadCourseVideo(req, res) {
+        try {
+            if (!req.file) {
+                return res.status(400).json({ error: 'No se envió ningún archivo de video.' });
+            }
+
+            if (!driveService.isAvailable()) {
+                return res.status(503).json({ error: 'El servicio de Google Drive no está disponible para almacenar videos.' });
+            }
+
+            const courseId = req.body.courseId || req.body.cursoId || 'general';
+            const folderSegments = ['Capacitaciones', `curso_${courseId}`, 'Videos'];
+
+            const fileResult = await driveService.uploadVideoFile(
+                req.file.buffer,
+                req.file.originalname,
+                req.file.mimetype || 'video/mp4',
+                folderSegments
+            );
+
+            res.json({
+                success: true,
+                fileId: fileResult.fileId,
+                fileName: req.file.originalname,
+                url: `/api/drive-stream/${fileResult.fileId}`,
+                driveUrl: fileResult.webViewLink || `https://drive.google.com/file/d/${fileResult.fileId}/view`,
+                size: req.file.size,
+                mimetype: req.file.mimetype || 'video/mp4'
+            });
+        } catch (error) {
+            console.error('[UPLOAD-COURSE-VIDEO] Error:', error);
+            res.status(500).json({ error: error.message || 'Error al subir el video a Google Drive' });
+        }
+    }
 }
 
 module.exports = new UploadController();
