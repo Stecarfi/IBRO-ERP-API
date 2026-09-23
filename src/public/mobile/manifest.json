@@ -1,0 +1,24 @@
+{
+  "name": "IBRO ERP Móvil",
+  "short_name": "IBRO Móvil",
+  "description": "Frontend Móvil Oficial de IBRO ERP - Operaciones, Ventas y Servicios",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#071F63",
+  "theme_color": "#071F63",
+  "icons": [
+    {
+      "src": "/Rombo_Nuevo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/Rombo_Nuevo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

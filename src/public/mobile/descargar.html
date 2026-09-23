@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Instalar IBRO ERP en tu Celular (PWA)</title>
+  <link rel="icon" type="image/png" href="./Rombo_Nuevo.png">
+  <link rel="apple-touch-icon" href="./Rombo_Nuevo.png">
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#071F63">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="IBRO ERP">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: radial-gradient(circle at 50% 10%, #0c2356 0%, #030e28 55%, #010714 100%);
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 24px 16px 48px;
+      overflow-x: hidden;
+    }
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .brand-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .logo-box {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(145deg, #091a42, #040c1f);
+      border: 1.5px solid rgba(255, 255, 255, 0.15);
+      border-radius: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      margin-bottom: 12px;
+      padding: 10px;
+    }
+    .logo-box img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    .title-main {
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: -0.5px;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+    .subtitle-main {
+      font-size: 13px;
+      color: #38bdf8;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .card-glass {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      padding: 22px 18px;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+      margin-bottom: 16px;
+    }
+    .btn-action-primary {
+      width: 100%;
+      background: linear-gradient(135deg, #de4b5b 0%, #b91c1c 100%);
+      color: #ffffff;
+      border: none;
+      padding: 16px 20px;
+      border-radius: 16px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      box-shadow: 0 8px 25px rgba(222, 75, 91, 0.45);
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+    .btn-action-primary:active {
+      transform: scale(0.98);
+    }
+    .instruction-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 14px;
+      margin-top: 14px;
+      text-align: left;
+    }
+    .instruction-box h4 {
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .instruction-box ol {
+      font-size: 12px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      padding-left: 18px;
+    }
+    .qr-box {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 16px;
+      margin: 14px auto;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="brand-header">
+      <div class="logo-box">
+        <img src="./Rombo_Nuevo.png" alt="IBRO ERP">
+      </div>
+      <h1 class="title-main">IBRO ERP</h1>
+      <p class="subtitle-main">Instalación en Celular (PWA)</p>
+    </div>
+
+    <div class="card-glass">
+      <p style="font-size: 13px; color: #cbd5e1; text-align: center; margin-bottom: 18px; line-height: 1.5;">
+        Accede al <strong>mismo sistema IBRO ERP completo</strong> en tu celular con pantalla completa y acceso directo como una app nativa.
+      </p>
+
+      <!-- Primary Action: Open ERP Web App directly -->
+      <a href="https://g-ibro.onrender.com" class="btn-action-primary" id="btnLaunchErp">
+        <i class="fa-solid fa-mobile-screen-button"></i>
+        <span>Abrir e Instalar IBRO ERP</span>
+      </a>
+
+      <!-- Android Guide -->
+      <div class="instruction-box">
+        <h4 style="color: #34d399;">
+          <i class="fa-brands fa-android"></i>
+          <span>En Android (Google Chrome)</span>
+        </h4>
+        <ol>
+          <li>Presiona el botón rojo superior <strong>"Abrir e Instalar IBRO ERP"</strong>.</li>
+          <li>Toca los <strong>tres puntos (⋮)</strong> en la esquina superior derecha del navegador.</li>
+          <li>Selecciona <strong>"Instalar aplicación"</strong> o <strong>"Agregar a la pantalla principal"</strong>.</li>
+          <li>¡Listo! El icono oficial de <strong>IBRO ERP</strong> aparecerá en tus aplicaciones.</li>
+        </ol>
+      </div>
+
+      <!-- iOS Guide -->
+      <div class="instruction-box">
+        <h4 style="color: #38bdf8;">
+          <i class="fa-brands fa-apple"></i>
+          <span>En iPhone / iPad (Safari)</span>
+        </h4>
+        <ol>
+          <li>Abre el enlace en <strong>Safari</strong> presionando el botón superior.</li>
+          <li>Toca el botón <strong>Compartir</strong> (cuadrado con flecha hacia arriba [⎋]).</li>
+          <li>Desliza hacia abajo y presiona <strong>"Agregar a la pantalla de inicio"</strong> (+).</li>
+          <li>Toca <strong>"Agregar"</strong> para usarlo a pantalla completa sin barra de navegación.</li>
+        </ol>
+      </div>
+
+      <!-- QR Code Section -->
+      <div style="text-align: center; margin-top: 16px;">
+        <p style="font-size: 11px; color: #94a3b8;">O escanea con la cámara de tu celular:</p>
+        <div class="qr-box">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=https%3A%2F%2Fg-ibro.onrender.com&color=002060&bgcolor=ffffff&margin=1" alt="QR IBRO ERP" width="140" height="140">
+        </div>
+      </div>
+    </div>
+
+    <p style="font-size: 11px; color: #64748b; text-align: center;">
+      IBRO S.A.S. &copy; 2026 &bull; Plataforma Oficial PWA en Render Cloud
+    </p>
+  </div>
+
+  <script>
+    // Si el usuario ingresa desde un teléfono celular a esta página, redirigir automáticamente a la app en 3 segundos
+    const ua = navigator.userAgent || navigator.vendor || window.opera || '';
+    const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(ua);
+    if (isMobile) {
+      setTimeout(() => {
+        window.location.href = 'https://g-ibro.onrender.com';
+      }, 2500);
+    }
+  </script>
+</body>
+</html>
