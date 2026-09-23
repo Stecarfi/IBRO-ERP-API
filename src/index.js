@@ -917,7 +917,7 @@ app.get(['/api/download/apk', '/descargar/apk'], (req, res) => {
 });
 
 // Enrutamiento PWA Móvil
-app.get(['/app', '/app/*', '/mobile', '/mobile/*'], (req, res, next) => {
+app.get(['/app', '/app/*splat', '/mobile', '/mobile/*splat'], (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/ws')) return next();
   const mobileIndex = path.join(mobileDir, 'index.html');
   if (fs.existsSync(mobileIndex)) {
