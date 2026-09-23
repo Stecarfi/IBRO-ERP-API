@@ -393,7 +393,7 @@ class CampoController {
   // --- 3. ACTIVIDADES DEL DÍA ---
   async getActividades(req, res) {
     try {
-      const result = await actividadesService.listarActividades(req.user.id, req.query, req.user.role);
+      const result = await actividadesService.listarActividades(req.user.id, req.query, req.user.role, req.user);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -447,7 +447,7 @@ class CampoController {
   // --- 4. EVIDENCIAS MULTIMEDIA ---
   async getEvidencias(req, res) {
     try {
-      const result = await evidenciasService.listarEvidencias(req.user.id, req.query, req.user.role);
+      const result = await evidenciasService.listarEvidencias(req.user.id, req.query, req.user.role, req.user);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -474,7 +474,7 @@ class CampoController {
   // --- 5. SEGUIMIENTO CONTINUO ---
   async getSeguimientos(req, res) {
     try {
-      const result = await evidenciasService.listarSeguimientos(req.user.id, req.query, req.user.role);
+      const result = await evidenciasService.listarSeguimientos(req.user.id, req.query, req.user.role, req.user);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -484,7 +484,7 @@ class CampoController {
   // --- 8. REPORTES OPERATIVOS CONSOLIDADOS ---
   async getReportes(req, res) {
     try {
-      const result = await reportesService.generarReporte(req.user.id, req.query, req.user.role);
+      const result = await reportesService.generarReporte(req.user.id, req.query, req.user.role, req.user);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -913,6 +913,7 @@ class CampoController {
         zona,
         usuarioId: reqUsuarioId,
         comercialId,
+        asignadoAId,
         fecha: reqFecha,
         fechaRuta,
         prioridad = 'Alta',
@@ -922,7 +923,7 @@ class CampoController {
         instrucciones = ''
       } = req.body;
 
-      const usuarioId = reqUsuarioId || comercialId;
+      const usuarioId = reqUsuarioId || comercialId || asignadoAId;
       const fechaFinal = reqFecha || fechaRuta;
 
       if (!usuarioId) return res.status(400).json({ error: 'Debe seleccionar un comercial responsable para la ruta.' });
@@ -1067,6 +1068,208 @@ class CampoController {
 
       res.json(rutas);
     } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Actualizar / Editar una Ruta Asignada
+  async actualizarRuta(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'No autorizado para modificar rutas asignadas.' });
+      }
+
+      const { id } = req.params;
+      const {
+        titulo,
+        nombreRuta,
+        descripcion,
+        notas,
+        instrucciones,
+        puntosParada,
+        zona,
+        comercialId,
+        usuarioId,
+        fechaRuta,
+        fechaProgramada,
+        prioridad,
+        estado,
+        evidencias,
+        adjuntos
+      } = req.body;
+
+      const rutaExistente = await prisma.actividadCampo.findUnique({
+        where: { id }
+      });
+
+      if (!rutaExistente) {
+        return res.status(404).json({ error: 'Ruta asignada no encontrada.' });
+      }
+
+      const updateData = {};
+
+      if (titulo || nombreRuta) {
+        const t = (titulo || nombreRuta).trim();
+        updateData.titulo = t.startsWith('Ruta:') ? t : `Ruta: ${t}`;
+      }
+
+      if (descripcion !== undefined || notas !== undefined || instrucciones !== undefined || puntosParada !== undefined) {
+        if (descripcion !== undefined && !notas && !puntosParada) {
+          updateData.descripcion = descripcion.trim();
+        } else {
+          const detalle = (instrucciones || notas || (puntosParada ? `Paradas: ${puntosParada}` : '') || `Ruta asignada en zona ${zona || 'Comercial'}.`).trim();
+          const paradas = puntosParada || '1';
+          updateData.descripcion = `Instrucciones del Delegado: ${detalle}\nParadas asignadas: ${paradas}.`;
+        }
+      }
+
+      const nuevoUsuarioId = usuarioId || comercialId;
+      if (nuevoUsuarioId) {
+        updateData.usuarioId = nuevoUsuarioId;
+      }
+
+      const nuevaFecha = fechaProgramada || fechaRuta;
+      if (nuevaFecha) {
+        updateData.fechaProgramada = new Date(nuevaFecha);
+      }
+
+      if (prioridad) updateData.prioridad = prioridad;
+      if (estado) {
+        updateData.estado = estado;
+        if (estado === 'Finalizada' || estado === 'Completada') {
+          updateData.fechaFinalizacion = new Date();
+        }
+      }
+
+      const files = evidencias || adjuntos;
+      if (Array.isArray(files)) {
+        updateData.evidencias = files;
+      }
+
+      const rutaActualizada = await prisma.actividadCampo.update({
+        where: { id },
+        data: updateData,
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
+          asignadoPor: { select: { id: true, nombre: true, apellido: true } }
+        }
+      });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_RUTA_ACTUALIZADA', {
+        id,
+        codigo: rutaActualizada.codigo,
+        titulo: rutaActualizada.titulo,
+        cambios: updateData
+      });
+
+      res.json({
+        success: true,
+        message: 'Ruta actualizada correctamente.',
+        ruta: rutaActualizada
+      });
+    } catch (err) {
+      console.error('Error actualizando ruta de campo:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Eliminar una Ruta Asignada específica
+  async eliminarRuta(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'No autorizado para eliminar rutas asignadas.' });
+      }
+
+      const { id } = req.params;
+
+      const rutaExistente = await prisma.actividadCampo.findUnique({
+        where: { id }
+      });
+
+      if (!rutaExistente) {
+        return res.status(404).json({ error: 'Ruta asignada no encontrada.' });
+      }
+
+      // Eliminar evidencias hijas asociadas si las hay
+      await prisma.evidenciaCampo.deleteMany({
+        where: { actividadId: id }
+      }).catch(() => {});
+
+      await prisma.actividadCampo.delete({
+        where: { id }
+      });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_RUTA_ELIMINADA', {
+        id,
+        codigo: rutaExistente.codigo,
+        titulo: rutaExistente.titulo
+      });
+
+      res.json({
+        success: true,
+        message: 'Ruta eliminada correctamente.',
+        id
+      });
+    } catch (err) {
+      console.error('Error eliminando ruta de campo:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Eliminar TODAS las Rutas Asignadas
+  async eliminarTodasRutas(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'No autorizado para eliminar todas las rutas asignadas.' });
+      }
+
+      const { usuarioId } = req.query;
+      const where = {
+        OR: [
+          { codigo: { startsWith: 'RUT-' } },
+          { titulo: { contains: 'Ruta', mode: 'insensitive' } }
+        ]
+      };
+
+      if (usuarioId) {
+        where.usuarioId = usuarioId;
+      }
+
+      const rutas = await prisma.actividadCampo.findMany({
+        where,
+        select: { id: true }
+      });
+
+      const ids = rutas.map(r => r.id);
+
+      if (ids.length > 0) {
+        await prisma.evidenciaCampo.deleteMany({
+          where: { actividadId: { in: ids } }
+        }).catch(() => {});
+
+        const result = await prisma.actividadCampo.deleteMany({
+          where: { id: { in: ids } }
+        });
+
+        await this.registrarAuditoria(req.user.id, 'CAMPO_TODAS_RUTAS_ELIMINADAS', {
+          totalEliminadas: result.count,
+          usuarioFiltro: usuarioId || 'TODOS'
+        });
+
+        return res.json({
+          success: true,
+          count: result.count,
+          message: `Se eliminaron ${result.count} rutas asignadas correctamente.`
+        });
+      }
+
+      res.json({
+        success: true,
+        count: 0,
+        message: 'No hay rutas asignadas para eliminar.'
+      });
+    } catch (err) {
+      console.error('Error eliminando todas las rutas de campo:', err);
       res.status(500).json({ error: err.message });
     }
   }

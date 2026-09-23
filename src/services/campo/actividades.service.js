@@ -4,17 +4,38 @@ class ActividadesService {
   /**
    * Listar actividades con filtros por estado, fecha y usuario
    */
-  async listarActividades(usuarioId, query = {}, userRole = '') {
+  async listarActividades(usuarioId, query = {}, userRole = '', userObject = null) {
     const { estado, fecha, personalId } = query;
 
-    const where = {};
-    const isAdminOrSupervisor = ['admin', '1', 'director', 'coordinador', 'supervisor'].some(r =>
-      (userRole || '').toLowerCase().includes(r)
+    // Normalizar role a string de forma segura
+    let roleStr = '';
+    if (typeof userRole === 'string') {
+      roleStr = userRole.toLowerCase();
+    } else if (userRole && typeof userRole === 'object') {
+      roleStr = (userRole.name || userRole.nombre || userRole.cargo || '').toLowerCase();
+    }
+    const cargoStr = String(userObject?.cargo || '').toLowerCase();
+    const esDelegado = Boolean(userObject?.esDelegadoGerencia);
+    const roleId = String(userObject?.roleId || '');
+
+    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
+      roleStr.includes(r) || cargoStr.includes(r)
     );
+
+    const where = {
+      // Excluir rutas de las actividades estándar para que no se dupliquen con /campo/rutas
+      NOT: [
+        { codigo: { startsWith: 'RUT-' } },
+        { titulo: { startsWith: 'Ruta:' } }
+      ]
+    };
 
     if (personalId && isAdminOrSupervisor) {
       where.usuarioId = personalId;
+    } else if (query.usuarioId && isAdminOrSupervisor) {
+      where.usuarioId = query.usuarioId;
     } else if (!isAdminOrSupervisor) {
+      // Comercial en campo ve estrictamente sus actividades asignadas
       where.usuarioId = usuarioId;
     }
 
@@ -54,12 +75,16 @@ class ActividadesService {
       fechaProgramada = new Date(),
       horaEstimada = '08:00 AM',
       asignadoAId = null,
+      comercialId = null,
+      usuarioAsignadoId = null,
       visitaId = null
     } = data;
 
     if (!titulo || !titulo.trim()) {
       return { success: false, error: 'El título de la actividad es obligatorio.' };
     }
+
+    const targetUserId = asignadoAId || comercialId || usuarioAsignadoId || data.usuarioId || usuarioId;
 
     const count = await prisma.actividadCampo.count();
     let codigo = `ACT-${String(count + 1).padStart(5, '0')}`;
@@ -71,7 +96,7 @@ class ActividadesService {
     const actividad = await prisma.actividadCampo.create({
       data: {
         codigo,
-        usuarioId: asignadoAId || usuarioId,
+        usuarioId: targetUserId,
         asignadoPorId: usuarioId,
         visitaId: visitaId || null,
         titulo: titulo.trim(),
@@ -89,14 +114,14 @@ class ActividadesService {
     });
 
     // Notificar al asesor/colaborador asignado
-    if (asignadoAId) {
+    if (targetUserId && String(targetUserId) !== String(usuarioId)) {
       try {
         const delegado = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, user: true } });
         const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
         await prisma.notificacion.create({
           data: {
             id: notifId,
-            paraId: asignadoAId,
+            paraId: targetUserId,
             titulo: 'Nueva Actividad Asignada por Delegado',
             mensaje: `El Delegado de Gerencia ${delegado?.nombre || delegado?.user || 'Delegado'} le ha asignado la tarea: "${titulo.trim()}". Prioridad: ${prioridad}.`,
             de: `${delegado?.nombre || delegado?.user || 'Delegado de Gerencia'}`,

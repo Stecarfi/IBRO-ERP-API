@@ -4,7 +4,7 @@ class ReportesCampoService {
   /**
    * Consolidado de métricas operativas por filtros en español claro
    */
-  async generarReporte(usuarioId, query = {}, userRole = '') {
+  async generarReporte(usuarioId, query = {}, userRole = '', userObject = null) {
     const {
       fechaInicio,
       fechaFin,
@@ -14,8 +14,18 @@ class ReportesCampoService {
       estadoVisita
     } = query;
 
-    const isAdminOrSupervisor = ['admin', '1', 'director', 'coordinador', 'supervisor'].some(r =>
-      (userRole || '').toLowerCase().includes(r)
+    let roleStr = '';
+    if (typeof userRole === 'string') {
+      roleStr = userRole.toLowerCase();
+    } else if (userRole && typeof userRole === 'object') {
+      roleStr = (userRole.name || userRole.nombre || userRole.cargo || '').toLowerCase();
+    }
+    const cargoStr = String(userObject?.cargo || '').toLowerCase();
+    const esDelegado = Boolean(userObject?.esDelegadoGerencia);
+    const roleId = String(userObject?.roleId || '');
+
+    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
+      roleStr.includes(r) || cargoStr.includes(r)
     );
 
     const whereJornada = {};

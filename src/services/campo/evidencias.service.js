@@ -4,16 +4,28 @@ class EvidenciasService {
   /**
    * Listar evidencias con filtros
    */
-  async listarEvidencias(usuarioId, query = {}, userRole = '') {
+  async listarEvidencias(usuarioId, query = {}, userRole = '', userObject = null) {
     const { tipo, fecha, visitaId, actividadId, personalId } = query;
 
-    const where = {};
-    const isAdminOrSupervisor = ['admin', '1', 'director', 'coordinador', 'supervisor'].some(r =>
-      (userRole || '').toLowerCase().includes(r)
+    let roleStr = '';
+    if (typeof userRole === 'string') {
+      roleStr = userRole.toLowerCase();
+    } else if (userRole && typeof userRole === 'object') {
+      roleStr = (userRole.name || userRole.nombre || userRole.cargo || '').toLowerCase();
+    }
+    const cargoStr = String(userObject?.cargo || '').toLowerCase();
+    const esDelegado = Boolean(userObject?.esDelegadoGerencia);
+    const roleId = String(userObject?.roleId || '');
+
+    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
+      roleStr.includes(r) || cargoStr.includes(r)
     );
 
+    const where = {};
     if (personalId && isAdminOrSupervisor) {
       where.usuarioId = personalId;
+    } else if (query.usuarioId && isAdminOrSupervisor) {
+      where.usuarioId = query.usuarioId;
     } else if (!isAdminOrSupervisor) {
       where.usuarioId = usuarioId;
     }
@@ -100,16 +112,28 @@ class EvidenciasService {
   /**
    * Listar historial y seguimiento continuo de clientes y visitas
    */
-  async listarSeguimientos(usuarioId, query = {}, userRole = '') {
+  async listarSeguimientos(usuarioId, query = {}, userRole = '', userObject = null) {
     const { clienteId, prospectoId, personalId } = query;
 
-    const where = {};
-    const isAdminOrSupervisor = ['admin', '1', 'director', 'coordinador', 'supervisor'].some(r =>
-      (userRole || '').toLowerCase().includes(r)
+    let roleStr = '';
+    if (typeof userRole === 'string') {
+      roleStr = userRole.toLowerCase();
+    } else if (userRole && typeof userRole === 'object') {
+      roleStr = (userRole.name || userRole.nombre || userRole.cargo || '').toLowerCase();
+    }
+    const cargoStr = String(userObject?.cargo || '').toLowerCase();
+    const esDelegado = Boolean(userObject?.esDelegadoGerencia);
+    const roleId = String(userObject?.roleId || '');
+
+    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
+      roleStr.includes(r) || cargoStr.includes(r)
     );
 
+    const where = {};
     if (personalId && isAdminOrSupervisor) {
       where.usuarioId = personalId;
+    } else if (query.usuarioId && isAdminOrSupervisor) {
+      where.usuarioId = query.usuarioId;
     } else if (!isAdminOrSupervisor) {
       where.usuarioId = usuarioId;
     }
