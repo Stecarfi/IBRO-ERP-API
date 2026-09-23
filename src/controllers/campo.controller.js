@@ -997,6 +997,30 @@ class CampoController {
         fecha: fechaFinal
       });
 
+      // Notificar inmediatamente al Comercial en Campo sobre la ruta asignada
+      try {
+        const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+        const fechaTexto = fechaFinal ? new Date(fechaFinal).toISOString().split('T')[0] : 'próximamente';
+        const nuevaNotif = await prisma.notificacion.create({
+          data: {
+            id: notifId,
+            paraId: usuarioId,
+            titulo: 'Nueva Ruta Comercial Asignada',
+            mensaje: `El Delegado de Gerencia ${req.user.nombre || req.user.user} le ha asignado la ruta: "${nombreRuta || 'Ruta de Terreno'}" programada para el ${fechaTexto}. Zona: ${zona || 'Comercial'}.`,
+            de: `${req.user.nombre || req.user.user}`,
+            tipo: 'ruta_asignada',
+            fecha: new Date(),
+            leida: false,
+            targetModule: 'comercial_campo'
+          }
+        });
+        if (req.app && req.app.get('io')) {
+          req.app.get('io').emit('notificacion:nueva', nuevaNotif);
+        }
+      } catch (errNotif) {
+        console.error('Error generando notificación de ruta para comercial:', errNotif);
+      }
+
       res.status(201).json({
         success: true,
         ruta: actividadRuta,

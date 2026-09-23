@@ -88,11 +88,34 @@ class ActividadesService {
       }
     });
 
+    // Notificar al asesor/colaborador asignado
+    if (asignadoAId) {
+      try {
+        const delegado = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, user: true } });
+        const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+        await prisma.notificacion.create({
+          data: {
+            id: notifId,
+            paraId: asignadoAId,
+            titulo: 'Nueva Actividad Asignada por Delegado',
+            mensaje: `El Delegado de Gerencia ${delegado?.nombre || delegado?.user || 'Delegado'} le ha asignado la tarea: "${titulo.trim()}". Prioridad: ${prioridad}.`,
+            de: `${delegado?.nombre || delegado?.user || 'Delegado de Gerencia'}`,
+            tipo: 'actividad_asignada',
+            fecha: new Date(),
+            leida: false,
+            targetModule: 'comercial_campo'
+          }
+        });
+      } catch (errNotif) {
+        console.error('Error generando notificación de actividad:', errNotif);
+      }
+    }
+
     return { success: true, actividad };
   }
 
   /**
-   * Actualizar estado de una actividad (Pendiente, En ejecucion, Finalizada, Reprogramada)
+   * Actualizar estado de una actividad (Pendiente, En ejecucion, Finalizada, Completada, Reprogramada)
    */
   async actualizarEstado(usuarioId, actividadId, data) {
     const { estado, comentario = '', nuevaFecha = null, evidencias = [], adjuntos = [] } = data;
@@ -106,7 +129,7 @@ class ActividadesService {
     }
 
     const updateData = { estado };
-    if (estado === 'Finalizada') {
+    if (estado === 'Finalizada' || estado === 'Completada') {
       updateData.fechaFinalizacion = new Date();
     }
     if (estado === 'Reprogramada' && nuevaFecha) {
@@ -136,6 +159,30 @@ class ActividadesService {
         usuario: { select: { id: true, nombre: true, apellido: true } }
       }
     });
+
+    // Notificar al Delegado de Gerencia sobre el registro de cumplimiento
+    if (actividad.asignadoPorId && actividad.asignadoPorId !== usuarioId) {
+      try {
+        const asesor = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, user: true } });
+        const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+        const esRuta = (actividad.codigo || '').startsWith('RUT-') || (actividad.titulo || '').toLowerCase().startsWith('ruta:');
+        await prisma.notificacion.create({
+          data: {
+            id: notifId,
+            paraId: actividad.asignadoPorId,
+            titulo: esRuta ? 'Cumplimiento de Ruta Registrado' : 'Cumplimiento de Actividad Registrado',
+            mensaje: `El asesor ${asesor?.nombre || asesor?.user || 'Comercial'} actualizó el estado a "${estado}" para: "${actividad.titulo}".${comentario ? ` Observaciones: ${comentario}` : ''}`,
+            de: `${asesor?.nombre || asesor?.user || 'Comercial en Campo'}`,
+            tipo: 'cumplimiento_asignacion',
+            fecha: new Date(),
+            leida: false,
+            targetModule: 'control_gerencial'
+          }
+        });
+      } catch (errNotif) {
+        console.error('Error notificando cumplimiento al Delegado:', errNotif);
+      }
+    }
 
     return { success: true, actividad: actividadActualizada };
   }

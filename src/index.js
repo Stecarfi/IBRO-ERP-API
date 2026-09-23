@@ -1156,8 +1156,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   }
 });
 
-// POST /api/logout: Cerrar sesión segura
-app.post('/api/logout', async (req, res) => {
+// ALL /api/logout: Cerrar sesión segura (GET y POST para compatibilidad universal móvil)
+app.all('/api/logout', async (req, res) => {
   // Limpiar refreshToken de la base de datos si es posible
   const refreshToken = req.cookies?.refreshToken;
   if (refreshToken) {
@@ -1172,10 +1172,15 @@ app.post('/api/logout', async (req, res) => {
     }
   }
 
-  const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none' };
+  const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none', path: '/' };
+  const fallbackOpts = { httpOnly: true, path: '/' };
   res.clearCookie('token', cookieOpts);
   res.clearCookie('refreshToken', cookieOpts);
-  res.json({ success: true });
+  res.clearCookie('token', fallbackOpts);
+  res.clearCookie('refreshToken', fallbackOpts);
+  res.clearCookie('token');
+  res.clearCookie('refreshToken');
+  res.json({ success: true, message: 'Sesión cerrada exitosamente' });
 });
 
 // POST /api/refresh: Rotación de sesión silenciosa
