@@ -14,6 +14,7 @@ const { validateSyncPayload, sanitizeBackendForPrisma, safeDate, safeJson } = re
 const { askGemini, geminiLogs } = require('./geminiService');
 const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('./emailService');
 const driveService = require('./services/drive.service');
+const videoStreamService = require('./services/video-stream.service');
 
 const path = require('path');
 const app = express();
@@ -422,153 +423,8 @@ app.post('/api/upload-course-video', authenticateToken, uploadCourseVideo.single
     }
 });
 
-// Endpoint proxy/streaming para transmitir archivos de Google Drive sin restricciones de CORS ni login (con soporte HTTP Range para video fluido)
-const handleDriveStream = async (req, res) => {
-    try {
-        const { fileId } = req.params;
-        if (!fileId) return res.status(400).json({ error: 'fileId es requerido' });
-
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', '*');
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges, Content-Disposition');
-
-        // Helper universal para extraer encabezados ya sea de Headers, AxiosHeaders u objeto plano
-        const getStreamHeader = (headersObj, headerName) => {
-            if (!headersObj) return null;
-            if (typeof headersObj.get === 'function') {
-                return headersObj.get(headerName);
-            }
-            const lower = headerName.toLowerCase();
-            return headersObj[headerName] || headersObj[lower] || null;
-        };
-
-        // 1. Intentar streaming autenticado con soporte de HTTP Range para video sin trabas
-        if (driveService && typeof driveService.isAvailable === 'function' && driveService.isAvailable()) {
-            try {
-                let meta = null;
-                try {
-                    const metaRes = await driveService.drive.files.get({
-                        fileId: fileId,
-                        fields: 'id, name, mimeType, size',
-                        supportsAllDrives: true
-                    });
-                    meta = metaRes.data;
-                } catch (mErr) {
-                    console.warn('[DRIVE-STREAM] Metadatos no disponibles:', mErr.message);
-                }
-
-                const totalSize = meta?.size ? parseInt(meta.size, 10) : null;
-                const requestHeaders = {};
-                if (req.headers.range) {
-                    requestHeaders.Range = req.headers.range;
-                }
-
-                const driveStream = await driveService.drive.files.get(
-                    { fileId: fileId, alt: 'media', supportsAllDrives: true },
-                    { responseType: 'stream', headers: requestHeaders }
-                );
-
-                const upstreamRange = getStreamHeader(driveStream.headers, 'content-range');
-                const upstreamLength = getStreamHeader(driveStream.headers, 'content-length');
-                const upstreamType = getStreamHeader(driveStream.headers, 'content-type');
-                const mimeType = meta?.mimeType || upstreamType || 'video/mp4';
-
-                res.setHeader('Accept-Ranges', 'bytes');
-                res.setHeader('Content-Type', mimeType);
-                if (meta?.name) {
-                    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(meta.name)}"`);
-                }
-
-                // Manejo estricto de HTTP 206 Range
-                if (req.headers.range) {
-                    res.status(206);
-                    if (upstreamRange) {
-                        res.setHeader('Content-Range', upstreamRange);
-                    } else if (totalSize) {
-                        const parts = req.headers.range.replace(/bytes=/, '').split('-');
-                        const start = parseInt(parts[0], 10) || 0;
-                        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
-                        res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
-                        res.setHeader('Content-Length', (end - start + 1).toString());
-                    }
-                    if (upstreamLength) {
-                        res.setHeader('Content-Length', upstreamLength);
-                    }
-                } else {
-                    res.status(driveStream.status || 200);
-                    if (upstreamLength) {
-                        res.setHeader('Content-Length', upstreamLength);
-                    } else if (totalSize) {
-                        res.setHeader('Content-Length', totalSize.toString());
-                    }
-                }
-
-                if (req.method === 'HEAD') {
-                    return res.end();
-                }
-
-                return driveStream.data.pipe(res);
-            } catch (authErr) {
-                console.warn('[DRIVE-STREAM] Intento con service account falló, usando descarga directa de respaldo:', authErr.message);
-            }
-        }
-
-        // 2. Respaldo universal directo para enlaces de Google Drive públicos o compartidos
-        const directDriveUrl = `https://drive.google.com/uc?id=${fileId}&export=download`;
-        const fetchHeaders = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        };
-        if (req.headers.range) {
-            fetchHeaders.Range = req.headers.range;
-        }
-        let fetchRes = await fetch(directDriveUrl, { headers: fetchHeaders, redirect: 'follow' });
-
-        let contentType = fetchRes.headers.get('content-type') || '';
-        if (contentType.includes('text/html')) {
-            const htmlText = await fetchRes.text();
-            const confirmMatch = htmlText.match(/href="(\/uc\?export=download[^"]+confirm=[^"&]+[^"]*)"/) ||
-                                 htmlText.match(/href="(https:\/\/[^"]+confirm=[^"&]+[^"]*)"/);
-            if (confirmMatch) {
-                const confirmedUrl = confirmMatch[1].startsWith('http') ? confirmMatch[1] : `https://drive.google.com${confirmMatch[1].replace(/&amp;/g, '&')}`;
-                fetchRes = await fetch(confirmedUrl, { headers: fetchHeaders, redirect: 'follow' });
-                contentType = fetchRes.headers.get('content-type') || 'video/mp4';
-            }
-        }
-
-        if (!fetchRes.ok && fetchRes.status !== 206) {
-            return res.status(fetchRes.status).json({ error: 'No se pudo descargar el archivo desde Google Drive' });
-        }
-
-        const contentLength = fetchRes.headers.get('content-length');
-        const contentRange = fetchRes.headers.get('content-range');
-
-        res.setHeader('Accept-Ranges', 'bytes');
-        if (req.headers.range && (fetchRes.status === 206 || contentRange)) {
-            res.status(206);
-        }
-        if (contentRange) res.setHeader('Content-Range', contentRange);
-        res.setHeader('Content-Type', contentType.includes('text/html') ? 'video/mp4' : (contentType || 'video/mp4'));
-        if (contentLength) res.setHeader('Content-Length', contentLength);
-        res.setHeader('Content-Disposition', `inline; filename="archivo-${fileId}.mp4"`);
-
-        if (req.method === 'HEAD') {
-            return res.end();
-        }
-
-        if (fetchRes.body) {
-            const nodeStream = stream.Readable.fromWeb ? stream.Readable.fromWeb(fetchRes.body) : null;
-            if (nodeStream) {
-                return nodeStream.pipe(res);
-            }
-        }
-        const arrayBuffer = await fetchRes.arrayBuffer();
-        return res.send(Buffer.from(arrayBuffer));
-    } catch (err) {
-        console.error('[DRIVE-STREAM] Error al transmitir archivo desde Drive:', err.message);
-        res.status(500).json({ error: 'Error al transmitir archivo desde Drive' });
-    }
-};
+// Endpoint proxy/streaming de alto rendimiento para transmitir archivos de Google Drive (con soporte HTTP 206 Range, Smart Video Cache y control de fugas de sockets)
+const handleDriveStream = (req, res) => videoStreamService.handleStream(req, res);
 
 app.get('/api/drive-stream/:fileId', handleDriveStream);
 app.head('/api/drive-stream/:fileId', handleDriveStream);
