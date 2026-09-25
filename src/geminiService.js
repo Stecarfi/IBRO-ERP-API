@@ -38,10 +38,18 @@ async function getCompanyContext() {
     const recentSales = await prisma.venta.findMany({
       take: 5,
       orderBy: { fechaIso: 'desc' },
-      include: { cliente: true, producto: true }
+      include: {
+        cliente: true,
+        items: { include: { producto: true } }
+      }
     });
 
-    const salesList = recentSales.map(v => `- Factura ${v.id}: Cliente ${v.cliente.nom}, Producto ${v.producto.ref}, Total: $${v.total.toLocaleString('es-CO')}`).join('\n');
+    const salesList = recentSales.map(v => {
+      const cliNom = v.cliente?.nom || 'Cliente';
+      const prodNames = (v.items || []).map(i => i.producto?.ref || i.producto?.nom).filter(Boolean).join(', ') || 'Productos varios';
+      const totalFormatted = (v.total || 0).toLocaleString('es-CO');
+      return `- Factura ${v.id}: Cliente ${cliNom}, Productos: ${prodNames}, Total: $${totalFormatted}`;
+    }).join('\n');
     const stockList = lowStockProducts.map(p => `- ${p.nom} (${p.ref}): ${p.cant} unidades`).join('\n');
 
     return `
