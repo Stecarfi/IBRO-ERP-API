@@ -86,11 +86,12 @@ app.use(cors({
     ]
 }));
 
-// 🛡️ Rate Limiting Global (Anti-DDoS)
+// 🛡️ Rate Limiting Global (Anti-DDoS) - Excluye video streaming para evitar HTTP 429 durante la reproducción
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
   max: 500, // límite de 500 peticiones por IP
-  message: { error: 'Demasiadas peticiones detectadas (Anti-DDoS). Intente más tarde.' }
+  message: { error: 'Demasiadas peticiones detectadas (Anti-DDoS). Intente más tarde.' },
+  skip: (req) => req.path.startsWith('/drive-stream/') || req.path.startsWith('/media/')
 });
 app.use('/api/', apiLimiter);
 
@@ -407,6 +408,13 @@ app.post('/api/upload-course-video', authenticateToken, uploadCourseVideo.single
             req.file.mimetype || 'video/mp4',
             folderSegments
         );
+
+        // Guardar inmediatamente en caché local de video para streaming progresivo ultra-rápido (89 MB/s)
+        videoStreamService.saveToCache(fileResult.fileId, req.file.buffer, {
+            name: req.file.originalname,
+            mimeType: req.file.mimetype || 'video/mp4',
+            size: req.file.size
+        });
 
         res.json({
             success: true,

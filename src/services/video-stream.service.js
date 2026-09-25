@@ -26,7 +26,8 @@ class VideoStreamService {
 
         // Mantenimiento periódico de caché en disco (cada 24 horas)
         this.cleanOldCache();
-        setInterval(() => this.cleanOldCache(), 24 * 60 * 60 * 1000);
+        const cleanupTimer = setInterval(() => this.cleanOldCache(), 24 * 60 * 60 * 1000);
+        if (cleanupTimer && typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
     }
 
     initCacheDir() {
@@ -45,6 +46,33 @@ class VideoStreamService {
 
     getTempDownloadPath(fileId) {
         return path.join(this.cacheDir, `${fileId}.downloading`);
+    }
+
+    /**
+     * Almacena directamente en caché local el buffer de un video subido para disponibilidad instantánea (latencia 1ms)
+     */
+    saveToCache(fileId, buffer, meta = null) {
+        if (!fileId || !buffer) return false;
+        try {
+            const cachedFile = this.getCacheFilePath(fileId);
+            fs.writeFileSync(cachedFile, buffer);
+            if (meta) {
+                this.metadataCache.set(fileId, {
+                    data: {
+                        id: fileId,
+                        name: meta.name || `video-${fileId}.mp4`,
+                        mimeType: meta.mimeType || 'video/mp4',
+                        size: buffer.length
+                    },
+                    timestamp: Date.now()
+                });
+            }
+            console.log(`[VIDEO-STREAM-CACHE] Video ${fileId} almacenado de inmediato en caché local (${buffer.length} bytes).`);
+            return true;
+        } catch (err) {
+            console.warn(`[VIDEO-STREAM-CACHE] No se pudo guardar video ${fileId} en caché:`, err.message);
+            return false;
+        }
     }
 
     async getFileMetadata(fileId) {
@@ -259,6 +287,7 @@ class VideoStreamService {
 
                     if (req.headers.range) {
                         isRangeRequest = true;
+                        requestHeaders.Range = req.headers.range;
                         const parts = req.headers.range.replace(/bytes=/, '').split('-');
                         start = parseInt(parts[0], 10) || 0;
                         if (parts[1]) {
@@ -266,7 +295,6 @@ class VideoStreamService {
                         } else if (totalSize) {
                             end = totalSize - 1;
                         }
-                        requestHeaders.Range = `bytes=${start}-${end !== null ? end : ''}`;
                     }
 
                     const driveStream = await driveService.drive.files.get(
@@ -274,11 +302,14 @@ class VideoStreamService {
                         { responseType: 'stream', headers: requestHeaders }
                     );
 
-                    // Helper para encabezados
+                    // Helper para encabezados (compatible con Headers API y objetos simples)
                     const getH = (name) => {
                         const h = driveStream.headers;
                         if (!h) return null;
-                        if (typeof h.get === 'function') return h.get(name);
+                        if (typeof h.get === 'function') {
+                            const val = h.get(name);
+                            if (val) return val;
+                        }
                         return h[name] || h[name.toLowerCase()] || null;
                     };
 
@@ -290,7 +321,7 @@ class VideoStreamService {
                     res.setHeader('Accept-Ranges', 'bytes');
                     res.setHeader('Content-Type', mimeType);
                     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
-                    res.setHeader('Cache-Control', 'public, max-age=3600');
+                    res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
 
                     if (isRangeRequest) {
                         res.status(206);

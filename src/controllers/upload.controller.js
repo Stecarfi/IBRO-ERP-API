@@ -1,5 +1,6 @@
 const prisma = require('../prisma');
 const driveService = require('../services/drive.service');
+const videoStreamService = require('../services/video-stream.service');
 
 class UploadController {
     async uploadAvatar(req, res) {
@@ -197,6 +198,13 @@ class UploadController {
                 req.file.mimetype || 'video/mp4',
                 folderSegments
             );
+            
+            // Guardar inmediatamente en caché local de video para streaming instantáneo
+            videoStreamService.saveToCache(fileResult.fileId, req.file.buffer, {
+                name: req.file.originalname,
+                mimeType: req.file.mimetype || 'video/mp4',
+                size: req.file.size
+            });
 
             res.json({
                 success: true,
