@@ -676,10 +676,7 @@ class CampoController {
 
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true,
-          NOT: {
-            esDelegadoGerencia: true
-          }
+          esComercialCampo: true
         },
         select: {
           id: true,
@@ -1435,10 +1432,7 @@ class CampoController {
       // 1. Obtener todos los comerciales de campo (estrictamente por atributo esComercialCampo)
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true,
-          NOT: {
-            esDelegadoGerencia: true
-          }
+          esComercialCampo: true
         },
         select: {
           id: true,
@@ -1487,7 +1481,10 @@ class CampoController {
       const todasJornadasHoy = await prisma.jornadaLaboral.findMany({
         where: {
           usuarioId: { in: comercialesIds },
-          fecha: { gte: startOfDay, lte: endOfDay }
+          OR: [
+            { fecha: { gte: startOfDay, lte: endOfDay } },
+            { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } }
+          ]
         },
         orderBy: { id: 'desc' }
       });
@@ -1495,11 +1492,12 @@ class CampoController {
       const jornadasActivasPorUsuario = new Map();
       const ultimaJornadaPorUsuario = new Map();
       todasJornadasHoy.forEach(j => {
-        if (!ultimaJornadaPorUsuario.has(j.usuarioId)) {
-          ultimaJornadaPorUsuario.set(j.usuarioId, j);
+        const uId = String(j.usuarioId);
+        if (!ultimaJornadaPorUsuario.has(uId)) {
+          ultimaJornadaPorUsuario.set(uId, j);
         }
-        if (['Iniciada', 'En Pausa'].includes(j.estado) && !jornadasActivasPorUsuario.has(j.usuarioId)) {
-          jornadasActivasPorUsuario.set(j.usuarioId, j);
+        if (['Iniciada', 'En Pausa', 'En Ruta'].includes(j.estado) && !jornadasActivasPorUsuario.has(uId)) {
+          jornadasActivasPorUsuario.set(uId, j);
         }
       });
 
@@ -1514,7 +1512,7 @@ class CampoController {
 
       const visitasEnCursoPorUsuario = new Map();
       visitasHoy.filter(v => v.estado === 'En Curso').forEach(v => {
-        visitasEnCursoPorUsuario.set(v.usuarioId, v);
+        visitasEnCursoPorUsuario.set(String(v.usuarioId), v);
       });
 
       // 4. Últimos pings GPS registrados hoy
@@ -1527,8 +1525,9 @@ class CampoController {
       });
       const pingPorUsuario = new Map();
       ultimosPingsHoy.forEach(p => {
-        if (!pingPorUsuario.has(p.usuarioId)) {
-          pingPorUsuario.set(p.usuarioId, p);
+        const uId = String(p.usuarioId);
+        if (!pingPorUsuario.has(uId)) {
+          pingPorUsuario.set(uId, p);
         }
       });
 
@@ -1546,10 +1545,11 @@ class CampoController {
       let disponiblesCount = 0;
 
       const comercialesDetalle = comerciales.map(c => {
-        const jActiva = jornadasActivasPorUsuario.get(c.id);
-        const jUltima = ultimaJornadaPorUsuario.get(c.id);
-        const vEnCurso = visitasEnCursoPorUsuario.get(c.id);
-        const pingGps = pingPorUsuario.get(c.id);
+        const cKey = String(c.id);
+        const jActiva = jornadasActivasPorUsuario.get(cKey) || jornadasActivasPorUsuario.get(c.id);
+        const jUltima = ultimaJornadaPorUsuario.get(cKey) || ultimaJornadaPorUsuario.get(c.id);
+        const vEnCurso = visitasEnCursoPorUsuario.get(cKey) || visitasEnCursoPorUsuario.get(c.id);
+        const pingGps = pingPorUsuario.get(cKey) || pingPorUsuario.get(c.id);
 
         let estadoOperativo = 'desconectado';
         let estado = 'Fuera de Turno';
@@ -1575,6 +1575,11 @@ class CampoController {
           } else if (jActiva.estado === 'En Pausa') {
             estadoOperativo = 'en_pausa';
             estado = 'En Pausa';
+          } else if (jActiva.estado === 'En Ruta') {
+            estadoOperativo = 'en_jornada';
+            estado = 'En Ruta';
+            disponible = true;
+            disponiblesCount++;
           } else {
             estadoOperativo = 'en_jornada';
             estado = 'Disponible';

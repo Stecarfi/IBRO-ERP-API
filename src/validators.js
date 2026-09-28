@@ -846,6 +846,12 @@ function sanitizeBackendForPrisma(tableName, item) {
       delete cleaned.pass;
     }
     cleaned.roleId = cleaned.roleId ? String(cleaned.roleId) : '1';
+    if (cleaned.esComercialCampo !== undefined) {
+      cleaned.esComercialCampo = cleaned.esComercialCampo === true || String(cleaned.esComercialCampo).toLowerCase() === 'true' || String(cleaned.esComercialCampo).toLowerCase() === 'si';
+    }
+    if (cleaned.esDelegadoGerencia !== undefined) {
+      cleaned.esDelegadoGerencia = cleaned.esDelegadoGerencia === true || String(cleaned.esDelegadoGerencia).toLowerCase() === 'true' || String(cleaned.esDelegadoGerencia).toLowerCase() === 'si';
+    }
   } else if (modelKey === 'whatsappConfig') {
     cleaned.id = 1;
     cleaned.phone = cleaned.phone ? String(cleaned.phone).trim() : '573000000000';
