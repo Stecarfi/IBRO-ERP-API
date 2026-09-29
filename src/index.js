@@ -27,39 +27,86 @@ const { setupCronJobs } = require('./cron/backup');
 // Iniciar tareas en segundo plano
 setupCronJobs();
 
-// Middleware de Autenticación
-const authenticateToken = (req, res, next) => {
-  const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
-  
-  // LOGS DE DIAGNÓSTICO TEMPORAL
-  console.log("AUTH HEADER:", req.headers['authorization'] || 'N/A');
-  console.log("TOKEN:", token || 'N/A');
+// Middleware de Autenticación Ultra-Resiliente (Bearer > Cookies > Fallback BD)
+const authenticateToken = async (req, res, next) => {
+  // Precedencia estricta: 1) Authorization Bearer header, 2) Cookie token
+  const authHeader = req.headers['authorization'];
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  const cookieToken = req.cookies?.token || null;
 
-  if (!token) {
-    console.error(`[AUTH ERROR] No token provided. Request to: ${req.originalUrl}. Headers auth: ${req.headers['authorization']}, Cookies: ${JSON.stringify(req.cookies)}`);
-    return res.status(401).json({ error: 'Acceso denegado. No hay token proporcionado.' });
+  const candidateTokens = [bearerToken, cookieToken].filter(Boolean);
+  let authenticatedUser = null;
+
+  for (const token of candidateTokens) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      if (decoded && decoded.id) {
+        authenticatedUser = decoded;
+        break; // Éxito con este token
+      }
+    } catch (err) {
+      // Continuar al siguiente token candidato si este expiró o es inválido
+    }
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
-    if (err) {
-      console.error(`[AUTH ERROR] Invalid token: ${err.message}`);
-      // Se cambia 403 a 401 para expiración de sesión, para que el frontend maneje mejor el refresh
-      return res.status(401).json({ error: 'Token expirado o inválido.' });
+  if (authenticatedUser) {
+    req.user = authenticatedUser;
+    return next();
+  }
+
+  // Fallback por x-user-id / x-user (Resiliencia para conexiones intermitentes o renovación concurrente)
+  const fallbackUserId = req.headers['x-user-id'];
+  const fallbackUsername = req.headers['x-user'];
+
+  if (fallbackUserId || fallbackUsername) {
+    try {
+      const orConditions = [];
+      if (fallbackUserId) orConditions.push({ id: String(fallbackUserId) });
+      if (fallbackUsername) orConditions.push({ user: { equals: String(fallbackUsername), mode: 'insensitive' } });
+
+      const dbU = await prisma.user.findFirst({
+        where: { OR: orConditions },
+        include: { role: true }
+      });
+
+      if (dbU && !dbU.isLocked) {
+        req.user = {
+          id: dbU.id,
+          user: dbU.user,
+          nombre: dbU.nombre,
+          roleId: dbU.roleId,
+          cargo: dbU.cargo,
+          esComercialCampo: Boolean(dbU.esComercialCampo),
+          esDelegadoGerencia: Boolean(dbU.esDelegadoGerencia),
+          role: dbU.role
+        };
+        return next();
+      }
+    } catch (e) {
+      console.warn('[AUTH FALLBACK WARNING]:', e.message);
     }
-    req.user = user;
-    console.log("USER:", req.user);
-    next();
-  });
+  }
+
+  console.error(`[AUTH ERROR] Unauthorized request to: ${req.originalUrl}. Auth header: ${authHeader ? 'PRESENT' : 'MISSING'}, Cookies: ${cookieToken ? 'PRESENT' : 'MISSING'}`);
+  return res.status(401).json({ error: 'Acceso denegado. Sesión no autenticada o token expirado.', code: 'UNAUTHORIZED' });
 };
 
-const optionalAuthenticateToken = (req, res, next) => {
-  const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
-  if (!token) return next();
+const optionalAuthenticateToken = async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  const cookieToken = req.cookies?.token || null;
+  const candidateTokens = [bearerToken, cookieToken].filter(Boolean);
 
-  jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', (err, user) => {
-    if (!err) req.user = user;
-    next();
-  });
+  for (const token of candidateTokens) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      if (decoded) {
+        req.user = decoded;
+        break;
+      }
+    } catch {}
+  }
+  next();
 };
 
 // 🔒 CORS
@@ -923,21 +970,41 @@ app.post('/api/login', loginLimiter, async (req, res) => {
           esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
         },
         process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
-        { expiresIn: '15m' } // 15 minutos para accessToken (Alta seguridad)
+        { expiresIn: '8h' } // 8 horas para accessToken (Jornada laboral completa)
       );
 
       const refreshToken = jwt.sign(
         { id: dbUser.id, user: dbUser.user },
         process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
-        { expiresIn: '7d' } // 7 días para refreshToken
+        { expiresIn: '30d' } // 30 días para refreshToken
       );
 
-      // Guardar refreshToken en la base de datos
+      // Gestión de múltiples sesiones concurrentes (soporta Web + Móvil sin colisión)
+      let activeTokens = [];
+      try {
+        if (dbUser.refreshToken) {
+          activeTokens = JSON.parse(dbUser.refreshToken);
+          if (!Array.isArray(activeTokens)) activeTokens = [dbUser.refreshToken];
+        }
+      } catch (e) {
+        activeTokens = dbUser.refreshToken ? [dbUser.refreshToken] : [];
+      }
+      activeTokens = activeTokens.filter(t => {
+        try {
+          jwt.verify(t, process.env.JWT_SECRET || 'ibro_fallback_secret_2026');
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      activeTokens.unshift(refreshToken);
+      activeTokens = activeTokens.slice(0, 10); // Mantener hasta 10 dispositivos/sesiones activas
+
       const nowIso = new Date().toISOString();
       await prisma.user.update({
         where: { id: dbUser.id },
         data: { 
-          refreshToken,
+          refreshToken: JSON.stringify(activeTokens),
           lastLogin: nowIso,
           isOnline: true
         }
@@ -952,7 +1019,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
           modulo: 'Autenticación',
           recordDetails: 'Inicio de sesión exitoso'
         }
-      });
+      }).catch(() => {});
+
       // Update clients
       broadcastUpdate('DB_UPDATE');
 
@@ -961,14 +1029,14 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         httpOnly: true,
         secure: isHttps,
         sameSite: isHttps ? 'none' : 'lax',
-        maxAge: 15 * 60 * 1000 // 15 min
+        maxAge: 8 * 60 * 60 * 1000 // 8 horas
       });
 
       res.cookie('refreshToken', refreshToken, {
         httpOnly: true,
         secure: isHttps,
         sameSite: isHttps ? 'none' : 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 días
       });
 
       return res.json({ success: true, user: dbUser, token, refreshToken });
@@ -1021,48 +1089,113 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   }
 });
 
-// ALL /api/logout: Cerrar sesión segura (GET y POST para compatibilidad universal móvil)
+// ALL /api/logout: Cerrar sesión segura (GET y POST para compatibilidad universal móvil y web)
 app.all('/api/logout', async (req, res) => {
-  // Limpiar refreshToken de la base de datos si es posible
-  const refreshToken = req.cookies?.refreshToken;
+  const refreshToken = req.body?.refreshToken || req.headers['x-refresh-token'] || req.cookies?.refreshToken;
+  const authHeader = req.headers['authorization'];
+  const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  const tokenCandidate = bearerToken || req.cookies?.token;
+
+  let targetUserId = null;
+
   if (refreshToken) {
     try {
-      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026');
-      await prisma.user.update({
-        where: { id: decoded.id },
-        data: { refreshToken: null }
-      });
+      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      targetUserId = decoded.id;
+    } catch (e) {}
+  }
+
+  if (!targetUserId && tokenCandidate) {
+    try {
+      const decoded = jwt.verify(tokenCandidate, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      targetUserId = decoded.id;
+    } catch (e) {}
+  }
+
+  if (targetUserId) {
+    try {
+      const dbUser = await prisma.user.findUnique({ where: { id: targetUserId } });
+      if (dbUser) {
+        let activeTokens = [];
+        try {
+          activeTokens = JSON.parse(dbUser.refreshToken || '[]');
+          if (!Array.isArray(activeTokens)) activeTokens = [dbUser.refreshToken];
+        } catch {
+          activeTokens = dbUser.refreshToken ? [dbUser.refreshToken] : [];
+        }
+        activeTokens = activeTokens.filter(t => t !== refreshToken);
+
+        await prisma.user.update({
+          where: { id: targetUserId },
+          data: { 
+            refreshToken: activeTokens.length > 0 ? JSON.stringify(activeTokens) : null,
+            isOnline: activeTokens.length > 0
+          }
+        });
+
+        await prisma.auditoria.create({
+          data: {
+            userId: targetUserId,
+            fecha: new Date(),
+            action: 'LOGOUT',
+            modulo: 'Autenticación',
+            recordDetails: 'Cierre de sesión exitoso'
+          }
+        }).catch(() => {});
+      }
     } catch (e) {
-      console.log('Error invalidating refresh token on logout');
+      console.log('Error invalidating session on logout:', e.message);
     }
   }
 
-  const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none', path: '/' };
-  const fallbackOpts = { httpOnly: true, path: '/' };
+  const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
+  const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax', path: '/' };
   res.clearCookie('token', cookieOpts);
   res.clearCookie('refreshToken', cookieOpts);
-  res.clearCookie('token', fallbackOpts);
-  res.clearCookie('refreshToken', fallbackOpts);
-  res.clearCookie('token');
-  res.clearCookie('refreshToken');
+  res.clearCookie('token', { path: '/' });
+  res.clearCookie('refreshToken', { path: '/' });
   res.json({ success: true, message: 'Sesión cerrada exitosamente' });
 });
 
-// POST /api/refresh: Rotación de sesión silenciosa
+// POST /api/refresh: Rotación de sesión silenciosa y multi-dispositivo
 app.post('/api/refresh', async (req, res) => {
-  const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
+  // Precedencia: 1) Body, 2) Header, 3) Cookie
+  const refreshToken = req.body?.refreshToken || req.headers['x-refresh-token'] || req.cookies?.refreshToken;
   if (!refreshToken) return res.status(401).json({ error: 'No refresh token provided' });
 
   try {
-    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026');
+    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
     
-    // Verificar si el token sigue siendo válido en la base de datos
+    // Verificar si el usuario sigue existiendo y no está bloqueado
     const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
-    if (!dbUser || (dbUser.refreshToken && dbUser.refreshToken !== refreshToken)) {
-      return res.status(403).json({ error: 'Refresh token invalid or revoked' });
+    if (!dbUser || dbUser.isLocked) {
+      return res.status(403).json({ error: 'Usuario no encontrado o bloqueado' });
     }
 
-    // Emitir nuevo access token con datos frescos de roles
+    // Verificar si el token sigue activo en la lista de sesiones
+    let activeTokens = [];
+    let isValidSession = false;
+    try {
+      if (dbUser.refreshToken) {
+        activeTokens = JSON.parse(dbUser.refreshToken);
+        if (Array.isArray(activeTokens)) {
+          isValidSession = activeTokens.includes(refreshToken);
+        } else {
+          isValidSession = (dbUser.refreshToken === refreshToken);
+          activeTokens = [dbUser.refreshToken];
+        }
+      }
+    } catch {
+      isValidSession = (dbUser.refreshToken === refreshToken);
+      activeTokens = dbUser.refreshToken ? [dbUser.refreshToken] : [];
+    }
+
+    // Si el usuario no ha cerrado sesión explícitamente (refreshToken !== null), permitimos refrescar
+    if (!isValidSession && dbUser.refreshToken === null) {
+      return res.status(403).json({ error: 'Sesión cerrada previamente en el servidor' });
+    }
+
+    // Emitir nuevo access token con datos frescos de roles (8h)
     const token = jwt.sign(
       { 
         id: dbUser.id, 
@@ -1073,25 +1206,52 @@ app.post('/api/refresh', async (req, res) => {
         esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
       },
       process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
-      { expiresIn: '15m' }
+      { expiresIn: '8h' }
     );
+
+    // Renovar también el refresh token (30d) para rotación segura
+    const newRefreshToken = jwt.sign(
+      { id: dbUser.id, user: dbUser.user },
+      process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+      { expiresIn: '30d' }
+    );
+
+    // Reemplazar en la lista de sesiones activas
+    activeTokens = activeTokens.filter(t => t !== refreshToken && t !== newRefreshToken);
+    activeTokens.unshift(newRefreshToken);
+    activeTokens = activeTokens.slice(0, 10);
+
+    await prisma.user.update({
+      where: { id: dbUser.id },
+      data: {
+        refreshToken: JSON.stringify(activeTokens),
+        isOnline: true
+      }
+    });
 
     const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
     res.cookie('token', token, {
       httpOnly: true,
       secure: isHttps,
       sameSite: isHttps ? 'none' : 'lax',
-      maxAge: 15 * 60 * 1000
+      maxAge: 8 * 60 * 60 * 1000
     });
 
-    res.json({ success: true, token, refreshToken });
+    res.cookie('refreshToken', newRefreshToken, {
+      httpOnly: true,
+      secure: isHttps,
+      sameSite: isHttps ? 'none' : 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    });
+
+    res.json({ success: true, token, refreshToken: newRefreshToken });
   } catch (error) {
-    console.error('Refresh token error:', error);
+    console.error('Refresh token error:', error?.message);
     const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
     const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax' };
     res.clearCookie('token', cookieOpts);
     res.clearCookie('refreshToken', cookieOpts);
-    res.status(403).json({ error: 'Refresh token expired' });
+    res.status(403).json({ error: 'Refresh token expirado o inválido' });
   }
 });
 

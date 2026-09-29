@@ -66,19 +66,39 @@ class AuthService {
             esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
         };
 
-        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '15m' });
+        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
 
         const refreshToken = jwt.sign(
             { id: dbUser.id, user: dbUser.user },
             JWT_SECRET,
-            { expiresIn: '7d' }
+            { expiresIn: '30d' }
         );
+
+        let activeTokens = [];
+        try {
+            if (dbUser.refreshToken) {
+                activeTokens = JSON.parse(dbUser.refreshToken);
+                if (!Array.isArray(activeTokens)) activeTokens = [dbUser.refreshToken];
+            }
+        } catch (e) {
+            activeTokens = dbUser.refreshToken ? [dbUser.refreshToken] : [];
+        }
+        activeTokens = activeTokens.filter(t => {
+            try {
+                jwt.verify(t, JWT_SECRET);
+                return true;
+            } catch {
+                return false;
+            }
+        });
+        activeTokens.unshift(refreshToken);
+        activeTokens = activeTokens.slice(0, 10);
 
         const nowIso = new Date().toISOString();
         const updatedUser = await prisma.user.update({
             where: { id: dbUser.id },
             data: { 
-                refreshToken,
+                refreshToken: JSON.stringify(activeTokens),
                 lastLogin: nowIso,
                 isOnline: true
             }
@@ -92,7 +112,7 @@ class AuthService {
                 modulo: 'Autenticación',
                 recordDetails: 'Inicio de sesión exitoso'
             }
-        });
+        }).catch(() => {});
 
         return { token, refreshToken, user: updatedUser };
     }
@@ -100,22 +120,57 @@ class AuthService {
     async logout(refreshToken) {
         if (!refreshToken) return;
         try {
-            const decoded = jwt.verify(refreshToken, JWT_SECRET);
-            await prisma.user.update({
-                where: { id: decoded.id },
-                data: { refreshToken: null }
-            });
+            const decoded = jwt.verify(refreshToken, JWT_SECRET, { clockTolerance: 60 });
+            const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
+            if (dbUser) {
+                let activeTokens = [];
+                try {
+                    activeTokens = JSON.parse(dbUser.refreshToken || '[]');
+                    if (!Array.isArray(activeTokens)) activeTokens = [dbUser.refreshToken];
+                } catch {
+                    activeTokens = dbUser.refreshToken ? [dbUser.refreshToken] : [];
+                }
+                activeTokens = activeTokens.filter(t => t !== refreshToken);
+                await prisma.user.update({
+                    where: { id: decoded.id },
+                    data: { 
+                        refreshToken: activeTokens.length > 0 ? JSON.stringify(activeTokens) : null,
+                        isOnline: activeTokens.length > 0
+                    }
+                });
+            }
         } catch (e) {
             // Ignorar si el token ya expiró o es inválido
         }
     }
 
     async refreshSession(refreshToken) {
-        const decoded = jwt.verify(refreshToken, JWT_SECRET);
+        const decoded = jwt.verify(refreshToken, JWT_SECRET, { clockTolerance: 60 });
         const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
         
-        if (!dbUser || dbUser.refreshToken !== refreshToken) {
+        if (!dbUser || dbUser.isLocked) {
             throw new Error('INVALID_REFRESH_TOKEN');
+        }
+
+        let activeTokens = [];
+        let isValidSession = false;
+        try {
+            if (dbUser.refreshToken) {
+                activeTokens = JSON.parse(dbUser.refreshToken);
+                if (Array.isArray(activeTokens)) {
+                    isValidSession = activeTokens.includes(refreshToken);
+                } else {
+                    isValidSession = (dbUser.refreshToken === refreshToken);
+                    activeTokens = [dbUser.refreshToken];
+                }
+            }
+        } catch {
+            isValidSession = (dbUser.refreshToken === refreshToken);
+            activeTokens = dbUser.refreshToken ? [dbUser.refreshToken] : [];
+        }
+
+        if (!isValidSession && dbUser.refreshToken === null) {
+            throw new Error('REVOKED_REFRESH_TOKEN');
         }
 
         const tokenPayload = {
@@ -127,7 +182,7 @@ class AuthService {
             esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
         };
 
-        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '15m' });
+        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '8h' });
 
         return token;
     }

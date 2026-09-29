@@ -66,17 +66,23 @@ class AuthController {
     }
 
     async logout(req, res) {
-        const refreshToken = req.cookies?.refreshToken;
-        await authService.logout(refreshToken);
+        const refreshToken = req.body?.refreshToken || req.headers['x-refresh-token'] || req.cookies?.refreshToken;
+        const authHeader = req.headers['authorization'];
+        const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
 
-        const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none' };
+        await authService.logout(refreshToken || bearerToken);
+
+        const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
+        const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax', path: '/' };
         res.clearCookie('token', cookieOpts);
         res.clearCookie('refreshToken', cookieOpts);
-        res.json({ success: true });
+        res.clearCookie('token', { path: '/' });
+        res.clearCookie('refreshToken', { path: '/' });
+        res.json({ success: true, message: 'Sesión cerrada exitosamente' });
     }
 
     async refresh(req, res) {
-        const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
+        const refreshToken = req.body?.refreshToken || req.headers['x-refresh-token'] || req.cookies?.refreshToken;
         if (!refreshToken) return res.status(401).json({ error: 'No refresh token provided' });
 
         try {
@@ -87,14 +93,14 @@ class AuthController {
                 httpOnly: true,
                 secure: isHttps,
                 sameSite: isHttps ? 'none' : 'lax',
-                maxAge: 15 * 60 * 1000
+                maxAge: 8 * 60 * 60 * 1000
             });
 
             res.json({ success: true, token, refreshToken });
         } catch (error) {
-            console.error('Refresh token error:', error);
+            console.error('Refresh token error:', error?.message);
             const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
-            const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax' };
+            const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax', path: '/' };
             res.clearCookie('token', cookieOpts);
             res.clearCookie('refreshToken', cookieOpts);
             res.status(403).json({ error: 'Refresh token expired or invalid' });
