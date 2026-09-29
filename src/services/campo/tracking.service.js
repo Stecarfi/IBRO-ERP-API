@@ -215,9 +215,21 @@ class TrackingService {
    * Obtiene la última posición conocida y estado de todos los colaboradores
    */
   async getUltimasUbicacionesPersonal() {
+    const ahoraDate = new Date();
+    const startOfDay = new Date(ahoraDate);
+    startOfDay.setHours(0, 0, 0, 0);
+
     const users = await prisma.user.findMany({
       where: {
-        esComercialCampo: true
+        esComercialCampo: true,
+        esDelegadoGerencia: false,
+        user: { not: 'admin' },
+        roleId: { not: '1' },
+        NOT: [
+          { cargo: { contains: 'director', mode: 'insensitive' } },
+          { cargo: { contains: 'delegad', mode: 'insensitive' } },
+          { cargo: { contains: 'gerent', mode: 'insensitive' } }
+        ]
       },
       select: {
         id: true,
@@ -232,7 +244,10 @@ class TrackingService {
         lng: true,
         lastLocationUpdate: true,
         jornadas: {
-          where: { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } },
+          where: {
+            estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] },
+            horaInicio: { gte: startOfDay }
+          },
           orderBy: { horaInicio: 'desc' },
           take: 1,
           include: {
@@ -256,28 +271,34 @@ class TrackingService {
       const visitaEnCurso = jornadaActiva?.visitas[0] || null;
       const ultimoPing = jornadaActiva?.ubicaciones?.[0] || null;
 
-      // Inactividad máxima permitida para considerar ping en vivo: 30 minutos
-      const updateTime = u.lastLocationUpdate || (ultimoPing?.timestamp ? new Date(ultimoPing.timestamp).getTime() : null);
-      const diffMs = updateTime ? (ahora - updateTime) : Infinity;
-      const pingReciente = Boolean(updateTime && diffMs < 30 * 60 * 1000);
+      // Inactividad máxima para considerar ping en vivo: 5 minutos (Cero simulación)
+      const updateTime = ultimoPing?.timestamp
+        ? new Date(ultimoPing.timestamp).getTime()
+        : (u.lastLocationUpdate ? Number(u.lastLocationUpdate) : null);
 
-      // Si tiene jornada activa o sesión, está operativo
-      const sesionOnline = Boolean(u.isOnline || jornadaActiva);
+      const diffMs = updateTime ? (ahora - updateTime) : Infinity;
+      const pingReciente = Boolean(updateTime && diffMs < 5 * 60 * 1000);
 
       let estadoOperativo = 'Inactivo';
       let estado = 'Fuera de Turno';
+      let enVivo = false;
+
       if (!jornadaActiva) {
         estadoOperativo = 'Inactivo';
-        estado = u.isOnline ? 'Disponible' : 'Fuera de Línea';
+        estado = 'Fuera de Turno';
+        enVivo = false;
       } else if (visitaEnCurso) {
         estadoOperativo = 'en_visita';
         estado = pingReciente ? 'En Visita' : 'En Visita (Sin Señal)';
+        enVivo = pingReciente;
       } else if (jornadaActiva.estado === 'En Pausa') {
         estadoOperativo = 'en_pausa';
         estado = 'En Pausa';
+        enVivo = pingReciente;
       } else {
         estadoOperativo = 'en_jornada';
-        estado = 'En Ruta';
+        estado = pingReciente ? 'En Ruta' : 'En Ruta (Sin Señal)';
+        enVivo = pingReciente;
       }
 
       return {
@@ -287,11 +308,11 @@ class TrackingService {
         cargo: u.cargo,
         foto: u.foto,
         roleId: u.roleId,
-        isOnline: sesionOnline,
+        isOnline: Boolean(jornadaActiva && pingReciente),
         lat: ultimoPing?.lat ?? u.lat,
         lng: ultimoPing?.lng ?? u.lng,
         lastLocationUpdate: updateTime,
-        enVivo: pingReciente && Boolean(jornadaActiva),
+        enVivo,
         estadoOperativo,
         estado,
         jornadaId: jornadaActiva?.id || null,

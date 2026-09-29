@@ -12,6 +12,7 @@ router.post('/jornada/pausa', (req, res) => campoController.iniciarPausa(req, re
 router.post('/jornada/pausar', (req, res) => campoController.iniciarPausa(req, res));
 router.post('/jornada/reanudar', (req, res) => campoController.reanudarPausa(req, res));
 router.post('/jornada/finalizar', (req, res) => campoController.finalizarJornada(req, res));
+router.post('/jornada/cerrar-administrativa', (req, res) => campoController.cerrarJornadaAdministrativa(req, res));
 router.get('/jornada/activa', (req, res) => campoController.getJornadaActiva(req, res));
 
 // 2. Telemetría y Tracking
@@ -24,6 +25,8 @@ router.get('/tracking/historial/:usuarioId', (req, res) => campoController.getHi
 // 3. Visitas Comerciales y Técnicas
 router.post('/visitas/programar', (req, res) => campoController.programarVisita(req, res));
 router.get('/visitas/agenda', (req, res) => campoController.getAgenda(req, res));
+router.get('/visitas/historial', (req, res) => campoController.getHistorialVisitas(req, res));
+router.get('/visitas/todas', (req, res) => campoController.getHistorialVisitas(req, res));
 router.post('/visitas/check-in', (req, res) => campoController.checkInVisita(req, res));
 router.post('/visitas/check-out', (req, res) => campoController.checkOutVisita(req, res));
 
@@ -86,6 +89,7 @@ router.get('/evaluaciones/historial', (req, res) => campoController.getHistorial
 router.get('/evaluaciones/:usuarioId', (req, res) => campoController.getHistorialEvaluaciones(req, res));
 router.get('/comerciales', (req, res) => campoController.getComercialesEnCampo(req, res));
 router.get('/auditoria', (req, res) => campoController.getAuditoriaCampo(req, res));
+router.get('/resumen-periodo', (req, res) => campoController.getResumenPeriodoComercial(req, res));
 
 // 13. Novedades, Observaciones y Ficha Histórica
 router.post('/novedades', (req, res) => campoController.crearNovedadDelegado(req, res));

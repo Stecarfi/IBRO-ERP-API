@@ -65,22 +65,34 @@ class VisitasService {
   }
 
   /**
-   * Obtiene la agenda de visitas del día para el usuario
+   * Obtiene la agenda de visitas del día para el usuario o para todo el equipo si es Delegado
    */
-  async getAgendaUsuario(usuarioId, fechaStr) {
-    const fecha = fechaStr ? new Date(fechaStr) : new Date();
-    const startOfDay = new Date(fecha.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(fecha.setHours(23, 59, 59, 999));
+  async getAgendaUsuario(usuarioId, fechaStr, esDelegado = false) {
+    const where = {};
+    if (usuarioId && usuarioId !== 'TODOS') {
+      where.usuarioId = usuarioId;
+    } else if (!esDelegado && usuarioId) {
+      where.usuarioId = usuarioId;
+    }
 
-    const visitas = await prisma.visitaCampo.findMany({
-      where: {
-        usuarioId,
-        fechaProgramada: {
+    if (fechaStr && fechaStr !== 'TODAS') {
+      const fecha = new Date(fechaStr);
+      if (!isNaN(fecha.getTime())) {
+        const startOfDay = new Date(fecha);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(fecha);
+        endOfDay.setHours(23, 59, 59, 999);
+        where.fechaProgramada = {
           gte: startOfDay,
           lte: endOfDay
-        }
-      },
+        };
+      }
+    }
+
+    const visitas = await prisma.visitaCampo.findMany({
+      where,
       include: {
+        usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true } },
         cliente: true,
         clienteExterno: true,
         prospecto: true,
@@ -91,6 +103,66 @@ class VisitasService {
     });
 
     return visitas;
+  }
+
+  /**
+   * Consulta auditora completa del historial de visitas con filtros
+   */
+  async getHistorialVisitas(filtros = {}) {
+    const { usuarioId, fechaDesde, fechaHasta, estado, resultadoVisita, search } = filtros;
+    const where = {};
+
+    if (usuarioId && usuarioId !== 'TODOS') {
+      where.usuarioId = usuarioId;
+    }
+
+    if (estado && estado !== 'TODOS') {
+      where.estado = estado;
+    }
+
+    if (resultadoVisita && resultadoVisita !== 'TODOS') {
+      where.resultadoVisita = resultadoVisita;
+    }
+
+    if (fechaDesde || fechaHasta) {
+      where.fechaProgramada = {};
+      if (fechaDesde) {
+        const d = new Date(fechaDesde);
+        d.setHours(0, 0, 0, 0);
+        where.fechaProgramada.gte = d;
+      }
+      if (fechaHasta) {
+        const h = new Date(fechaHasta);
+        h.setHours(23, 59, 59, 999);
+        where.fechaProgramada.lte = h;
+      }
+    }
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      where.OR = [
+        { codigo: { contains: q, mode: 'insensitive' } },
+        { clienteExterno: { nombre: { contains: q, mode: 'insensitive' } } },
+        { cliente: { nom: { contains: q, mode: 'insensitive' } } },
+        { prospecto: { nombreComercial: { contains: q, mode: 'insensitive' } } },
+        { observaciones: { contains: q, mode: 'insensitive' } },
+        { resultadoResumen: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    return prisma.visitaCampo.findMany({
+      where,
+      include: {
+        usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true } },
+        cliente: true,
+        clienteExterno: true,
+        prospecto: true,
+        cotizacion: true,
+        venta: true
+      },
+      orderBy: { fechaProgramada: 'desc' },
+      take: 300
+    });
   }
 
   /**

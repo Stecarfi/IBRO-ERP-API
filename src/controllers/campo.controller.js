@@ -282,8 +282,10 @@ class CampoController {
 
   async getAgenda(req, res) {
     try {
-      const { fecha } = req.query;
-      const visitas = await visitasService.getAgendaUsuario(req.user.id, fecha);
+      const { fecha, usuarioId } = req.query;
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
+      const visitas = await visitasService.getAgendaUsuario(targetUserId, fecha, esDel);
       res.json(visitas);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -734,9 +736,21 @@ class CampoController {
         return res.status(403).json({ error: 'Acceso restringido al Delegado de Gerencia.' });
       }
 
+      const ahora = new Date();
+      const startOfDay = new Date(ahora);
+      startOfDay.setHours(0, 0, 0, 0);
+
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true
+          esComercialCampo: true,
+          esDelegadoGerencia: false,
+          user: { not: 'admin' },
+          roleId: { not: '1' },
+          NOT: [
+            { cargo: { contains: 'director', mode: 'insensitive' } },
+            { cargo: { contains: 'delegad', mode: 'insensitive' } },
+            { cargo: { contains: 'gerent', mode: 'insensitive' } }
+          ]
         },
         select: {
           id: true,
@@ -759,7 +773,10 @@ class CampoController {
           lastLocationUpdate: true,
           role: { select: { id: true, name: true } },
           jornadas: {
-            where: { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } },
+            where: {
+              estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] },
+              horaInicio: { gte: startOfDay }
+            },
             take: 1,
             select: { id: true, estado: true, horaInicio: true, bateriaInicio: true }
           }
@@ -767,13 +784,19 @@ class CampoController {
         orderBy: { nombre: 'asc' }
       });
 
-      const mapped = comerciales.map(c => ({
-        ...c,
-        isOnline: Boolean(c.isOnline || c.jornadas?.length > 0),
-        jornadaActivaId: c.jornadas?.[0]?.id || null,
-        estadoJornada: c.jornadas?.[0]?.estado || null,
-        bateria: c.jornadas?.[0]?.bateriaInicio ?? 90
-      }));
+      const mapped = comerciales.map(c => {
+        const tieneJornadaActivaHoy = Boolean(c.jornadas && c.jornadas.length > 0);
+        const updateTime = c.lastLocationUpdate ? Number(c.lastLocationUpdate) : null;
+        const pingReciente = updateTime ? (Date.now() - updateTime < 5 * 60 * 1000) : false;
+        return {
+          ...c,
+          isOnline: Boolean(tieneJornadaActivaHoy && pingReciente),
+          jornadaActivaId: tieneJornadaActivaHoy ? c.jornadas[0].id : null,
+          estadoJornada: tieneJornadaActivaHoy ? c.jornadas[0].estado : 'Sin Turno',
+          bateria: c.jornadas?.[0]?.bateriaInicio ?? 90,
+          enVivo: Boolean(tieneJornadaActivaHoy && pingReciente)
+        };
+      });
 
       res.json(mapped);
     } catch (err) {
@@ -1503,10 +1526,18 @@ class CampoController {
       const endOfDay = new Date(ahora);
       endOfDay.setHours(23, 59, 59, 999);
 
-      // 1. Obtener todos los comerciales de campo (estrictamente por atributo esComercialCampo)
+      // 1. Obtener todos los comerciales de campo legítimos (excluyendo supervisión/delegados)
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true
+          esComercialCampo: true,
+          esDelegadoGerencia: false,
+          user: { not: 'admin' },
+          roleId: { not: '1' },
+          NOT: [
+            { cargo: { contains: 'director', mode: 'insensitive' } },
+            { cargo: { contains: 'delegad', mode: 'insensitive' } },
+            { cargo: { contains: 'gerent', mode: 'insensitive' } }
+          ]
         },
         select: {
           id: true,
@@ -1552,14 +1583,11 @@ class CampoController {
         ? `${delegadoSupervisor.nombre} ${delegadoSupervisor.apellido || ''}`.trim() + (delegadoSupervisor.cargo ? ` (${delegadoSupervisor.cargo})` : ' (Delegado de Gerencia)')
         : 'Delegación General de Gerencia';
 
-      // 2. Todas las jornadas del día (activas y finalizadas)
+      // 2. Todas las jornadas de HOY (estrictamente del día de hoy)
       const todasJornadasHoy = await prisma.jornadaLaboral.findMany({
         where: {
           usuarioId: { in: comercialesIds },
-          OR: [
-            { fecha: { gte: startOfDay, lte: endOfDay } },
-            { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } }
-          ]
+          horaInicio: { gte: startOfDay, lte: endOfDay }
         },
         orderBy: { id: 'desc' }
       });
@@ -2016,6 +2044,162 @@ class CampoController {
       const targetUserId = esDel ? usuarioId : req.user.id;
       const data = await operacionExternaService.getMetricasEmbudo(targetUserId);
       res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- HISTORIAL DETALLADO DE VISITAS PARA AUDITORÍA GERENCIAL ---
+  async getHistorialVisitas(req, res) {
+    try {
+      const esDel = this.esDelegado(req.user);
+      const filtros = { ...req.query };
+      if (!esDel) {
+        filtros.usuarioId = req.user.id;
+      }
+      const visitas = await visitasService.getHistorialVisitas(filtros);
+      res.json(visitas);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- CIERRE ADMINISTRATIVO DE JORNADA DE CAMPO ---
+  async cerrarJornadaAdministrativa(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Acceso restringido al Delegado de Gerencia.' });
+      }
+      const { jornadaId, motivo } = req.body;
+      if (!jornadaId) return res.status(400).json({ error: 'jornadaId es requerido' });
+
+      const resultado = await jornadaService.cerrarJornadaAdministrativa(jornadaId, req.user.id, motivo);
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_JORNADA_UPDATE', { accion: 'FIN', jornadaId, motivo, timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_JORNADA_UPDATE', timestamp: Date.now() });
+      }
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_JORNADA_CIERRE_ADMIN', { jornadaId, motivo }, null, req);
+      res.json({ success: true, jornada: resultado });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // --- RESUMEN CONSOLIDADO DE GESTIÓN POR PERÍODO (DIARIO / SEMANAL / MENSUAL) ---
+  async getResumenPeriodoComercial(req, res) {
+    try {
+      const esDel = this.esDelegado(req.user);
+      const { usuarioId, periodo = 'hoy', fechaDesde, fechaHasta } = req.query;
+      const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
+
+      const ahora = new Date();
+      let inicio = new Date(ahora);
+      inicio.setHours(0, 0, 0, 0);
+      let fin = new Date(ahora);
+      fin.setHours(23, 59, 59, 999);
+
+      if (periodo === 'semana') {
+        const diaSemana = ahora.getDay();
+        const diffDias = diaSemana === 0 ? 6 : diaSemana - 1; // Lunes
+        inicio.setDate(ahora.getDate() - diffDias);
+      } else if (periodo === 'mes') {
+        inicio.setDate(1);
+      } else if (fechaDesde || fechaHasta) {
+        if (fechaDesde) {
+          inicio = new Date(fechaDesde);
+          inicio.setHours(0, 0, 0, 0);
+        }
+        if (fechaHasta) {
+          fin = new Date(fechaHasta);
+          fin.setHours(23, 59, 59, 999);
+        }
+      }
+
+      const userWhere = targetUserId ? { usuarioId: targetUserId } : {};
+      const comWhere = targetUserId ? { comercialId: targetUserId } : {};
+
+      // 1. Jornadas
+      const jornadas = await prisma.jornadaLaboral.findMany({
+        where: {
+          ...userWhere,
+          horaInicio: { gte: inicio, lte: fin }
+        },
+        select: { id: true, estado: true, tiempoTotalMin: true, distanciaKm: true, totalVisitas: true }
+      });
+
+      const totalJornadas = jornadas.length;
+      const minutosTotales = jornadas.reduce((acc, j) => acc + (j.tiempoTotalMin || 0), 0);
+      const horasTotales = Number((minutosTotales / 60).toFixed(1));
+      const kmTotales = Number(jornadas.reduce((acc, j) => acc + (j.distanciaKm || 0), 0).toFixed(1));
+
+      // 2. Visitas
+      const visitas = await prisma.visitaCampo.findMany({
+        where: {
+          ...userWhere,
+          fechaProgramada: { gte: inicio, lte: fin }
+        },
+        select: { id: true, estado: true, resultadoVisita: true, duracionMin: true }
+      });
+      const totalVisitas = visitas.length;
+      const visitasEfectivas = visitas.filter(v => v.estado === 'Realizada' || v.resultadoVisita === 'Venta Cerrada' || v.resultadoVisita === 'Cotización Solicitada').length;
+      const efectividadPct = totalVisitas > 0 ? Math.round((visitasEfectivas / totalVisitas) * 100) : 0;
+
+      // 3. Cotizaciones
+      const cotizaciones = await prisma.cotizacionExternaCampo.findMany({
+        where: {
+          ...comWhere,
+          fecha: { gte: inicio, lte: fin }
+        },
+        select: { id: true, total: true, estado: true }
+      });
+      const totalCotizaciones = cotizaciones.length;
+      const montoCotizado = cotizaciones.reduce((acc, c) => acc + (c.total || 0), 0);
+
+      // 4. Ventas
+      const ventas = await prisma.ventaExternaCampo.findMany({
+        where: {
+          ...comWhere,
+          fecha: { gte: inicio, lte: fin }
+        },
+        select: { id: true, valorVendido: true, total: true }
+      });
+      const totalVentas = ventas.length;
+      const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido || v.total) || 0), 0);
+
+      // 5. Tareas/Actividades
+      const actividades = await prisma.actividadCampo.findMany({
+        where: {
+          ...userWhere,
+          fechaProgramada: { gte: inicio, lte: fin }
+        },
+        select: { id: true, estado: true }
+      });
+      const totalTareas = actividades.length;
+      const tareasCumplidas = actividades.filter(a => a.estado === 'Completada').length;
+
+      res.json({
+        periodo,
+        fechaInicio: inicio.toISOString(),
+        fechaFin: fin.toISOString(),
+        usuarioId: targetUserId || 'TODOS',
+        kpis: {
+          totalJornadas,
+          horasTotales,
+          kmTotales,
+          totalVisitas,
+          visitasEfectivas,
+          efectividadPct,
+          totalCotizaciones,
+          montoCotizado,
+          totalVentas,
+          montoVendido,
+          totalTareas,
+          tareasCumplidas
+        }
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -6,11 +6,39 @@ class JornadaService {
    * Apertura un nuevo turno de trabajo de campo
    */
   async iniciarJornada(usuarioId, data) {
-    // 1. Verificar si ya tiene una jornada activa
+    const ahora = new Date();
+    const startOfDay = new Date(ahora);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    // Cerrar automáticamente jornadas huérfanas de días anteriores de este usuario
+    try {
+      const jornadasViejas = await prisma.jornadaLaboral.findMany({
+        where: {
+          usuarioId,
+          horaInicio: { lt: startOfDay },
+          estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
+        }
+      });
+      for (const jv of jornadasViejas) {
+        await prisma.jornadaLaboral.update({
+          where: { id: jv.id },
+          data: {
+            estado: 'Cierre Automatico',
+            horaFin: new Date(new Date(jv.horaInicio).getTime() + 8 * 3600 * 1000),
+            observaciones: 'Cierre automático por cambio de fecha calendario'
+          }
+        });
+      }
+    } catch (cleanErr) {
+      console.warn('[Jornada Clean Error]', cleanErr.message);
+    }
+
+    // 1. Verificar si ya tiene una jornada activa HOY
     const jornadaPrevia = await prisma.jornadaLaboral.findFirst({
       where: {
         usuarioId,
-        estado: { in: ['Iniciada', 'En Pausa'] }
+        horaInicio: { gte: startOfDay },
+        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
       },
       orderBy: { horaInicio: 'desc' }
     });
@@ -20,7 +48,7 @@ class JornadaService {
         success: true,
         jornada: jornadaPrevia,
         yaActiva: true,
-        message: 'Turno laboral activo recuperado con éxito'
+        message: 'Turno laboral activo del día recuperado con éxito'
       };
     }
 
@@ -34,7 +62,6 @@ class JornadaService {
       dispositivo = 'Web / Móvil'
     } = data;
 
-    const ahora = new Date();
     const minDesdeMedianoche = ahora.getHours() * 60 + ahora.getMinutes();
     const retrasoMin = minDesdeMedianoche > 480 ? minDesdeMedianoche - 480 : 0; // 08:00 AM
 
@@ -365,22 +392,68 @@ class JornadaService {
    * Obtiene la jornada activa del usuario en sesión
    */
   async getJornadaActiva(usuarioId) {
+    const ahora = new Date();
+    const startOfDay = new Date(ahora);
+    startOfDay.setHours(0, 0, 0, 0);
+
     const jornada = await prisma.jornadaLaboral.findFirst({
       where: {
         usuarioId,
-        estado: { in: ['Iniciada', 'En Pausa'] }
+        horaInicio: { gte: startOfDay },
+        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
       },
       include: {
         pausas: { where: { horaFin: null } },
         visitas: {
           orderBy: { fechaProgramada: 'asc' },
-          include: { cliente: true, prospecto: true }
+          include: { cliente: true, prospecto: true, clienteExterno: true }
         }
       },
       orderBy: { horaInicio: 'desc' }
     });
 
     return jornada;
+  }
+
+  /**
+   * Cierre administrativo de turno ejecutado por el Delegado de Gerencia
+   */
+  async cerrarJornadaAdministrativa(jornadaId, adminUserId, motivo = 'Cierre administrativo por Delegado de Gerencia') {
+    const jornada = await prisma.jornadaLaboral.findUnique({
+      where: { id: jornadaId },
+      include: { visitas: true }
+    });
+    if (!jornada) throw new Error('Jornada no encontrada');
+
+    // Cerrar visitas en curso que hayan quedado abiertas
+    for (const v of (jornada.visitas || [])) {
+      if (v.estado === 'En Curso' || (v.checkInHora && !v.checkOutHora)) {
+        await prisma.visitaCampo.update({
+          where: { id: v.id },
+          data: {
+            estado: 'No Efectiva',
+            checkOutHora: new Date(),
+            motivoNoEfectiva: 'Cierre administrativo forzoso de jornada',
+            resultadoVisita: 'Cerrada administrativamente'
+          }
+        });
+      }
+    }
+
+    const horaFin = new Date();
+    const tiempoTotalMin = Math.max(1, Math.round((horaFin - new Date(jornada.horaInicio)) / 60000));
+
+    const jornadaCerrada = await prisma.jornadaLaboral.update({
+      where: { id: jornadaId },
+      data: {
+        estado: 'Finalizada',
+        horaFin,
+        tiempoTotalMin,
+        observaciones: `Cierre administrativo por Gerencia/Delegado: ${motivo}`
+      }
+    });
+
+    return jornadaCerrada;
   }
 
   /**
