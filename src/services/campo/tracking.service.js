@@ -48,6 +48,7 @@ class TrackingService {
     await prisma.user.update({
       where: { id: usuarioId },
       data: {
+        isOnline: true,
         lat: parseFloat(lat),
         lng: parseFloat(lng),
         lastLocationUpdate: nowTimestamp
@@ -239,6 +240,10 @@ class TrackingService {
               where: { estado: 'En Curso' },
               take: 1,
               include: { cliente: true, prospecto: true, clienteExterno: true }
+            },
+            ubicaciones: {
+              orderBy: { timestamp: 'desc' },
+              take: 1
             }
           }
         }
@@ -249,23 +254,30 @@ class TrackingService {
     return users.map(u => {
       const jornadaActiva = u.jornadas[0] || null;
       const visitaEnCurso = jornadaActiva?.visitas[0] || null;
+      const ultimoPing = jornadaActiva?.ubicaciones?.[0] || null;
 
-      // Inactividad máxima permitida: 15 minutos
-      const diffMs = ahora - (u.lastLocationUpdate || 0);
-      const pingReciente = Boolean(u.lastLocationUpdate && diffMs < 15 * 60 * 1000);
+      // Inactividad máxima permitida para considerar ping en vivo: 30 minutos
+      const updateTime = u.lastLocationUpdate || (ultimoPing?.timestamp ? new Date(ultimoPing.timestamp).getTime() : null);
+      const diffMs = updateTime ? (ahora - updateTime) : Infinity;
+      const pingReciente = Boolean(updateTime && diffMs < 30 * 60 * 1000);
 
-      // Usuario en Línea REAL: solo con sesión (isOnline), jornada activa y ping reciente
-      const conectadoReal = Boolean(u.isOnline && jornadaActiva && pingReciente);
+      // Si tiene jornada activa o sesión, está operativo
+      const sesionOnline = Boolean(u.isOnline || jornadaActiva);
 
       let estadoOperativo = 'Inactivo';
+      let estado = 'Fuera de Turno';
       if (!jornadaActiva) {
         estadoOperativo = 'Inactivo';
+        estado = u.isOnline ? 'Disponible' : 'Fuera de Línea';
       } else if (visitaEnCurso) {
-        estadoOperativo = conectadoReal ? 'En Visita' : 'En Visita (Sin Señal)';
+        estadoOperativo = 'en_visita';
+        estado = pingReciente ? 'En Visita' : 'En Visita (Sin Señal)';
       } else if (jornadaActiva.estado === 'En Pausa') {
-        estadoOperativo = 'En Pausa';
+        estadoOperativo = 'en_pausa';
+        estado = 'En Pausa';
       } else {
-        estadoOperativo = conectadoReal ? 'En Ruta' : 'Fuera de Línea';
+        estadoOperativo = 'en_jornada';
+        estado = 'En Ruta';
       }
 
       return {
@@ -275,13 +287,16 @@ class TrackingService {
         cargo: u.cargo,
         foto: u.foto,
         roleId: u.roleId,
-        isOnline: conectadoReal,
-        lat: u.lat,
-        lng: u.lng,
-        lastLocationUpdate: u.lastLocationUpdate,
-        enVivo: conectadoReal,
+        isOnline: sesionOnline,
+        lat: ultimoPing?.lat ?? u.lat,
+        lng: ultimoPing?.lng ?? u.lng,
+        lastLocationUpdate: updateTime,
+        enVivo: pingReciente && Boolean(jornadaActiva),
         estadoOperativo,
+        estado,
         jornadaId: jornadaActiva?.id || null,
+        bateria: ultimoPing?.bateria ?? jornadaActiva?.bateriaInicio ?? 90,
+        velocidad: ultimoPing?.velocidad ? Math.round(Number(ultimoPing.velocidad)) : 0,
         clienteActual: visitaEnCurso?.clienteExterno?.nombre || visitaEnCurso?.cliente?.nom || visitaEnCurso?.prospecto?.nombreComercial || null
       };
     });

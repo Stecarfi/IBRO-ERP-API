@@ -2044,9 +2044,13 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
     if (targetUser) whereConditions.push({ user: { equals: String(targetUser), mode: 'insensitive' } });
 
     const now = Date.now();
+    const bateriaNum = req.body.bateria !== undefined && req.body.bateria !== null ? parseInt(req.body.bateria) : null;
+    const velocidadNum = req.body.velocidad !== undefined && req.body.velocidad !== null ? parseFloat(req.body.velocidad) : 0;
+
     await prisma.user.updateMany({
       where: { OR: whereConditions },
       data: {
+        isOnline: true,
         lat: parsedLat,
         lng: parsedLng,
         lastLocationUpdate: now
@@ -2059,7 +2063,20 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
         id: targetId,
         lat: parsedLat,
         lng: parsedLng,
-        lastLocationUpdate: now
+        lastLocationUpdate: now,
+        isOnline: true,
+        bateria: bateriaNum,
+        velocidad: velocidadNum
+      });
+      io.emit('CAMPO_TELEMETRIA_UPDATE', {
+        usuarioId: targetId,
+        user: targetUser,
+        lat: parsedLat,
+        lng: parsedLng,
+        lastLocationUpdate: now,
+        bateria: bateriaNum,
+        velocidad: velocidadNum,
+        enVivo: true
       });
     }
 
@@ -4175,11 +4192,20 @@ io.on('connection', (socket) => {
         const isStillOnline = Array.from(onlineUsers.values()).includes(username);
         if (!isStillOnline) {
             try {
-                await prisma.user.updateMany({
-                    where: { user: username },
-                    data: { isOnline: false }
+                // Si el usuario tiene una jornada laboral activa en campo, permanece operativo (no apagar isOnline)
+                const activeJornada = await prisma.jornadaLaboral.findFirst({
+                    where: {
+                        usuario: { user: { equals: username, mode: 'insensitive' } },
+                        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
+                    }
                 });
-                broadcastUpdate('DB_UPDATE');
+                if (!activeJornada) {
+                    await prisma.user.updateMany({
+                        where: { user: { equals: username, mode: 'insensitive' } },
+                        data: { isOnline: false }
+                    });
+                    broadcastUpdate('DB_UPDATE');
+                }
             } catch (err) {
                 console.error("Error setting isOnline false:", err);
             }

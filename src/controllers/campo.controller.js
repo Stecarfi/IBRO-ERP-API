@@ -753,15 +753,29 @@ class CampoController {
           meta_u: true,
           esComercialCampo: true,
           esDelegadoGerencia: true,
+          isOnline: true,
           lat: true,
           lng: true,
           lastLocationUpdate: true,
-          role: { select: { id: true, name: true } }
+          role: { select: { id: true, name: true } },
+          jornadas: {
+            where: { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } },
+            take: 1,
+            select: { id: true, estado: true, horaInicio: true, bateriaInicio: true }
+          }
         },
         orderBy: { nombre: 'asc' }
       });
 
-      res.json(comerciales);
+      const mapped = comerciales.map(c => ({
+        ...c,
+        isOnline: Boolean(c.isOnline || c.jornadas?.length > 0),
+        jornadaActivaId: c.jornadas?.[0]?.id || null,
+        estadoJornada: c.jornadas?.[0]?.estado || null,
+        bateria: c.jornadas?.[0]?.bateriaInicio ?? 90
+      }));
+
+      res.json(mapped);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1503,6 +1517,7 @@ class CampoController {
           telefono: true,
           correo: true,
           foto: true,
+          isOnline: true,
           lat: true,
           lng: true,
           lastLocationUpdate: true,
@@ -1635,20 +1650,20 @@ class CampoController {
           } else if (jActiva.estado === 'En Pausa') {
             estadoOperativo = 'en_pausa';
             estado = 'En Pausa';
-          } else if (jActiva.estado === 'En Ruta') {
-            estadoOperativo = 'en_jornada';
-            estado = 'En Ruta';
-            disponible = true;
-            disponiblesCount++;
           } else {
             estadoOperativo = 'en_jornada';
-            estado = 'Disponible';
+            estado = 'En Ruta';
             disponible = true;
             disponiblesCount++;
           }
         } else if (jUltima?.estado === 'Finalizada') {
           estadoOperativo = 'finalizada';
           estado = 'Jornada finalizada';
+        } else if (c.isOnline) {
+          estadoOperativo = 'en_espera';
+          estado = 'Disponible';
+          disponible = true;
+          disponiblesCount++;
         }
 
         // Ubicación
@@ -1668,14 +1683,20 @@ class CampoController {
           ? (vEnCurso.clienteExterno?.nombre || vEnCurso.cliente?.nom || vEnCurso.prospecto?.nombreComercial || 'Cliente en Visita')
           : 'Ninguno';
 
+        const bateriaVal = pingGps?.bateria ?? jActiva?.bateriaInicio ?? 90;
+        const velocidadVal = pingGps?.velocidad ? Math.round(Number(pingGps.velocidad)) : 0;
+
         return {
           ...c,
           nombreCompleto: `${c.nombre} ${c.apellido || ''}`.trim(),
           perfil: c.role?.name || c.cargo || 'Comercial en Campo',
           cargo: c.cargo || 'Asesor Comercial',
+          isOnline: Boolean(c.isOnline || jActiva),
           estado,
           estadoOperativo,
           disponible,
+          bateria: bateriaVal,
+          velocidad: velocidadVal,
           jornadaIniciada,
           jornadaFinalizada,
           ultimaUbicacion,
