@@ -1147,6 +1147,7 @@ model ClienteExternoCampo {
   ciudad             String    @default("Barranquilla")
   direccion          String?
   sectorEconomico    String?   // "Comercio" | "Industria" | "Salud" | "Alimentos" | "Construccion" | "Servicios" | "Otro"
+  clasificacion      String?   @default("Cliente Comercial")
   origen             String    @default("En Frio / Puerta a Puerta")
   tipoRegistro       String    @default("Cliente Potencial") // "Prospecto" | "Cliente Potencial" | "Cliente Activo" | "Cliente Inactivo"
   etapaEmbudo        String    @default("Prospecto") // "Prospecto" | "Cliente Potencial" | "Visita" | "Seguimiento" | "Cotizacion" | "Negociacion" | "Venta" | "Fidelizacion"
@@ -1167,6 +1168,7 @@ model ClienteExternoCampo {
   @@index([comercialId])
   @@index([etapaEmbudo])
   @@index([tipoRegistro])
+  @@index([clasificacion])
 }
 
 // 37. Cotizaciones Comerciales Externas de Campo
@@ -1220,6 +1222,14 @@ model VentaExternaCampo {
   @@index([clienteExternoId])
 }
 
-
-
-
+// 39. Clasificaciones Parametrizables de Clientes de Campo
+model ClasificacionClienteCampo {
+  id          String   @id @default(uuid())
+  nombre      String   @unique
+  descripcion String?
+  colorHex    String?  @default("#1E88FF")
+  activo      Boolean  @default(true)
+  esSistema   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

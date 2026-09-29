@@ -8,7 +8,7 @@ class OperacionExternaService {
   /**
    * Obtiene la cartera de clientes externos y prospectos con filtros
    */
-  async getClientesExternos({ usuarioId, etapa, tipo, search, esDelegado = false }) {
+  async getClientesExternos({ usuarioId, etapa, tipo, clasificacion, search, esDelegado = false }) {
     const where = {};
 
     if (!esDelegado && usuarioId) {
@@ -23,6 +23,10 @@ class OperacionExternaService {
 
     if (tipo && tipo !== 'TODOS') {
       where.tipoRegistro = tipo;
+    }
+
+    if (clasificacion && clasificacion !== 'TODAS') {
+      where.clasificacion = clasificacion;
     }
 
     if (search && search.trim()) {
@@ -53,6 +57,65 @@ class OperacionExternaService {
       },
       orderBy: { createdAt: 'desc' }
     });
+  }
+
+  // =================================================================
+  // 1.1 CLASIFICACIÓN CONFIGURABLE DE CLIENTES
+  // =================================================================
+  async getClasificaciones(incluirInactivos = false) {
+    const where = incluirInactivos ? {} : { activo: true };
+    return prisma.clasificacionClienteCampo.findMany({
+      where,
+      orderBy: { nombre: 'asc' }
+    });
+  }
+
+  async crearClasificacion(data) {
+    const { nombre, descripcion = '', colorHex = '#1E88FF', activo = true } = data;
+    if (!nombre || !nombre.trim()) throw new Error('El nombre de la clasificación es obligatorio');
+    return prisma.clasificacionClienteCampo.create({
+      data: {
+        nombre: nombre.trim(),
+        descripcion: descripcion ? descripcion.trim() : null,
+        colorHex: colorHex || '#1E88FF',
+        activo: !!activo,
+        esSistema: false
+      }
+    });
+  }
+
+  async actualizarClasificacion(id, data) {
+    const { nombre, descripcion, colorHex, activo } = data;
+    const updateData = {};
+    if (nombre !== undefined) updateData.nombre = nombre.trim();
+    if (descripcion !== undefined) updateData.descripcion = descripcion ? descripcion.trim() : null;
+    if (colorHex !== undefined) updateData.colorHex = colorHex;
+    if (activo !== undefined) updateData.activo = Boolean(activo);
+    return prisma.clasificacionClienteCampo.update({
+      where: { id },
+      data: updateData
+    });
+  }
+
+  async eliminarClasificacion(id) {
+    const cat = await prisma.clasificacionClienteCampo.findUnique({ where: { id } });
+    if (!cat) throw new Error('Clasificación no encontrada');
+    if (cat.esSistema) {
+      return prisma.clasificacionClienteCampo.update({
+        where: { id },
+        data: { activo: false }
+      });
+    }
+    const countClientes = await prisma.clienteExternoCampo.count({
+      where: { clasificacion: cat.nombre }
+    });
+    if (countClientes > 0) {
+      return prisma.clasificacionClienteCampo.update({
+        where: { id },
+        data: { activo: false }
+      });
+    }
+    return prisma.clasificacionClienteCampo.delete({ where: { id } });
   }
 
   /**
@@ -101,6 +164,7 @@ class OperacionExternaService {
       ciudad = 'Barranquilla',
       direccion,
       sectorEconomico = 'Comercio',
+      clasificacion = 'Cliente Comercial',
       origen = 'En Frio / Puerta a Puerta',
       tipoRegistro = 'Cliente Potencial', // "Prospecto" | "Cliente Potencial" | "Cliente Activo" | "Cliente Inactivo"
       etapaEmbudo = 'Prospecto',
@@ -127,6 +191,7 @@ class OperacionExternaService {
         ciudad,
         direccion: direccion || null,
         sectorEconomico,
+        clasificacion,
         origen,
         tipoRegistro,
         etapaEmbudo,

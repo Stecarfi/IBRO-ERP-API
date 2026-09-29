@@ -43,7 +43,7 @@ const authenticateToken = (req, res, next) => {
             return tryFallback();
         }
         req.user = user;
-        if (user && user.id && (user.esDelegadoGerencia === undefined || user.esComercialCampo === undefined)) {
+        if (user && user.id) {
             try {
                 const dbU = await prisma.user.findUnique({
                     where: { id: user.id },

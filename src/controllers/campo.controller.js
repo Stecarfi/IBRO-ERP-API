@@ -31,14 +31,13 @@ class CampoController {
     if (user.esDelegadoGerencia === true || user.esDelegadoGerencia === 'true') return true;
     // Administrador principal raíz
     if (String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin') return true;
-    const cargo = String(user.cargo || '').toLowerCase();
-    const roleName = String(user.role?.name || user.roleName || user.role || '').toLowerCase();
-    const roleId = String(user.roleId || '');
-    if (roleId === '67' || cargo.includes('gerent') || cargo.includes('director') || cargo.includes('directora') || cargo.includes('delegad') ||
-        roleName.includes('admin') || roleName.includes('gerent') || roleName.includes('director') || roleName.includes('delegad')) {
-      return true;
-    }
     return false;
+  }
+
+  // Helper de permisos de Comercial en Campo (estrictamente por atributo del usuario)
+  esComercial(user) {
+    if (!user) return false;
+    return user.esComercialCampo === true || user.esComercialCampo === 'true';
   }
 
   // Helper de auditoría inmutable
@@ -94,6 +93,28 @@ class CampoController {
         return res.status(400).json(result);
       }
 
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+          isOnline: true,
+          lat: parseFloat(parsed.lat),
+          lng: parseFloat(parsed.lng),
+          lastLocationUpdate: Date.now()
+        }
+      });
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_JORNADA_UPDATE', {
+          accion: 'INICIO',
+          usuarioId: req.user.id,
+          usuarioNombre: `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user,
+          jornada: result.jornada,
+          timestamp: Date.now()
+        });
+        io.emit('db_update', { type: 'CAMPO_JORNADA_UPDATE', timestamp: Date.now() });
+      }
+
       await this.registrarAuditoria(req.user.id, 'CAMPO_JORNADA_INICIO', {
         jornadaId: result.jornada.id,
         lat: parsed.lat,
@@ -112,6 +133,16 @@ class CampoController {
       const result = await jornadaService.iniciarPausa(req.user.id, parsed);
       if (!result.success) return res.status(400).json(result);
 
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_JORNADA_UPDATE', {
+          accion: 'PAUSA',
+          usuarioId: req.user.id,
+          tipo: parsed.tipo,
+          timestamp: Date.now()
+        });
+      }
+
       await this.registrarAuditoria(req.user.id, 'CAMPO_JORNADA_PAUSA', parsed);
       res.json(result);
     } catch (err) {
@@ -125,6 +156,15 @@ class CampoController {
       const result = await jornadaService.reanudarPausa(req.user.id, parsed);
       if (!result.success) return res.status(400).json(result);
 
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_JORNADA_UPDATE', {
+          accion: 'REANUDAR',
+          usuarioId: req.user.id,
+          timestamp: Date.now()
+        });
+      }
+
       await this.registrarAuditoria(req.user.id, 'CAMPO_JORNADA_REANUDAR', parsed);
       res.json(result);
     } catch (err) {
@@ -137,6 +177,26 @@ class CampoController {
       const parsed = finalizarJornadaSchema.parse(req.body || {});
       const result = await jornadaService.finalizarJornada(req.user.id, parsed);
       if (!result.success) return res.status(400).json(result);
+
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+          isOnline: false,
+          lastLocationUpdate: Date.now()
+        }
+      });
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_JORNADA_UPDATE', {
+          accion: 'FIN',
+          usuarioId: req.user.id,
+          usuarioNombre: `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user,
+          jornada: result.jornada,
+          timestamp: Date.now()
+        });
+        io.emit('db_update', { type: 'CAMPO_JORNADA_UPDATE', timestamp: Date.now() });
+      }
 
       await this.registrarAuditoria(req.user.id, 'CAMPO_JORNADA_FIN', {
         jornadaId: parsed.jornadaId,
@@ -1705,15 +1765,65 @@ class CampoController {
   // --- OPERACIÓN COMERCIAL EXTERNA INDEPENDIENTE ---
   // =================================================================
 
+  // --- CLASIFICACIONES CONFIGURABLES DE CLIENTES ---
+  async getClasificaciones(req, res) {
+    try {
+      const data = await operacionExternaService.getClasificaciones(req.query.incluirInactivos === 'true');
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async crearClasificacion(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Operación restringida al Administrador o Delegado de Gerencia.' });
+      }
+      const data = await operacionExternaService.crearClasificacion(req.body);
+      await this.registrarAuditoria(req.user.id, 'CREAR_CLASIFICACION_CLIENTE', { id: data.id, nombre: data.nombre }, null, req);
+      res.status(201).json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async actualizarClasificacion(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Operación restringida al Administrador o Delegado de Gerencia.' });
+      }
+      const data = await operacionExternaService.actualizarClasificacion(req.params.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_CLASIFICACION_CLIENTE', { id: data.id, nombre: data.nombre }, null, req);
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarClasificacion(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Operación restringida al Administrador o Delegado de Gerencia.' });
+      }
+      const data = await operacionExternaService.eliminarClasificacion(req.params.id);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_CLASIFICACION_CLIENTE', { id: req.params.id }, null, req);
+      res.json({ success: true, data });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
   async getClientesExternos(req, res) {
     try {
-      const { etapa, tipo, search, usuarioId } = req.query;
+      const { etapa, tipo, clasificacion, search, usuarioId } = req.query;
       const esDel = this.esDelegado(req.user);
       const targetUserId = esDel ? usuarioId : req.user.id;
       const data = await operacionExternaService.getClientesExternos({
         usuarioId: targetUserId,
         etapa,
         tipo,
+        clasificacion,
         search,
         esDelegado: esDel
       });
@@ -1735,6 +1845,19 @@ class CampoController {
   async crearClienteExterno(req, res) {
     try {
       const data = await operacionExternaService.crearClienteExterno(req.user.id, req.body);
+      
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_CLIENTE_UPDATE', {
+          accion: 'CREAR',
+          cliente: data,
+          usuarioId: req.user.id,
+          usuarioNombre: `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user,
+          timestamp: Date.now()
+        });
+        io.emit('db_update', { type: 'CAMPO_CLIENTE_UPDATE', timestamp: Date.now() });
+      }
+
       await this.registrarAuditoria(req.user.id, 'CREAR_CLIENTE_EXTERNO', { id: data.id, nombre: data.nombre }, null, req);
       res.status(201).json(data);
     } catch (err) {
@@ -1745,6 +1868,19 @@ class CampoController {
   async actualizarClienteExterno(req, res) {
     try {
       const data = await operacionExternaService.actualizarClienteExterno(req.params.id, req.body);
+      
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_CLIENTE_UPDATE', {
+          accion: 'ACTUALIZAR',
+          cliente: data,
+          usuarioId: req.user.id,
+          usuarioNombre: `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user,
+          timestamp: Date.now()
+        });
+        io.emit('db_update', { type: 'CAMPO_CLIENTE_UPDATE', timestamp: Date.now() });
+      }
+
       await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_CLIENTE_EXTERNO', { id: data.id }, null, req);
       res.json(data);
     } catch (err) {
@@ -1757,6 +1893,18 @@ class CampoController {
       const etapa = req.body.nuevaEtapa || req.body.etapaEmbudo || req.body.etapa;
       const nota = req.body.nota || req.body.observaciones || req.body.motivo || '';
       const data = await operacionExternaService.cambiarEtapaEmbudo(req.params.id, req.user.id, etapa, nota);
+      
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_CLIENTE_UPDATE', {
+          accion: 'ETAPA',
+          cliente: data,
+          usuarioId: req.user.id,
+          nuevaEtapa: etapa,
+          timestamp: Date.now()
+        });
+      }
+
       await this.registrarAuditoria(req.user.id, 'CAMBIO_ETAPA_EMBUDO', { id: req.params.id, etapa }, null, req);
       res.json(data);
     } catch (err) {

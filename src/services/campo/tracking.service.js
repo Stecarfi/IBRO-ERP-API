@@ -226,25 +226,22 @@ class TrackingService {
         cargo: true,
         foto: true,
         roleId: true,
+        isOnline: true,
         lat: true,
         lng: true,
         lastLocationUpdate: true,
         jornadas: {
-          where: { estado: { in: ['Iniciada', 'En Pausa'] } },
+          where: { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } },
           orderBy: { horaInicio: 'desc' },
           take: 1,
           include: {
             visitas: {
               where: { estado: 'En Curso' },
               take: 1,
-              include: { cliente: true, prospecto: true }
+              include: { cliente: true, prospecto: true, clienteExterno: true }
             }
           }
         }
-      },
-      where: {
-        lat: { not: null },
-        lng: { not: null }
       }
     });
 
@@ -253,21 +250,23 @@ class TrackingService {
       const jornadaActiva = u.jornadas[0] || null;
       const visitaEnCurso = jornadaActiva?.visitas[0] || null;
 
-      // Estado operativo:
-      // - "En Visita": Tiene una visita marcada como 'En Curso'
-      // - "En Jornada": Turno iniciado
-      // - "En Pausa": Turno en pausa
-      // - "Inactivo": Sin jornada activa
-      let estadoOperativo = 'Inactivo';
-      if (visitaEnCurso) {
-        estadoOperativo = 'En Visita';
-      } else if (jornadaActiva) {
-        estadoOperativo = jornadaActiva.estado === 'En Pausa' ? 'En Pausa' : 'En Ruta';
-      }
-
-      // Conectividad (si reportó hace menos de 5 min)
+      // Inactividad máxima permitida: 15 minutos
       const diffMs = ahora - (u.lastLocationUpdate || 0);
-      const enVivo = diffMs < 5 * 60 * 1000;
+      const pingReciente = Boolean(u.lastLocationUpdate && diffMs < 15 * 60 * 1000);
+
+      // Usuario en Línea REAL: solo con sesión (isOnline), jornada activa y ping reciente
+      const conectadoReal = Boolean(u.isOnline && jornadaActiva && pingReciente);
+
+      let estadoOperativo = 'Inactivo';
+      if (!jornadaActiva) {
+        estadoOperativo = 'Inactivo';
+      } else if (visitaEnCurso) {
+        estadoOperativo = conectadoReal ? 'En Visita' : 'En Visita (Sin Señal)';
+      } else if (jornadaActiva.estado === 'En Pausa') {
+        estadoOperativo = 'En Pausa';
+      } else {
+        estadoOperativo = conectadoReal ? 'En Ruta' : 'Fuera de Línea';
+      }
 
       return {
         id: u.id,
@@ -276,13 +275,14 @@ class TrackingService {
         cargo: u.cargo,
         foto: u.foto,
         roleId: u.roleId,
+        isOnline: conectadoReal,
         lat: u.lat,
         lng: u.lng,
         lastLocationUpdate: u.lastLocationUpdate,
-        enVivo,
+        enVivo: conectadoReal,
         estadoOperativo,
         jornadaId: jornadaActiva?.id || null,
-        clienteActual: visitaEnCurso?.cliente?.nom || visitaEnCurso?.prospecto?.nombreComercial || null
+        clienteActual: visitaEnCurso?.clienteExterno?.nombre || visitaEnCurso?.cliente?.nom || visitaEnCurso?.prospecto?.nombreComercial || null
       };
     });
   }

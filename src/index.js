@@ -956,17 +956,18 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       // Update clients
       broadcastUpdate('DB_UPDATE');
 
+      const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
       res.cookie('token', token, {
         httpOnly: true,
-        secure: true,
-        sameSite: 'none',
+        secure: isHttps,
+        sameSite: isHttps ? 'none' : 'lax',
         maxAge: 15 * 60 * 1000 // 15 min
       });
 
       res.cookie('refreshToken', refreshToken, {
         httpOnly: true,
-        secure: true,
-        sameSite: 'none',
+        secure: isHttps,
+        sameSite: isHttps ? 'none' : 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000 // 7 días
       });
 
@@ -1049,7 +1050,7 @@ app.all('/api/logout', async (req, res) => {
 
 // POST /api/refresh: Rotación de sesión silenciosa
 app.post('/api/refresh', async (req, res) => {
-  const refreshToken = req.cookies?.refreshToken;
+  const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
   if (!refreshToken) return res.status(401).json({ error: 'No refresh token provided' });
 
   try {
@@ -1057,11 +1058,11 @@ app.post('/api/refresh', async (req, res) => {
     
     // Verificar si el token sigue siendo válido en la base de datos
     const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
-    if (!dbUser || dbUser.refreshToken !== refreshToken) {
+    if (!dbUser || (dbUser.refreshToken && dbUser.refreshToken !== refreshToken)) {
       return res.status(403).json({ error: 'Refresh token invalid or revoked' });
     }
 
-    // Emitir nuevo access token
+    // Emitir nuevo access token con datos frescos de roles
     const token = jwt.sign(
       { 
         id: dbUser.id, 
@@ -1075,17 +1076,19 @@ app.post('/api/refresh', async (req, res) => {
       { expiresIn: '15m' }
     );
 
+    const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
     res.cookie('token', token, {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: isHttps,
+      sameSite: isHttps ? 'none' : 'lax',
       maxAge: 15 * 60 * 1000
     });
 
-    res.json({ success: true, token });
+    res.json({ success: true, token, refreshToken });
   } catch (error) {
     console.error('Refresh token error:', error);
-    const cookieOpts = { httpOnly: true, secure: true, sameSite: 'none' };
+    const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
+    const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax' };
     res.clearCookie('token', cookieOpts);
     res.clearCookie('refreshToken', cookieOpts);
     res.status(403).json({ error: 'Refresh token expired' });
