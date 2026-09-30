@@ -166,11 +166,19 @@ function initSocket(server) {
                 try {
                     const stillOnline = Array.from(onlineUsers.values()).includes(username);
                     if (!stillOnline) {
-                        await prisma.user.updateMany({
-                            where: { user: username },
-                            data: { isOnline: false }
+                        const activeJornada = await prisma.jornadaLaboral.findFirst({
+                            where: {
+                                usuario: { user: { equals: username, mode: 'insensitive' } },
+                                estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
+                            }
                         });
-                        broadcastUpdate('DB_UPDATE');
+                        if (!activeJornada) {
+                            await prisma.user.updateMany({
+                                where: { user: username },
+                                data: { isOnline: false }
+                            });
+                            broadcastUpdate('DB_UPDATE');
+                        }
                     }
                 } catch (err) {
                     console.error("Error setting isOnline false:", err);

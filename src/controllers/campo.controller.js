@@ -742,15 +742,7 @@ class CampoController {
 
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true,
-          esDelegadoGerencia: false,
-          user: { not: 'admin' },
-          roleId: { not: '1' },
-          NOT: [
-            { cargo: { contains: 'director', mode: 'insensitive' } },
-            { cargo: { contains: 'delegad', mode: 'insensitive' } },
-            { cargo: { contains: 'gerent', mode: 'insensitive' } }
-          ]
+          esComercialCampo: true
         },
         select: {
           id: true,
@@ -787,14 +779,15 @@ class CampoController {
       const mapped = comerciales.map(c => {
         const tieneJornadaActivaHoy = Boolean(c.jornadas && c.jornadas.length > 0);
         const updateTime = c.lastLocationUpdate ? Number(c.lastLocationUpdate) : null;
-        const pingReciente = updateTime ? (Date.now() - updateTime < 5 * 60 * 1000) : false;
+        const pingReciente = updateTime ? (Date.now() - updateTime < 15 * 60 * 1000) : false;
+        const estaOnline = Boolean(c.isOnline || tieneJornadaActivaHoy || pingReciente);
         return {
           ...c,
-          isOnline: Boolean(tieneJornadaActivaHoy && pingReciente),
+          isOnline: estaOnline,
           jornadaActivaId: tieneJornadaActivaHoy ? c.jornadas[0].id : null,
           estadoJornada: tieneJornadaActivaHoy ? c.jornadas[0].estado : 'Sin Turno',
           bateria: c.jornadas?.[0]?.bateriaInicio ?? 90,
-          enVivo: Boolean(tieneJornadaActivaHoy && pingReciente)
+          enVivo: Boolean(tieneJornadaActivaHoy || pingReciente)
         };
       });
 
@@ -1526,18 +1519,10 @@ class CampoController {
       const endOfDay = new Date(ahora);
       endOfDay.setHours(23, 59, 59, 999);
 
-      // 1. Obtener todos los comerciales de campo legítimos (excluyendo supervisión/delegados)
+      // 1. Obtener todos los comerciales de campo
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true,
-          esDelegadoGerencia: false,
-          user: { not: 'admin' },
-          roleId: { not: '1' },
-          NOT: [
-            { cargo: { contains: 'director', mode: 'insensitive' } },
-            { cargo: { contains: 'delegad', mode: 'insensitive' } },
-            { cargo: { contains: 'gerent', mode: 'insensitive' } }
-          ]
+          esComercialCampo: true
         },
         select: {
           id: true,
