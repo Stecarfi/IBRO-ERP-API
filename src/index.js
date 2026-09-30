@@ -2079,6 +2079,21 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         clienteTelefono: c.clienteExterno?.telefono || '',
         clienteEmail: c.clienteExterno?.correo || '',
         contacto: c.clienteExterno?.contacto || '',
+        vendedorCargo: c.comercial?.cargo || extMeta.vendedorCargo || '',
+        vendedorEmail: c.comercial?.correo || extMeta.vendedorEmail || '',
+        vendedorMovil: c.comercial?.telefono || extMeta.vendedorMovil || '',
+        vendedorCodigoAsesor: c.comercial?.codigoAsesor || extMeta.vendedorCodigoAsesor || '',
+        firmaAsesor: c.comercial?.firma || extMeta.firmaAsesor || '',
+        comercial: c.comercial ? {
+          id: c.comercial.id,
+          user: c.comercial.user,
+          nombre: `${c.comercial.nombre || ''} ${c.comercial.apellido || ''}`.trim(),
+          cargo: c.comercial.cargo,
+          email: c.comercial.correo,
+          telefono: c.comercial.telefono,
+          codigoAsesor: c.comercial.codigoAsesor,
+          firma: c.comercial.firma
+        } : null,
         total: c.total,
         estado: c.estado,
         estadoAprobacion: c.estado === 'Aprobada' ? 'aprobado' : (c.estado === 'Rechazada' ? 'rechazado' : 'pendiente_aprobacion'),
@@ -2128,6 +2143,21 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         clienteTelefono: v.clienteExterno?.telefono || '',
         clienteEmail: v.clienteExterno?.correo || '',
         contacto: v.clienteExterno?.contacto || '',
+        vendedorCargo: v.comercial?.cargo || extMeta.vendedorCargo || '',
+        vendedorEmail: v.comercial?.correo || extMeta.vendedorEmail || '',
+        vendedorMovil: v.comercial?.telefono || extMeta.vendedorMovil || '',
+        vendedorCodigoAsesor: v.comercial?.codigoAsesor || extMeta.vendedorCodigoAsesor || '',
+        firmaAsesor: v.comercial?.firma || extMeta.firmaAsesor || '',
+        comercial: v.comercial ? {
+          id: v.comercial.id,
+          user: v.comercial.user,
+          nombre: `${v.comercial.nombre || ''} ${v.comercial.apellido || ''}`.trim(),
+          cargo: v.comercial.cargo,
+          email: v.comercial.correo,
+          telefono: v.comercial.telefono,
+          codigoAsesor: v.comercial.codigoAsesor,
+          firma: v.comercial.firma
+        } : null,
         total: v.valorVendido,
         valorVendido: v.valorVendido,
         metodoPago: v.metodoPago || 'Contado',
@@ -3993,7 +4023,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
               vendedorCargo: item.vendedorCargo || '',
               vendedorEmail: item.vendedorEmail || '',
               vendedorMovil: item.vendedorMovil || '',
-              vendedorCodigoAsesor: item.vendedorCodigoAsesor || ''
+              vendedorCodigoAsesor: item.vendedorCodigoAsesor || '',
+              firmaAsesor: item.firmaAsesor || '',
+              desc: item.desc !== undefined ? item.desc : 0,
+              ivaTipo: item.ivaTipo || 'exento',
+              priceTier: item.priceTier || 'precio_publico',
+              cuentasBancarias: item.cuentasBancarias || ''
             }
           };
 
@@ -4067,7 +4102,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
               vendedorCargo: item.vendedorCargo || '',
               vendedorEmail: item.vendedorEmail || '',
               vendedorMovil: item.vendedorMovil || '',
-              vendedorCodigoAsesor: item.vendedorCodigoAsesor || ''
+              vendedorCodigoAsesor: item.vendedorCodigoAsesor || '',
+              firmaAsesor: item.firmaAsesor || '',
+              desc: item.desc !== undefined ? item.desc : 0,
+              ivaTipo: item.ivaTipo || 'exento',
+              priceTier: item.priceTier || 'precio_publico',
+              cuentasBancarias: item.cuentasBancarias || ''
             }
           };
 

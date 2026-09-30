@@ -305,7 +305,7 @@ class OperacionExternaService {
       where,
       include: {
         clienteExterno: true,
-        comercial: { select: { id: true, nombre: true, apellido: true } }
+        comercial: { select: { id: true, user: true, nombre: true, apellido: true, cargo: true, telefono: true, correo: true, codigoAsesor: true, firma: true } }
       },
       orderBy: { fecha: 'desc' }
     });
@@ -480,7 +480,7 @@ class OperacionExternaService {
       include: {
         clienteExterno: true,
         cotizacion: true,
-        comercial: { select: { id: true, nombre: true, apellido: true } }
+        comercial: { select: { id: true, user: true, nombre: true, apellido: true, cargo: true, telefono: true, correo: true, codigoAsesor: true, firma: true } }
       },
       orderBy: { fecha: 'desc' }
     });

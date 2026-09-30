@@ -593,6 +593,21 @@ class SyncService {
         clienteCiudadDpto: c.clienteExterno?.ciudad || '',
         clienteTelefono: c.clienteExterno?.telefono || '',
         clienteEmail: c.clienteExterno?.correo || '',
+        vendedorCargo: c.comercial?.cargo || extMeta.vendedorCargo || '',
+        vendedorEmail: c.comercial?.correo || extMeta.vendedorEmail || '',
+        vendedorMovil: c.comercial?.telefono || extMeta.vendedorMovil || '',
+        vendedorCodigoAsesor: c.comercial?.codigoAsesor || extMeta.vendedorCodigoAsesor || '',
+        firmaAsesor: c.comercial?.firma || extMeta.firmaAsesor || '',
+        comercial: c.comercial ? {
+          id: c.comercial.id,
+          user: c.comercial.user,
+          nombre: `${c.comercial.nombre || ''} ${c.comercial.apellido || ''}`.trim(),
+          cargo: c.comercial.cargo,
+          email: c.comercial.correo,
+          telefono: c.comercial.telefono,
+          codigoAsesor: c.comercial.codigoAsesor,
+          firma: c.comercial.firma
+        } : null,
         contacto: c.clienteExterno?.contacto || '',
         total: c.total,
         estado: c.estado,
@@ -642,6 +657,21 @@ class SyncService {
         clienteCiudadDpto: v.clienteExterno?.ciudad || '',
         clienteTelefono: v.clienteExterno?.telefono || '',
         clienteEmail: v.clienteExterno?.correo || '',
+        vendedorCargo: v.comercial?.cargo || extMeta.vendedorCargo || '',
+        vendedorEmail: v.comercial?.correo || extMeta.vendedorEmail || '',
+        vendedorMovil: v.comercial?.telefono || extMeta.vendedorMovil || '',
+        vendedorCodigoAsesor: v.comercial?.codigoAsesor || extMeta.vendedorCodigoAsesor || '',
+        firmaAsesor: v.comercial?.firma || extMeta.firmaAsesor || '',
+        comercial: v.comercial ? {
+          id: v.comercial.id,
+          user: v.comercial.user,
+          nombre: `${v.comercial.nombre || ''} ${v.comercial.apellido || ''}`.trim(),
+          cargo: v.comercial.cargo,
+          email: v.comercial.correo,
+          telefono: v.comercial.telefono,
+          codigoAsesor: v.comercial.codigoAsesor,
+          firma: v.comercial.firma
+        } : null,
         contacto: v.clienteExterno?.contacto || '',
         total: v.valorVendido,
         valorVendido: v.valorVendido,
@@ -1485,7 +1515,12 @@ class SyncService {
             vendedorCargo: item.vendedorCargo || '',
             vendedorEmail: item.vendedorEmail || '',
             vendedorMovil: item.vendedorMovil || '',
-            vendedorCodigoAsesor: item.vendedorCodigoAsesor || ''
+            vendedorCodigoAsesor: item.vendedorCodigoAsesor || '',
+            firmaAsesor: item.firmaAsesor || '',
+            desc: item.desc !== undefined ? item.desc : 0,
+            ivaTipo: item.ivaTipo || 'exento',
+            priceTier: item.priceTier || 'precio_publico',
+            cuentasBancarias: item.cuentasBancarias || ''
           }
         };
 
@@ -1559,7 +1594,12 @@ class SyncService {
             vendedorCargo: item.vendedorCargo || '',
             vendedorEmail: item.vendedorEmail || '',
             vendedorMovil: item.vendedorMovil || '',
-            vendedorCodigoAsesor: item.vendedorCodigoAsesor || ''
+            vendedorCodigoAsesor: item.vendedorCodigoAsesor || '',
+            firmaAsesor: item.firmaAsesor || '',
+            desc: item.desc !== undefined ? item.desc : 0,
+            ivaTipo: item.ivaTipo || 'exento',
+            priceTier: item.priceTier || 'precio_publico',
+            cuentasBancarias: item.cuentasBancarias || ''
           }
         };
 
