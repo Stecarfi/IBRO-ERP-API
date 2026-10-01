@@ -379,6 +379,50 @@ class OperacionExternaService {
   }
 
   /**
+   * Actualiza una cotización externa existente
+   */
+  async actualizarCotizacionExterna(id, usuarioId, data) {
+    const existing = await prisma.cotizacionExternaCampo.findUnique({
+      where: { id }
+    });
+    if (!existing) throw new Error('Cotización no encontrada');
+
+    const updateData = {};
+    if (data.validezDias !== undefined) updateData.validezDias = parseInt(data.validezDias) || 15;
+    if (data.estado !== undefined) updateData.estado = data.estado;
+    if (data.observaciones !== undefined) updateData.observaciones = data.observaciones;
+    if (data.items !== undefined) {
+      updateData.items = data.items;
+      if (Array.isArray(data.items)) {
+        updateData.total = data.items.reduce((acc, it) => acc + (parseFloat(it.subtotal) || (parseFloat(it.cantidad || 1) * parseFloat(it.precioUnit || 0))), 0);
+      }
+    }
+    if (data.total !== undefined && updateData.total === undefined) {
+      updateData.total = parseFloat(data.total) || 0;
+    }
+
+    const historial = Array.isArray(existing.historial) ? [...existing.historial] : [];
+    historial.push({
+      fecha: new Date(),
+      evento: 'Actualización de cotización',
+      usuarioId,
+      estado: updateData.estado || existing.estado,
+      total: updateData.total !== undefined ? updateData.total : existing.total
+    });
+    updateData.historial = historial;
+    updateData.updatedAt = new Date();
+
+    return await prisma.cotizacionExternaCampo.update({
+      where: { id },
+      data: updateData,
+      include: {
+        clienteExterno: true,
+        comercial: { select: { id: true, nombre: true, apellido: true } }
+      }
+    });
+  }
+
+  /**
    * Modifica el estado de una cotización externa (Aprobar, Rechazar, Enviar, Negociar)
    */
   async cambiarEstadoCotizacion(id, usuarioId, nuevoEstado, nota = '') {

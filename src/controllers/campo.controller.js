@@ -1973,6 +1973,16 @@ class CampoController {
     }
   }
 
+  async actualizarCotizacionExterna(req, res) {
+    try {
+      const data = await operacionExternaService.actualizarCotizacionExterna(req.params.id, req.user.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_COTIZACION_EXTERNA', { id: data.id, codigo: data.codigo, total: data.total }, null, req);
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
   async cambiarEstadoCotizacion(req, res) {
     try {
       const { nuevoEstado, nota } = req.body;

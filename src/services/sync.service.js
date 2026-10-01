@@ -1548,11 +1548,25 @@ class SyncService {
           ]
         };
 
-        await tx.cotizacionExternaCampo.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data }
+        const existingCot = await tx.cotizacionExternaCampo.findFirst({
+          where: {
+            OR: [
+              { id: String(item.id) },
+              { codigo: String(codigo) }
+            ]
+          }
         });
+
+        if (existingCot) {
+          await tx.cotizacionExternaCampo.update({
+            where: { id: existingCot.id },
+            data
+          });
+        } else {
+          await tx.cotizacionExternaCampo.create({
+            data: { id: item.id, ...data }
+          });
+        }
       }
     }
 
@@ -1616,11 +1630,25 @@ class SyncService {
           items: structuredItems
         };
 
-        await tx.ventaExternaCampo.upsert({
-          where: { id: item.id },
-          update: data,
-          create: { id: item.id, ...data }
+        const existingVenta = await tx.ventaExternaCampo.findFirst({
+          where: {
+            OR: [
+              { id: String(item.id) },
+              { codigo: String(codigo) }
+            ]
+          }
         });
+
+        if (existingVenta) {
+          await tx.ventaExternaCampo.update({
+            where: { id: existingVenta.id },
+            data
+          });
+        } else {
+          await tx.ventaExternaCampo.create({
+            data: { id: item.id, ...data }
+          });
+        }
 
         // Actualizar etapa en el embudo del cliente a 'Venta' y 'Cliente Activo'
         await tx.clienteExternoCampo.update({

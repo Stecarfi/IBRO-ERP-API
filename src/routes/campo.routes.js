@@ -108,6 +108,7 @@ router.put('/externo/clientes/:id/etapa', (req, res) => campoController.cambiarE
 
 router.get('/externo/cotizaciones', (req, res) => campoController.getCotizacionesExternas(req, res));
 router.post('/externo/cotizaciones', (req, res) => campoController.crearCotizacionExterna(req, res));
+router.put('/externo/cotizaciones/:id', (req, res) => campoController.actualizarCotizacionExterna(req, res));
 router.put('/externo/cotizaciones/:id/estado', (req, res) => campoController.cambiarEstadoCotizacion(req, res));
 router.post('/externo/cotizaciones/:id/seguimiento', (req, res) => campoController.agregarSeguimientoCotizacion(req, res));
 

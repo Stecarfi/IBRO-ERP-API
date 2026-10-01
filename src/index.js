@@ -4056,11 +4056,25 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             ]
           };
 
-          await tx.cotizacionExternaCampo.upsert({
-            where: { id: item.id },
-            update: data,
-            create: { id: item.id, ...data }
+          const existingCot = await tx.cotizacionExternaCampo.findFirst({
+            where: {
+              OR: [
+                { id: String(item.id) },
+                { codigo: String(codigo) }
+              ]
+            }
           });
+
+          if (existingCot) {
+            await tx.cotizacionExternaCampo.update({
+              where: { id: existingCot.id },
+              data
+            });
+          } else {
+            await tx.cotizacionExternaCampo.create({
+              data: { id: item.id, ...data }
+            });
+          }
         }
       }
 
@@ -4124,11 +4138,25 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             items: structuredItems
           };
 
-          await tx.ventaExternaCampo.upsert({
-            where: { id: item.id },
-            update: data,
-            create: { id: item.id, ...data }
+          const existingVenta = await tx.ventaExternaCampo.findFirst({
+            where: {
+              OR: [
+                { id: String(item.id) },
+                { codigo: String(codigo) }
+              ]
+            }
           });
+
+          if (existingVenta) {
+            await tx.ventaExternaCampo.update({
+              where: { id: existingVenta.id },
+              data
+            });
+          } else {
+            await tx.ventaExternaCampo.create({
+              data: { id: item.id, ...data }
+            });
+          }
 
           await tx.clienteExternoCampo.update({
             where: { id: client.id },
