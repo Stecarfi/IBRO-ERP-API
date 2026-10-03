@@ -978,14 +978,22 @@ app.post('/api/push/unsubscribe', (req, res) => {
 
 app.post('/api/push/test', async (req, res) => {
   const { username, title, body } = req.body;
-  const count = await pushNotificationService.sendNotificationToUser(username, {
-    title: title || 'IBRO ERP - Notificación Push',
+  const payload = {
+    title: title || 'G-IBRO ERP - Notificación Push',
     body: body || 'Prueba de mensajería en segundo plano activa.',
-    icon: '/LOGO_IBRO_TRANSPARENTE.png',
+    icon: '/icons/icon-192.png',
     badge: '/favicon.svg',
-    vibrate: [200, 100, 200],
+    vibrate: [150, 75, 150, 75, 250],
+    tag: `test-push-${Date.now()}`,
     data: { url: '/?mod=chat' }
-  });
+  };
+  let count = 0;
+  if (username) {
+    count = await pushNotificationService.sendNotificationToUser(username, payload);
+  }
+  if (count === 0) {
+    count = await pushNotificationService.sendNotificationToAll(payload);
+  }
   res.json({ success: true, deliveredTo: count });
 });
 
@@ -4607,6 +4615,14 @@ io.on('connection', (socket) => {
         }
     }
   });
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.warn('[Process] Unhandled Promise Rejection (handled gracefully):', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception (handled gracefully):', err?.message || err);
 });
 
 server.listen(PORT, () => {
