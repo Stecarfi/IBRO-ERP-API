@@ -989,6 +989,34 @@ app.post('/api/push/test', async (req, res) => {
   res.json({ success: true, deliveredTo: count });
 });
 
+app.post('/api/push/send-notification', async (req, res) => {
+  try {
+    const { target, userIds, title, body, url, tag } = req.body;
+    const payload = {
+      title: title || 'IBRO S.A.S.',
+      body: body || 'Nueva notificación del sistema',
+      icon: '/LOGO_IBRO_TRANSPARENTE.png',
+      badge: '/favicon.svg',
+      vibrate: [250, 100, 250, 100, 250],
+      tag: tag || ('push_' + Date.now()),
+      renotify: true,
+      data: { url: url || '/?mod=capacitaciones' }
+    };
+
+    let deliveredTo = 0;
+    if (target === 'all' || target === 'todos') {
+      deliveredTo = await pushNotificationService.sendNotificationToAll(payload);
+    } else if (Array.isArray(userIds) && userIds.length > 0) {
+      for (const u of userIds) {
+        deliveredTo += await pushNotificationService.sendNotificationToUser(u, payload);
+      }
+    }
+    res.json({ success: true, deliveredTo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/emergency-unlock/:user - Ruta temporal de emergencia para desbloquear la cuenta
 app.get('/api/emergency-unlock/:user', async (req, res) => {
   try {
