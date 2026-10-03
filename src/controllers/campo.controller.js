@@ -1391,6 +1391,7 @@ class CampoController {
         },
         include: {
           cliente: true,
+          clienteExterno: true,
           prospecto: true,
           seguimientos: true
         },
@@ -1447,7 +1448,7 @@ class CampoController {
       }
 
       visitas.forEach(v => {
-        const clienteNom = v.cliente?.nom || v.prospecto?.nombreComercial || 'Cliente';
+        const clienteNom = v.resultadoResumen || v.clienteExterno?.nombre || v.cliente?.nom || v.prospecto?.nombreComercial || 'Lugar de Visita';
         if (v.checkInHora) {
           timeline.push({
             tipo: 'VISITA_LLEGADA',
@@ -2195,6 +2196,432 @@ class CampoController {
           tareasCumplidas
         }
       });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- 16. RUTAS DIARIAS Y CONTROL DE MOVIMIENTOS (LLEGADA / SALIDA POR LUGAR) ---
+  async registrarLlegadaMovimiento(req, res) {
+    try {
+      const {
+        lugar,
+        direccion,
+        motivo,
+        clienteExternoId,
+        clienteId,
+        contacto,
+        lat,
+        lng,
+        precision,
+        notas,
+        jornadaId
+      } = req.body;
+
+      if (!lugar || !String(lugar).trim()) {
+        return res.status(400).json({ error: 'Debe indicar el nombre del lugar o destino al que llega.' });
+      }
+
+      const numLat = parseFloat(lat) || 10.9878;
+      const numLng = parseFloat(lng) || -74.7889;
+      const ahora = new Date();
+
+      // Buscar jornada activa del usuario hoy si no se proporcionó jornadaId
+      let resolvedJornadaId = jornadaId || null;
+      if (!resolvedJornadaId) {
+        const startOfDay = new Date(ahora);
+        startOfDay.setHours(0, 0, 0, 0);
+        const jornadaHoy = await prisma.jornadaLaboral.findFirst({
+          where: {
+            usuarioId: req.user.id,
+            horaInicio: { gte: startOfDay }
+          },
+          orderBy: { horaInicio: 'desc' }
+        });
+        if (jornadaHoy) resolvedJornadaId = jornadaHoy.id;
+      }
+
+      // Si el asesor ya tenía una parada "En Curso", cerrarla con la hora de llegada a este nuevo punto
+      const paradaAbierta = await prisma.visitaCampo.findFirst({
+        where: {
+          usuarioId: req.user.id,
+          estado: 'En Curso',
+          checkInHora: { not: null },
+          checkOutHora: null
+        },
+        orderBy: { checkInHora: 'desc' }
+      });
+
+      if (paradaAbierta) {
+        const duracionMin = Math.max(1, Math.round((ahora - new Date(paradaAbierta.checkInHora)) / 60000));
+        await prisma.visitaCampo.update({
+          where: { id: paradaAbierta.id },
+          data: {
+            estado: 'Realizada',
+            checkOutHora: ahora,
+            checkOutLat: numLat,
+            checkOutLng: numLng,
+            duracionMin,
+            resultadoVisita: paradaAbierta.resultadoVisita || 'Salida automática por nueva llegada',
+            observaciones: `${paradaAbierta.observaciones || ''} (Cierre por llegada a nueva parada).`.trim()
+          }
+        }).catch(() => {});
+      }
+
+      const count = await prisma.visitaCampo.count();
+      const codigo = `MOV-${Date.now().toString().slice(-6)}-${String(count + 1).slice(-3)}`;
+
+      const nuevoMovimiento = await prisma.visitaCampo.create({
+        data: {
+          codigo,
+          usuarioId: req.user.id,
+          jornadaId: resolvedJornadaId,
+          clienteId: clienteId || null,
+          clienteExternoId: clienteExternoId || null,
+          tipoVisita: motivo || 'Parada en Ruta',
+          estado: 'En Curso',
+          fechaProgramada: ahora,
+          checkInHora: ahora,
+          checkInLat: numLat,
+          checkInLng: numLng,
+          checkInPrecision: precision ? parseFloat(precision) : 10,
+          resultadoResumen: String(lugar).trim(),
+          actividadesRealizadas: null,
+          observaciones: (notas || `Llegada a ${String(lugar).trim()}${direccion ? ` (${String(direccion).trim()})` : ''}`).trim(),
+          contactoAtendio: contacto ? String(contacto).trim() : null,
+          evidencias: []
+        },
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true } },
+          cliente: true,
+          clienteExterno: true
+        }
+      });
+
+      // Actualizar posición en vivo del usuario
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+          lat: numLat,
+          lng: numLng,
+          lastLocationUpdate: Date.now(),
+          isOnline: true
+        }
+      }).catch(() => {});
+
+      const usuarioNombre = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user;
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_MOVIMIENTO_UPDATE', {
+          accion: 'LLEGADA',
+          movimiento: nuevoMovimiento,
+          usuarioId: req.user.id,
+          usuarioNombre,
+          lugar: String(lugar).trim(),
+          horaLlegada: ahora.toISOString(),
+          lat: numLat,
+          lng: numLng,
+          timestamp: Date.now()
+        });
+        io.emit('db_update', { type: 'CAMPO_MOVIMIENTO_UPDATE', timestamp: Date.now() });
+      }
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_MOVIMIENTO_LLEGADA', {
+        movimientoId: nuevoMovimiento.id,
+        codigo,
+        lugar: String(lugar).trim(),
+        motivo,
+        lat: numLat,
+        lng: numLng,
+        hora: ahora.toISOString()
+      }, { usuarioNombre }, req);
+
+      res.status(201).json({
+        success: true,
+        message: `Llegada registrada exitosamente en ${String(lugar).trim()}.`,
+        movimiento: nuevoMovimiento
+      });
+    } catch (err) {
+      console.error('[registrarLlegadaMovimiento Error]', err);
+      res.status(500).json({ error: err.message || 'Error registrando llegada a la parada.' });
+    }
+  }
+
+  async registrarSalidaMovimiento(req, res) {
+    try {
+      const {
+        movimientoId,
+        lat,
+        lng,
+        actividadesRealizadas,
+        observaciones,
+        resultado,
+        evidencias
+      } = req.body;
+
+      if (!movimientoId) {
+        return res.status(400).json({ error: 'Debe especificar el ID del movimiento a finalizar.' });
+      }
+
+      const movimiento = await prisma.visitaCampo.findUnique({
+        where: { id: movimientoId },
+        include: { usuario: true }
+      });
+
+      if (!movimiento) {
+        return res.status(404).json({ error: 'Movimiento no encontrado.' });
+      }
+
+      if (!this.esDelegado(req.user) && movimiento.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para modificar este registro.' });
+      }
+
+      const checkOutHora = new Date();
+      const inicio = movimiento.checkInHora ? new Date(movimiento.checkInHora) : checkOutHora;
+      const duracionMin = Math.max(1, Math.round((checkOutHora - inicio) / 60000));
+      const numLat = parseFloat(lat) || movimiento.checkInLat || 10.9878;
+      const numLng = parseFloat(lng) || movimiento.checkInLng || -74.7889;
+
+      const obsTexto = (observaciones || actividadesRealizadas || 'Salida registrada correctamente').trim();
+      const resultadoFinal = resultado || 'Completada';
+      const adjuntosArr = Array.isArray(evidencias) ? evidencias : [];
+
+      const actualizado = await prisma.visitaCampo.update({
+        where: { id: movimientoId },
+        data: {
+          estado: 'Realizada',
+          checkOutHora,
+          checkOutLat: numLat,
+          checkOutLng: numLng,
+          duracionMin,
+          actividadesRealizadas: (actividadesRealizadas || '').trim() || null,
+          observaciones: obsTexto,
+          resultadoVisita: resultadoFinal,
+          evidencias: adjuntosArr
+        },
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true } },
+          cliente: true,
+          clienteExterno: true
+        }
+      });
+
+      // Actualizar ubicación en vivo del usuario
+      await prisma.user.update({
+        where: { id: movimiento.usuarioId },
+        data: {
+          lat: numLat,
+          lng: numLng,
+          lastLocationUpdate: Date.now()
+        }
+      }).catch(() => {});
+
+      const usuarioNombre = `${actualizado.usuario?.nombre || ''} ${actualizado.usuario?.apellido || ''}`.trim() || actualizado.usuario?.user || 'Asesor';
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_MOVIMIENTO_UPDATE', {
+          accion: 'SALIDA',
+          movimiento: actualizado,
+          usuarioId: movimiento.usuarioId,
+          usuarioNombre,
+          lugar: actualizado.resultadoResumen,
+          horaSalida: checkOutHora.toISOString(),
+          duracionMin,
+          timestamp: Date.now()
+        });
+        io.emit('db_update', { type: 'CAMPO_MOVIMIENTO_UPDATE', timestamp: Date.now() });
+      }
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_MOVIMIENTO_SALIDA', {
+        movimientoId,
+        codigo: actualizado.codigo,
+        lugar: actualizado.resultadoResumen,
+        duracionMin,
+        resultado: resultadoFinal,
+        horaSalida: checkOutHora.toISOString()
+      }, { usuarioNombre }, req);
+
+      res.json({
+        success: true,
+        message: `Salida registrada exitosamente. Permanencia: ${duracionMin} minutos.`,
+        movimiento: actualizado
+      });
+    } catch (err) {
+      console.error('[registrarSalidaMovimiento Error]', err);
+      res.status(500).json({ error: err.message || 'Error registrando salida del lugar.' });
+    }
+  }
+
+  async getMovimientoActivo(req, res) {
+    try {
+      const movimientoActivo = await prisma.visitaCampo.findFirst({
+        where: {
+          usuarioId: req.user.id,
+          estado: 'En Curso',
+          checkInHora: { not: null },
+          checkOutHora: null
+        },
+        include: {
+          cliente: true,
+          clienteExterno: true
+        },
+        orderBy: { checkInHora: 'desc' }
+      });
+
+      if (!movimientoActivo) {
+        return res.json({ success: true, movimientoActivo: null });
+      }
+
+      const ahora = new Date();
+      const inicio = new Date(movimientoActivo.checkInHora);
+      const minutosTranscurridos = Math.max(1, Math.round((ahora - inicio) / 60000));
+
+      res.json({
+        success: true,
+        movimientoActivo: {
+          ...movimientoActivo,
+          minutosTranscurridos
+        }
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async getMovimientosDia(req, res) {
+    try {
+      const { fecha, usuarioId } = req.query;
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
+
+      const fechaStr = fecha || new Date().toISOString().split('T')[0];
+      const startOfDay = new Date(`${fechaStr}T00:00:00.000Z`);
+      const endOfDay = new Date(`${fechaStr}T23:59:59.999Z`);
+
+      const where = {
+        fechaProgramada: { gte: startOfDay, lte: endOfDay }
+      };
+
+      if (targetUserId) {
+        where.usuarioId = targetUserId;
+      }
+
+      const items = await prisma.visitaCampo.findMany({
+        where,
+        include: {
+          usuario: {
+            select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true, telefono: true }
+          },
+          cliente: true,
+          clienteExterno: true,
+          prospecto: true
+        },
+        orderBy: { checkInHora: 'asc' }
+      });
+
+      // Numerar paradas por usuario cronológicamente
+      const paradasPorUsuario = {};
+      const ahora = new Date();
+
+      const movimientos = items.map(item => {
+        const uId = item.usuarioId;
+        if (!paradasPorUsuario[uId]) paradasPorUsuario[uId] = 0;
+        paradasPorUsuario[uId] += 1;
+
+        let minutosEnLugar = item.duracionMin || 0;
+        if (item.checkInHora && !item.checkOutHora) {
+          minutosEnLugar = Math.max(1, Math.round((ahora - new Date(item.checkInHora)) / 60000));
+        }
+
+        const lugarNombre = item.resultadoResumen || item.clienteExterno?.nombre || item.cliente?.nom || item.prospecto?.nombreComercial || 'Punto de Ruta';
+        const direccionLugar = item.clienteExterno?.direccion || item.cliente?.dir || item.prospecto?.direccion || '';
+
+        return {
+          id: item.id,
+          codigo: item.codigo,
+          paradaNumero: paradasPorUsuario[uId],
+          usuarioId: item.usuarioId,
+          usuarioNombre: `${item.usuario?.nombre || ''} ${item.usuario?.apellido || ''}`.trim() || item.usuario?.user || 'Asesor',
+          usuarioCargo: item.usuario?.cargo || 'Asesor Comercial',
+          usuarioFoto: item.usuario?.foto || null,
+          usuarioTelefono: item.usuario?.telefono || null,
+          lugar: lugarNombre,
+          direccion: direccionLugar,
+          motivo: item.tipoVisita || 'Parada Comercial',
+          contacto: item.contactoAtendio || item.clienteExterno?.contacto || '',
+          checkInHora: item.checkInHora,
+          checkInLat: item.checkInLat,
+          checkInLng: item.checkInLng,
+          checkOutHora: item.checkOutHora,
+          checkOutLat: item.checkOutLat,
+          checkOutLng: item.checkOutLng,
+          duracionMin: minutosEnLugar,
+          estado: item.checkOutHora ? 'Realizada' : (item.checkInHora ? 'En el Lugar' : item.estado),
+          actividadesRealizadas: item.actividadesRealizadas || '',
+          observaciones: item.observaciones || '',
+          resultado: item.resultadoVisita || (item.checkOutHora ? 'Completada' : 'En Curso'),
+          evidencias: Array.isArray(item.evidencias) ? item.evidencias : [],
+          clienteExternoId: item.clienteExternoId,
+          clienteId: item.clienteId,
+          jornadaId: item.jornadaId,
+          createdAt: item.createdAt
+        };
+      });
+
+      // Métricas de resumen
+      const totalMovimientos = movimientos.length;
+      const completados = movimientos.filter(m => m.estado === 'Realizada').length;
+      const enCurso = movimientos.filter(m => m.estado === 'En el Lugar').length;
+      const tiempoTotalMin = movimientos.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
+      const tiempoPromedioMin = totalMovimientos > 0 ? Math.round(tiempoTotalMin / totalMovimientos) : 0;
+      
+      const llegadas = movimientos.filter(m => m.checkInHora).map(m => new Date(m.checkInHora));
+      const salidas = movimientos.filter(m => m.checkOutHora).map(m => new Date(m.checkOutHora));
+
+      const primeraLlegada = llegadas.length > 0 ? new Date(Math.min(...llegadas)).toISOString() : null;
+      const ultimaSalida = salidas.length > 0 ? new Date(Math.max(...salidas)).toISOString() : null;
+
+      res.json({
+        success: true,
+        fecha: fechaStr,
+        resumen: {
+          totalMovimientos,
+          completados,
+          enCurso,
+          tiempoTotalMin,
+          tiempoPromedioMin,
+          primeraLlegada,
+          ultimaSalida
+        },
+        movimientos
+      });
+    } catch (err) {
+      console.error('[getMovimientosDia Error]', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async eliminarMovimiento(req, res) {
+    try {
+      const { id } = req.params;
+      const movimiento = await prisma.visitaCampo.findUnique({ where: { id } });
+      if (!movimiento) {
+        return res.status(404).json({ error: 'Movimiento no encontrado.' });
+      }
+
+      if (!this.esDelegado(req.user) && movimiento.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para eliminar este movimiento.' });
+      }
+
+      await prisma.visitaCampo.delete({ where: { id } });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_MOVIMIENTO_ELIMINADO', {
+        id,
+        codigo: movimiento.codigo,
+        lugar: movimiento.resultadoResumen
+      });
+
+      res.json({ success: true, message: 'Parada eliminada correctamente.' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
