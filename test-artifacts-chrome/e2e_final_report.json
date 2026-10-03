@@ -1,0 +1,56 @@
+{
+  "navigation": [],
+  "modulesTested": [
+    "Pedidos",
+    "Clientes",
+    "Cotizaciones",
+    "Servicios"
+  ],
+  "capacitaciones": {
+    "cardsCount": 7,
+    "courseTitles": [],
+    "trackingButtons": []
+  },
+  "notifications": {
+    "bellFound": false,
+    "items": []
+  },
+  "consoleErrors": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+      "location": {
+        "url": "http://localhost:5000/api/login"
+      }
+    }
+  ],
+  "networkErrors": [],
+  "responsiveChecks": [
+    {
+      "viewport": "390x844",
+      "status": "OK"
+    }
+  ],
+  "moduleHealth": {
+    "capacitaciones": {
+      "success": false,
+      "healthy": true
+    },
+    "ventas": {
+      "success": false,
+      "healthy": true
+    },
+    "clientes": {
+      "success": false,
+      "healthy": true
+    },
+    "cotizaciones": {
+      "success": false,
+      "healthy": true
+    },
+    "servicios": {
+      "success": false,
+      "healthy": true
+    }
+  }
+}

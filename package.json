@@ -12,7 +12,11 @@
     "build": "prisma generate",
     "sync:mobile": "node sync-mobile.js"
   },
-  "keywords": ["erp", "ibro", "backend"],
+  "keywords": [
+    "erp",
+    "ibro",
+    "backend"
+  ],
   "author": "STEPHANIE CARRASQUILLA FIGUEROA IDENTIFICADA CON CC 1.050.952.327 DE TURBACO BOLIVAR",
   "license": "UNLICENSED",
   "type": "commonjs",
@@ -33,6 +37,7 @@
     "prisma": "^5.22.0",
     "resend": "^6.18.0",
     "socket.io": "^4.8.3",
+    "web-push": "^3.6.7",
     "ws": "^8.21.1",
     "zod": "^4.4.3"
   },

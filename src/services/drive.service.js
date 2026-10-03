@@ -412,6 +412,51 @@ class DriveService {
             return false;
         }
     }
+
+    /**
+     * Valida la disponibilidad, existencia y permisos de un archivo en Google Drive
+     * @param {string} fileId - ID del archivo en Google Drive
+     * @returns {Promise<{available: boolean, status: string, name?: string, size?: number, mimeType?: string, error?: string}>}
+     */
+    async checkFileAvailability(fileId) {
+        if (!fileId || typeof fileId !== 'string') {
+            return { available: false, status: 'INVALID_ID', error: 'ID de archivo inválido' };
+        }
+        if (!this.drive) {
+            return { available: false, status: 'SERVICE_UNAVAILABLE', error: 'Servicio de Google Drive no configurado' };
+        }
+        try {
+            const res = await this.drive.files.get({
+                fileId: fileId,
+                fields: 'id, name, mimeType, size, trashed, capabilities(canDownload, canReadRevisions)',
+                supportsAllDrives: true
+            });
+            const file = res.data;
+            if (!file) {
+                return { available: false, status: 'NOT_FOUND', error: 'El archivo no fue encontrado en Google Drive' };
+            }
+            if (file.trashed) {
+                return { available: false, status: 'TRASHED', name: file.name, error: 'El archivo fue eliminado o movido a la papelera en Google Drive' };
+            }
+            return {
+                available: true,
+                status: 'OK',
+                name: file.name,
+                size: file.size ? parseInt(file.size, 10) : null,
+                mimeType: file.mimeType,
+                canDownload: file.capabilities?.canDownload ?? true
+            };
+        } catch (err) {
+            const code = err.code || (err.response && err.response.status);
+            if (code === 404) {
+                return { available: false, status: 'NOT_FOUND', error: 'El archivo no existe o fue eliminado de Google Drive' };
+            }
+            if (code === 403) {
+                return { available: false, status: 'PERMISSION_DENIED', error: 'Permisos insuficientes para acceder al archivo en Google Drive' };
+            }
+            return { available: false, status: 'ERROR', error: err.message || 'Error consultando archivo en Google Drive' };
+        }
+    }
 }
 
 module.exports = new DriveService();

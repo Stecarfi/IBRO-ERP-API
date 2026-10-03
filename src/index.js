@@ -15,6 +15,7 @@ const { askGemini, geminiLogs } = require('./geminiService');
 const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('./emailService');
 const driveService = require('./services/drive.service');
 const videoStreamService = require('./services/video-stream.service');
+const pushNotificationService = require('./services/pushNotification.service');
 
 const path = require('path');
 const app = express();
@@ -484,6 +485,17 @@ const handleDriveStream = (req, res) => videoStreamService.handleStream(req, res
 app.get('/api/drive-stream/:fileId', handleDriveStream);
 app.head('/api/drive-stream/:fileId', handleDriveStream);
 
+// Endpoint para validar disponibilidad y permisos de archivo en Google Drive (Requisito 4)
+app.get('/api/drive-file-status/:fileId', optionalAuthenticateToken, async (req, res) => {
+    try {
+        const { fileId } = req.params;
+        const status = await driveService.checkFileAvailability(fileId);
+        return res.json(status);
+    } catch (err) {
+        return res.status(500).json({ available: false, status: 'ERROR', error: err.message });
+    }
+});
+
 // Endpoint para reconocimiento y validación automática de duración de videos de YouTube
 app.get('/api/youtube-duration', async (req, res) => {
     try {
@@ -695,9 +707,52 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
             console.warn('[AUDIT ERROR] No se pudo guardar auditoría de capacitación:', auditErr.message);
         }
 
+        // Notificación en tiempo real para el colaborador convocado (Requisito 5)
+        try {
+            const targetDbUser = await prisma.user.findFirst({
+                where: { OR: [{ id: userId }, { user: { equals: userId, mode: 'insensitive' } }] }
+            });
+            if (targetDbUser) {
+                const notifId = `notif_cap_${id}_${targetDbUser.id}`;
+                await prisma.notificacion.upsert({
+                    where: { id: notifId },
+                    update: {
+                        titulo: isNewAssignment ? `Capacitación Asignada: ${cap.tema}` : `Capacitación Reiniciada: ${cap.tema}`,
+                        mensaje: isNewAssignment
+                            ? `Se te ha asignado la capacitación "${cap.tema}". Ingresa para certificar tus conocimientos.`
+                            : `Se te ha habilitado un nuevo ciclo para la capacitación "${cap.tema}". Ya puedes realizar nuevamente tu evaluación.`,
+                        de: callerUser.user || 'Administrador',
+                        tipo: 'capacitacion',
+                        targetModule: 'capacitaciones',
+                        fecha: new Date(),
+                        leida: false
+                    },
+                    create: {
+                        id: notifId,
+                        paraId: targetDbUser.id,
+                        titulo: isNewAssignment ? `Capacitación Asignada: ${cap.tema}` : `Capacitación Reiniciada: ${cap.tema}`,
+                        mensaje: isNewAssignment
+                            ? `Se te ha asignado la capacitación "${cap.tema}". Ingresa para certificar tus conocimientos.`
+                            : `Se te ha habilitado un nuevo ciclo para la capacitación "${cap.tema}". Ya puedes realizar nuevamente tu evaluación.`,
+                        de: callerUser.user || 'Administrador',
+                        tipo: 'capacitacion',
+                        targetModule: 'capacitaciones',
+                        fecha: new Date(),
+                        leida: false
+                    }
+                });
+                if (io) {
+                    io.emit('DB_UPDATE', { module: 'notificaciones' });
+                }
+            }
+        } catch (notifErr) {
+            console.warn('[NOTIF ERROR] No se pudo crear notificación de capacitación:', notifErr.message);
+        }
+
         // Notificar en tiempo real por Socket.io si está disponible
         if (io) {
             io.emit('DB_UPDATE', { module: 'capacitaciones' });
+            io.emit('DB_UPDATE', { module: 'notificaciones' });
         }
 
         return res.json({
@@ -743,6 +798,18 @@ app.delete('/api/capacitaciones/:id', authenticateToken, async (req, res) => {
         await prisma.capacitacion.delete({ where: { id } });
 
         try {
+            await prisma.notificacion.deleteMany({
+                where: {
+                    targetModule: 'capacitaciones',
+                    OR: [
+                        { id: { startsWith: `notif_cap_${id}` } },
+                        { id: { contains: id } }
+                    ]
+                }
+            });
+        } catch (_) {}
+
+        try {
             await prisma.auditoria.create({
                 data: {
                     userId: callerDb.id,
@@ -759,6 +826,7 @@ app.delete('/api/capacitaciones/:id', authenticateToken, async (req, res) => {
 
         if (io) {
             io.emit('DB_UPDATE', { module: 'capacitaciones' });
+            io.emit('DB_UPDATE', { module: 'notificaciones' });
         }
 
         return res.json({ success: true, message: 'Capacitación eliminada exitosamente' });
@@ -884,6 +952,41 @@ app.get('*any', (req, res, next) => {
 // Endpoint de prueba de estado
 app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// ==========================================
+// RUTAS DE NOTIFICACIONES PUSH (WEB PUSH API)
+// ==========================================
+app.get('/api/push/public-key', (req, res) => {
+  res.json({ publicKey: pushNotificationService.getPublicKey() });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  const { subscription, userId, username, userAgent } = req.body;
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ error: 'Suscripción inválida o incompleta' });
+  }
+  const ok = pushNotificationService.saveSubscription(userId, username, subscription, userAgent);
+  res.json({ success: ok, message: 'Suscripción push registrada correctamente' });
+});
+
+app.post('/api/push/unsubscribe', (req, res) => {
+  const { endpoint } = req.body;
+  pushNotificationService.removeSubscription(endpoint);
+  res.json({ success: true, message: 'Suscripción push eliminada' });
+});
+
+app.post('/api/push/test', async (req, res) => {
+  const { username, title, body } = req.body;
+  const count = await pushNotificationService.sendNotificationToUser(username, {
+    title: title || 'IBRO ERP - Notificación Push',
+    body: body || 'Prueba de mensajería en segundo plano activa.',
+    icon: '/LOGO_IBRO_TRANSPARENTE.png',
+    badge: '/favicon.svg',
+    vibrate: [200, 100, 200],
+    data: { url: '/?mod=chat' }
+  });
+  res.json({ success: true, deliveredTo: count });
 });
 
 // GET /api/emergency-unlock/:user - Ruta temporal de emergencia para desbloquear la cuenta
@@ -4351,6 +4454,42 @@ io.on('connection', (socket) => {
     const uniqueRooms = Array.from(targetRooms).filter(Boolean);
     if (uniqueRooms.length > 0) {
       socket.to(uniqueRooms).emit('receive_message', messageData);
+    }
+
+    // Disparar Notificación Push a teléfonos móviles en segundo plano (PWA / App Móvil)
+    try {
+      const remitente = messageData.user || messageData.remitente || 'Compañero';
+      const textoMsg = (messageData.text || messageData.mensaje || messageData.msg || 'Nuevo mensaje recibido').substring(0, 140);
+      const pushTitle = toTarget.toLowerCase() === 'todos' 
+        ? `Mensaje general de ${remitente}`
+        : (group?.nombre ? `${remitente} en ${group.nombre}` : `Mensaje de ${remitente}`);
+
+      const pushPayload = {
+        title: pushTitle,
+        body: textoMsg,
+        icon: '/LOGO_IBRO_TRANSPARENTE.png',
+        badge: '/favicon.svg',
+        vibrate: [200, 100, 200],
+        tag: `chat-${toTarget}`,
+        renotify: true,
+        data: {
+          url: `/?mod=chat&target=${encodeURIComponent(remitente)}`,
+          type: 'chat',
+          sender: remitente,
+          to: toTarget,
+          timestamp: Date.now()
+        }
+      };
+
+      if (toTarget.toLowerCase() === 'todos') {
+        pushNotificationService.sendNotificationToAll(pushPayload, remitente);
+      } else if (group && group.integrantes) {
+        pushNotificationService.sendNotificationToGroup(group.integrantes, pushPayload, remitente);
+      } else {
+        pushNotificationService.sendNotificationToUser(toTarget, pushPayload);
+      }
+    } catch (pushErr) {
+      console.error('[send_message] Error enviando push:', pushErr.message);
     }
   });
 

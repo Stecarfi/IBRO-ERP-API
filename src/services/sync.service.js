@@ -1356,6 +1356,21 @@ class SyncService {
 
     // 21. Capacitaciones
     if (diff.capacitaciones) {
+      if (diff.capacitaciones.deleted && diff.capacitaciones.deleted.length > 0) {
+        for (const delId of diff.capacitaciones.deleted) {
+          try {
+            await tx.notificacion.deleteMany({
+              where: {
+                targetModule: 'capacitaciones',
+                OR: [
+                  { id: { startsWith: `notif_cap_${delId}` } },
+                  { id: { contains: delId } }
+                ]
+              }
+            });
+          } catch (_) {}
+        }
+      }
       await flatDelete('capacitacion', diff.capacitaciones.deleted || []);
       for (const item of diff.capacitaciones.upserted || []) {
         let mergedAsistentes = item.asistentes || null;
@@ -1396,6 +1411,9 @@ class SyncService {
           }
         }
 
+        let crId = await resolveUser(item.creadorId || item.creador);
+        if (!crId) crId = user?.id || (await getUsersCache())[0]?.id;
+
         const data = {
           tipo: item.tipo || 'Capacitación',
           tema: item.tema,
@@ -1426,6 +1444,87 @@ class SyncService {
           update: cleanCapacitacionData,
           create: { id: item.id, ...cleanCapacitacionData },
         });
+
+        // Sincronización inteligente y deduplicada de notificaciones (Requisitos 4 y 5)
+        try {
+          const capTema = item.tema || 'Capacitación';
+          const capId = item.id;
+          const allUsers = await getUsersCache();
+          const asistentesList = Array.isArray(mergedAsistentes) ? mergedAsistentes : [];
+
+          for (const u of allUsers) {
+            const miAsist = asistentesList.find(a => 
+              (a.userId && String(a.userId).toLowerCase() === String(u.user).toLowerCase()) || 
+              (a.userId && String(a.userId) === String(u.id))
+            );
+
+            const isAssigned = item.obligatoria || Boolean(miAsist);
+            if (!isAssigned) continue;
+
+            const isCompleted = miAsist && (
+              miAsist.estado === 'Aprobado' || 
+              miAsist.estado === 'Completada' || 
+              miAsist.aprobado === true
+            );
+
+            const notifKey = `notif_cap_${capId}_${u.id}`;
+
+            if (isCompleted) {
+              await tx.notificacion.updateMany({
+                where: {
+                  paraId: u.id,
+                  targetModule: 'capacitaciones',
+                  OR: [
+                    { id: notifKey },
+                    { titulo: { contains: capTema, mode: 'insensitive' } }
+                  ],
+                  leida: false
+                },
+                data: { leida: true }
+              });
+            } else {
+              const existingNotif = await tx.notificacion.findFirst({
+                where: {
+                  paraId: u.id,
+                  targetModule: 'capacitaciones',
+                  OR: [
+                    { id: notifKey },
+                    { titulo: { contains: capTema, mode: 'insensitive' } }
+                  ]
+                }
+              });
+
+              if (!existingNotif) {
+                await tx.notificacion.create({
+                  data: {
+                    id: notifKey,
+                    paraId: u.id,
+                    titulo: `Capacitación Pendiente: ${capTema}`,
+                    mensaje: `Tienes pendiente la capacitación obligatoria "${capTema}". Ingresa para completar tu formación.`,
+                    de: item.tutor || 'Academia IBRO',
+                    tipo: 'capacitacion',
+                    targetModule: 'capacitaciones',
+                    fecha: new Date(),
+                    leida: false
+                  }
+                });
+              } else if (existingNotif.leida) {
+                if (miAsist && miAsist.bloqueadoPorReprobacion === false && miAsist.estado === 'En progreso') {
+                  await tx.notificacion.update({
+                    where: { id: existingNotif.id },
+                    data: {
+                      leida: false,
+                      fecha: new Date(),
+                      mensaje: `Nuevo ciclo formativo habilitado para "${capTema}". Por favor complétala.`
+                    }
+                  });
+                }
+              }
+            }
+          }
+        } catch (notifErr) {
+          console.warn('[SYNC CAPACITACIONES] Error al sincronizar notificaciones:', notifErr.message);
+        }
       }
     }
 

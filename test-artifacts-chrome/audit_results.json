@@ -1,0 +1,79 @@
+{
+  "navigation": [
+    {
+      "step": "Dashboard",
+      "status": "OK",
+      "title": "G-IBRO | Plataforma ERP Corporativa"
+    }
+  ],
+  "modulesTested": [
+    "Clientes",
+    "Cotizaciones",
+    "Pedidos",
+    "Servicios"
+  ],
+  "capacitaciones": {
+    "cardsFound": 116,
+    "progressBadges": [],
+    "trackingButtons": [],
+    "takeCourseButtons": []
+  },
+  "notifications": {
+    "bellFound": true,
+    "badges": [
+      "1",
+      "2",
+      "2",
+      "2",
+      "26",
+      "2",
+      "2",
+      "2"
+    ]
+  },
+  "consoleErrors": [
+    {
+      "type": "error",
+      "text": "%o\n\n%s\n\n%s\n ReferenceError: useRef is not defined The above error occurred in the <Pedidos> component. React will try to recreate this component tree from scratch using the error boundary you provided, ErrorBoundary.",
+      "location": {
+        "url": "webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js",
+        "lineNumber": 70,
+        "columnNumber": 21
+      }
+    },
+    {
+      "type": "error",
+      "text": "ErrorBoundary atrapó un error crítico: ReferenceError: useRef is not defined [object Object]",
+      "location": {
+        "url": "webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js",
+        "lineNumber": 70,
+        "columnNumber": 21
+      }
+    },
+    {
+      "type": "error",
+      "text": "%o\n\n%s\n\n%s\n ReferenceError: useRef is not defined The above error occurred in the <Pedidos> component. React will try to recreate this component tree from scratch using the error boundary you provided, ErrorBoundary.",
+      "location": {
+        "url": "webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js",
+        "lineNumber": 70,
+        "columnNumber": 21
+      }
+    },
+    {
+      "type": "error",
+      "text": "ErrorBoundary atrapó un error crítico: ReferenceError: useRef is not defined [object Object]",
+      "location": {
+        "url": "webpack-internal:///(pages-dir-browser)/./node_modules/next/dist/next-devtools/userspace/pages/pages-dev-overlay-setup.js",
+        "lineNumber": 70,
+        "columnNumber": 21
+      }
+    }
+  ],
+  "networkErrors": [],
+  "responsiveChecks": [
+    {
+      "viewport": "390x844",
+      "status": "OK"
+    }
+  ]
+}
