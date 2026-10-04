@@ -124,6 +124,7 @@ router.delete('/clasificaciones/:id', (req, res) => campoController.eliminarClas
 // 16. Rutas Diarias y Registro de Movimientos (Llegada / Salida de cada lugar)
 router.post('/movimientos/llegada', (req, res) => campoController.registrarLlegadaMovimiento(req, res));
 router.post('/movimientos/salida', (req, res) => campoController.registrarSalidaMovimiento(req, res));
+router.put('/movimientos/:id', (req, res) => campoController.actualizarMovimiento(req, res));
 router.get('/movimientos/activo', (req, res) => campoController.getMovimientoActivo(req, res));
 router.get('/movimientos/dia', (req, res) => campoController.getMovimientosDia(req, res));
 router.delete('/movimientos/:id', (req, res) => campoController.eliminarMovimiento(req, res));
