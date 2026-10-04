@@ -30,12 +30,25 @@ router.post('/test', async (req, res) => {
   const count = await pushService.sendNotificationToUser(username, {
     title: title || 'IBRO ERP - Notificación Push',
     body: body || 'Prueba de mensajería en segundo plano activa.',
-    icon: '/LOGO_IBRO_TRANSPARENTE.png',
+    icon: '/icons/icon-192.png',
     badge: '/favicon.svg',
     vibrate: [200, 100, 200],
     data: { url: '/?mod=chat' }
   });
-  res.json({ success: true, deliveredTo: count });
+
+  if (count === 0) {
+    return res.status(404).json({
+      success: false,
+      deliveredTo: 0,
+      message: `No hay dispositivos móviles ni navegadores registrados para el usuario '${username}'. Debes abrir el aplicativo en tu teléfono (vía HTTPS) y presionar 'Activar en mi Celular' primero.`
+    });
+  }
+
+  res.json({ 
+    success: true, 
+    deliveredTo: count, 
+    message: `Notificación push enviada con éxito a ${count} dispositivo(s) registrado(s).` 
+  });
 });
 
 module.exports = router;

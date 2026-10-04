@@ -1001,9 +1001,17 @@ app.post('/api/push/test', async (req, res) => {
     count = await pushNotificationService.sendNotificationToUser(username, payload);
   }
   if (count === 0) {
-    count = await pushNotificationService.sendNotificationToAll(payload);
+    return res.status(404).json({
+      success: false,
+      deliveredTo: 0,
+      message: `No hay ningún dispositivo móvil ni navegador registrado para '${username || 'el usuario'}'. Debes acceder desde tu teléfono móvil (mediante HTTPS o localhost) y presionar 'Activar en mi Celular' primero.`
+    });
   }
-  res.json({ success: true, deliveredTo: count });
+  res.json({ 
+    success: true, 
+    deliveredTo: count,
+    message: `Notificación push enviada exitosamente a ${count} dispositivo(s) activo(s).`
+  });
 });
 
 app.post('/api/push/send-notification', async (req, res) => {
@@ -4464,41 +4472,42 @@ io.on('connection', (socket) => {
   socket.on('send_message', async (messageData) => {
     if (!messageData || !messageData.to) return;
     const toTarget = String(messageData.to).trim();
+    let group = null;
+
     if (toTarget.toLowerCase() === 'todos') {
       socket.broadcast.emit('receive_message', messageData);
-      return;
-    }
+    } else {
+      const targetRooms = new Set();
+      targetRooms.add(toTarget);
+      targetRooms.add(toTarget.toLowerCase());
 
-    const targetRooms = new Set();
-    targetRooms.add(toTarget);
-    targetRooms.add(toTarget.toLowerCase());
-
-    try {
-      const group = await prisma.chatGroup.findFirst({
-        where: { id: toTarget }
-      });
-      if (group && group.integrantes) {
-        const members = Array.isArray(group.integrantes) ? group.integrantes : [];
-        members.forEach(item => {
-          const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
-          if (uName && String(uName).toLowerCase() !== String(messageData.user || '').toLowerCase()) {
-            targetRooms.add(String(uName).trim());
-            targetRooms.add(String(uName).trim().toLowerCase());
-          }
+      try {
+        group = await prisma.chatGroup.findFirst({
+          where: { id: toTarget }
         });
+        if (group && group.integrantes) {
+          const members = Array.isArray(group.integrantes) ? group.integrantes : [];
+          members.forEach(item => {
+            const uName = typeof item === 'string' ? item : (item.user || item.username || item.id);
+            if (uName && String(uName).toLowerCase() !== String(messageData.user || '').toLowerCase()) {
+              targetRooms.add(String(uName).trim());
+              targetRooms.add(String(uName).trim().toLowerCase());
+            }
+          });
+        }
+      } catch (e) {
+        console.error('[send_message] Group routing error:', e.message);
       }
-    } catch (e) {
-      console.error('[send_message] Group routing error:', e.message);
-    }
 
-    if (messageData.user) {
-      targetRooms.delete(String(messageData.user).trim());
-      targetRooms.delete(String(messageData.user).trim().toLowerCase());
-    }
+      if (messageData.user) {
+        targetRooms.delete(String(messageData.user).trim());
+        targetRooms.delete(String(messageData.user).trim().toLowerCase());
+      }
 
-    const uniqueRooms = Array.from(targetRooms).filter(Boolean);
-    if (uniqueRooms.length > 0) {
-      socket.to(uniqueRooms).emit('receive_message', messageData);
+      const uniqueRooms = Array.from(targetRooms).filter(Boolean);
+      if (uniqueRooms.length > 0) {
+        socket.to(uniqueRooms).emit('receive_message', messageData);
+      }
     }
 
     // Disparar Notificación Push a teléfonos móviles en segundo plano (PWA / App Móvil)
