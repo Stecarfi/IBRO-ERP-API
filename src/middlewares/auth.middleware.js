@@ -23,12 +23,13 @@ const authenticateToken = async (req, res, next) => {
         try {
             const dbU = await prisma.user.findUnique({
                 where: { id: authenticatedUser.id },
-                select: { esDelegadoGerencia: true, esComercialCampo: true, cargo: true, role: { select: { id: true, name: true } } }
+                select: { id: true, user: true, nombre: true, apellido: true, esDelegadoGerencia: true, esComercialCampo: true, cargo: true, roleId: true, role: { select: { id: true, name: true } } }
             });
             if (dbU) {
                 req.user.esDelegadoGerencia = Boolean(dbU.esDelegadoGerencia);
                 req.user.esComercialCampo = Boolean(dbU.esComercialCampo);
                 req.user.cargo = dbU.cargo || req.user.cargo;
+                req.user.roleId = dbU.roleId || dbU.role?.id || authenticatedUser.roleId;
                 req.user.role = dbU.role;
             }
         } catch (e) {}
