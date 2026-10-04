@@ -24,13 +24,31 @@ const {
 } = require('../validators/campo.validators');
 
 class CampoController {
-  // Helper de permisos del Delegado de Gerencia (estrictamente por atributo del usuario o Master Admin)
+  // Helper de permisos del Delegado de Gerencia (estrictamente por atributo del usuario, rol directivo o Master Admin)
   esDelegado(user) {
     if (!user) return false;
-    // Atributo explícito asignado al usuario desde Administración de Usuarios
+    // 1. Atributo explícito asignado al usuario desde Administración de Usuarios
     if (user.esDelegadoGerencia === true || user.esDelegadoGerencia === 'true') return true;
-    // Administrador principal raíz
-    if (String(user.roleId) === '1' || user.user?.toLowerCase() === 'admin') return true;
+    // 2. Administradores Master y usuarios raíz
+    const roleId = String(user.roleId || user.role?.id || '');
+    const userName = String(user.user || '').toLowerCase();
+    if (roleId === '1' || userName === 'admin' || userName === 'asiadm' || userName === 'stecarfi05') return true;
+    // 3. Dirección Comercial y Gerencia
+    if (userName === 'dircomercial') return true;
+    const cargo = String(user.cargo || '').toLowerCase();
+    const roleName = String(user.role?.name || user.roleName || user.role || '').toLowerCase();
+    if (
+      cargo.includes('delegad') ||
+      cargo.includes('gerent') ||
+      cargo.includes('director') ||
+      roleName.includes('delegad') ||
+      roleName.includes('gerent') ||
+      roleName.includes('director') ||
+      roleName.includes('master') ||
+      roleName.includes('administrador')
+    ) {
+      return true;
+    }
     return false;
   }
 
