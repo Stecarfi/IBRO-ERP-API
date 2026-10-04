@@ -1,4 +1,13 @@
 require('dotenv').config();
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.warn('[Process] Unhandled Promise Rejection (handled gracefully):', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception (handled gracefully):', err?.message || err);
+});
+
 const prisma = require('./prisma');
 const nodemailer = require('nodemailer');
 const express = require('express');
@@ -4518,11 +4527,11 @@ io.on('connection', (socket) => {
       };
 
       if (toTarget.toLowerCase() === 'todos') {
-        pushNotificationService.sendNotificationToAll(pushPayload, remitente);
+        pushNotificationService.sendNotificationToAll(pushPayload, remitente).catch(e => console.error('[send_message push all]', e.message));
       } else if (group && group.integrantes) {
-        pushNotificationService.sendNotificationToGroup(group.integrantes, pushPayload, remitente);
+        pushNotificationService.sendNotificationToGroup(group.integrantes, pushPayload, remitente).catch(e => console.error('[send_message push group]', e.message));
       } else {
-        pushNotificationService.sendNotificationToUser(toTarget, pushPayload);
+        pushNotificationService.sendNotificationToUser(toTarget, pushPayload).catch(e => console.error('[send_message push user]', e.message));
       }
     } catch (pushErr) {
       console.error('[send_message] Error enviando push:', pushErr.message);
@@ -4615,14 +4624,6 @@ io.on('connection', (socket) => {
         }
     }
   });
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.warn('[Process] Unhandled Promise Rejection (handled gracefully):', reason?.message || reason);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('[Process] Uncaught Exception (handled gracefully):', err?.message || err);
 });
 
 server.listen(PORT, () => {

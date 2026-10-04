@@ -2588,6 +2588,13 @@ class CampoController {
       if (observaciones !== undefined) dataToUpdate.observaciones = String(observaciones).trim() || null;
       if (resultado !== undefined && String(resultado).trim()) dataToUpdate.resultadoVisita = String(resultado).trim();
 
+      if (direccion !== undefined && String(direccion).trim() && movimiento.clienteExternoId) {
+        await prisma.clienteExternoCampo.update({
+          where: { id: movimiento.clienteExternoId },
+          data: { direccion: String(direccion).trim() }
+        }).catch(() => {});
+      }
+
       const actualizado = await prisma.visitaCampo.update({
         where: { id },
         data: dataToUpdate,
@@ -2714,7 +2721,11 @@ class CampoController {
         }
 
         const lugarNombre = item.resultadoResumen || item.clienteExterno?.nombre || item.cliente?.nom || item.prospecto?.nombreComercial || 'Punto de Ruta';
-        const direccionLugar = item.clienteExterno?.direccion || item.cliente?.dir || item.prospecto?.direccion || '';
+        let direccionLugar = item.clienteExterno?.direccion || item.cliente?.dir || item.prospecto?.direccion || '';
+        if (!direccionLugar && item.observaciones && item.observaciones.includes('(') && item.observaciones.includes(')')) {
+          const match = item.observaciones.match(/\((.*?)\)/);
+          if (match && match[1]) direccionLugar = match[1];
+        }
 
         return {
           id: item.id,

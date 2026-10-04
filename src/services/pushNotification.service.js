@@ -47,6 +47,22 @@ class PushNotificationService {
 
   saveSubscription(userId, username, subscription, userAgent = '') {
     if (!subscription || !subscription.endpoint) return false;
+    if (!subscription.keys || !subscription.keys.p256dh || !subscription.keys.auth) {
+      console.warn('[PushService] Suscripción ignorada: faltan keys p256dh o auth');
+      return false;
+    }
+
+    // Validar longitud de la clave pública p256dh (debe ser exactamente 65 bytes)
+    try {
+      const p256Buf = Buffer.from(subscription.keys.p256dh, 'base64');
+      if (p256Buf.length !== 65) {
+        console.warn(`[PushService] Suscripción descartada: p256dh inválido (${p256Buf.length} bytes, se requieren 65 bytes)`);
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
     const subs = loadSubscriptions();
     
     // Normalizar usuario
@@ -87,14 +103,20 @@ class PushNotificationService {
 
   async sendToSubscription(subRecord, payload) {
     try {
+      if (!subRecord?.subscription?.endpoint || !subRecord?.subscription?.keys?.p256dh) {
+        if (subRecord?.subscription?.endpoint) this.removeSubscription(subRecord.subscription.endpoint);
+        return false;
+      }
       const stringifiedPayload = typeof payload === 'string' ? payload : JSON.stringify(payload);
       await webpush.sendNotification(subRecord.subscription, stringifiedPayload);
       return true;
     } catch (err) {
-      // Si la suscripción expiró o ya no es válida (HTTP 410 Gone / 404 Not Found), removerla
-      if (err.statusCode === 410 || err.statusCode === 404) {
-        console.warn(`[PushService] Suscripción caducada (${err.statusCode}). Limpiando...`);
-        this.removeSubscription(subRecord.subscription.endpoint);
+      // Si la suscripción expiró, es inválida o tiene claves malformadas, removerla inmediatamente
+      const isExpired = err.statusCode === 410 || err.statusCode === 404;
+      const isMalformed = err.message?.includes('p256dh') || err.message?.includes('bytes long') || err.message?.includes('keys');
+      if (isExpired || isMalformed) {
+        console.warn(`[PushService] Suscripción removida por caducidad/error (${err.statusCode || err.message})`);
+        this.removeSubscription(subRecord.subscription?.endpoint);
       } else {
         console.error('[PushService] Error enviando push:', err.message);
       }
