@@ -115,6 +115,8 @@ router.post('/externo/cotizaciones/:id/seguimiento', (req, res) => campoControll
 router.get('/externo/ventas', (req, res) => campoController.getVentasExternas(req, res));
 router.post('/externo/ventas', (req, res) => campoController.registrarVentaExterna(req, res));
 
+router.get('/externo/embudo', (req, res) => campoController.getMetricasEmbudo(req, res));
+
 // 15. Clasificaciones de Clientes Parametrizables
 router.get('/clasificaciones', (req, res) => campoController.getClasificaciones(req, res));
 router.post('/clasificaciones', (req, res) => campoController.crearClasificacion(req, res));

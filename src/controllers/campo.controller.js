@@ -760,7 +760,14 @@ class CampoController {
 
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true
+          OR: [
+            { esComercialCampo: true },
+            { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
+            { role: { name: { contains: 'VENTAS', mode: 'insensitive' } } },
+            { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
+            { cargo: { contains: 'VENTAS', mode: 'insensitive' } },
+            { cargo: { contains: 'ASESOR', mode: 'insensitive' } }
+          ]
         },
         select: {
           id: true,
@@ -784,10 +791,10 @@ class CampoController {
           role: { select: { id: true, name: true } },
           jornadas: {
             where: {
-              estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] },
-              horaInicio: { gte: startOfDay }
+              estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
             },
             take: 1,
+            orderBy: { horaInicio: 'desc' },
             select: { id: true, estado: true, horaInicio: true, bateriaInicio: true }
           }
         },
@@ -1533,15 +1540,22 @@ class CampoController {
       }
 
       const ahora = new Date();
-      const startOfDay = new Date(ahora);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(ahora);
-      endOfDay.setHours(23, 59, 59, 999);
+      const nowCol = new Date(Date.now() - 5 * 3600 * 1000);
+      const hoyStr = nowCol.toISOString().split('T')[0];
+      const startOfDay = new Date(`${hoyStr}T00:00:00.000Z`);
+      const endOfDay = new Date(new Date(`${hoyStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
 
       // 1. Obtener todos los comerciales de campo
       const comerciales = await prisma.user.findMany({
         where: {
-          esComercialCampo: true
+          OR: [
+            { esComercialCampo: true },
+            { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
+            { role: { name: { contains: 'VENTAS', mode: 'insensitive' } } },
+            { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
+            { cargo: { contains: 'VENTAS', mode: 'insensitive' } },
+            { cargo: { contains: 'ASESOR', mode: 'insensitive' } }
+          ]
         },
         select: {
           id: true,
@@ -1587,11 +1601,14 @@ class CampoController {
         ? `${delegadoSupervisor.nombre} ${delegadoSupervisor.apellido || ''}`.trim() + (delegadoSupervisor.cargo ? ` (${delegadoSupervisor.cargo})` : ' (Delegado de Gerencia)')
         : 'Delegación General de Gerencia';
 
-      // 2. Todas las jornadas de HOY (estrictamente del día de hoy)
+      // 2. Todas las jornadas de HOY (o activas actualmente)
       const todasJornadasHoy = await prisma.jornadaLaboral.findMany({
         where: {
           usuarioId: { in: comercialesIds },
-          horaInicio: { gte: startOfDay, lte: endOfDay }
+          OR: [
+            { horaInicio: { gte: startOfDay, lte: endOfDay } },
+            { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] } }
+          ]
         },
         orderBy: { id: 'desc' }
       });
@@ -1603,7 +1620,7 @@ class CampoController {
         if (!ultimaJornadaPorUsuario.has(uId)) {
           ultimaJornadaPorUsuario.set(uId, j);
         }
-        if (['Iniciada', 'En Pausa', 'En Ruta'].includes(j.estado) && !jornadasActivasPorUsuario.has(uId)) {
+        if (['Iniciada', 'En Pausa', 'En Ruta', 'Activa'].includes(j.estado) && !jornadasActivasPorUsuario.has(uId)) {
           jornadasActivasPorUsuario.set(uId, j);
         }
       });
@@ -1612,7 +1629,11 @@ class CampoController {
       const visitasHoy = await prisma.visitaCampo.findMany({
         where: {
           usuarioId: { in: comercialesIds },
-          fechaProgramada: { gte: startOfDay, lte: endOfDay }
+          OR: [
+            { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
+            { checkInHora: { gte: startOfDay, lte: endOfDay } },
+            { createdAt: { gte: startOfDay, lte: endOfDay } }
+          ]
         },
         include: { cliente: true, prospecto: true, clienteExterno: true }
       });
@@ -2699,12 +2720,24 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
 
-      const fechaStr = fecha || new Date().toISOString().split('T')[0];
+      // Obtener fecha del día (si no se envía, usar hora local de Colombia UTC-5)
+      let fechaStr = fecha;
+      if (!fechaStr) {
+        const nowCol = new Date(Date.now() - 5 * 3600 * 1000);
+        fechaStr = nowCol.toISOString().split('T')[0];
+      }
+
+      // Ventana que cubre el día calendario completo tanto en UTC como en hora Colombia (UTC-5)
+      // Desde las 00:00 UTC hasta las 06:00 UTC del día siguiente
       const startOfDay = new Date(`${fechaStr}T00:00:00.000Z`);
-      const endOfDay = new Date(`${fechaStr}T23:59:59.999Z`);
+      const endOfDay = new Date(new Date(`${fechaStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
 
       const where = {
-        fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        OR: [
+          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { createdAt: { gte: startOfDay, lte: endOfDay } }
+        ]
       };
 
       if (targetUserId) {
@@ -2745,12 +2778,15 @@ class CampoController {
           if (match && match[1]) direccionLugar = match[1];
         }
 
+        const nombreAsesor = `${item.usuario?.nombre || ''} ${item.usuario?.apellido || ''}`.trim() || item.usuario?.user || 'Asesor';
+
         return {
           id: item.id,
           codigo: item.codigo,
           paradaNumero: paradasPorUsuario[uId],
           usuarioId: item.usuarioId,
-          usuarioNombre: `${item.usuario?.nombre || ''} ${item.usuario?.apellido || ''}`.trim() || item.usuario?.user || 'Asesor',
+          usuarioNombre: nombreAsesor,
+          asesorNombre: nombreAsesor,
           usuarioCargo: item.usuario?.cargo || 'Asesor Comercial',
           usuarioFoto: item.usuario?.foto || null,
           usuarioTelefono: item.usuario?.telefono || null,

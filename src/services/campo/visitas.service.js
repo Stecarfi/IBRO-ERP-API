@@ -76,17 +76,14 @@ class VisitasService {
     }
 
     if (fechaStr && fechaStr !== 'TODAS') {
-      const fecha = new Date(fechaStr);
-      if (!isNaN(fecha.getTime())) {
-        const startOfDay = new Date(fecha);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(fecha);
-        endOfDay.setHours(23, 59, 59, 999);
-        where.fechaProgramada = {
-          gte: startOfDay,
-          lte: endOfDay
-        };
-      }
+      const datePart = fechaStr.includes('T') ? fechaStr.split('T')[0] : fechaStr;
+      const startOfDay = new Date(`${datePart}T00:00:00.000Z`);
+      const endOfDay = new Date(new Date(`${datePart}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
+      where.OR = [
+        { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
+        { checkInHora: { gte: startOfDay, lte: endOfDay } },
+        { createdAt: { gte: startOfDay, lte: endOfDay } }
+      ];
     }
 
     const visitas = await prisma.visitaCampo.findMany({
@@ -125,22 +122,33 @@ class VisitasService {
     }
 
     if (fechaDesde || fechaHasta) {
-      where.fechaProgramada = {};
-      if (fechaDesde) {
-        const d = new Date(fechaDesde);
-        d.setHours(0, 0, 0, 0);
-        where.fechaProgramada.gte = d;
-      }
-      if (fechaHasta) {
-        const h = new Date(fechaHasta);
-        h.setHours(23, 59, 59, 999);
-        where.fechaProgramada.lte = h;
+      const start = fechaDesde ? new Date(`${fechaDesde}T00:00:00.000Z`) : null;
+      const end = fechaHasta ? new Date(new Date(`${fechaHasta}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000) : null;
+      where.OR = [];
+      if (start && end) {
+        where.OR.push(
+          { fechaProgramada: { gte: start, lte: end } },
+          { checkInHora: { gte: start, lte: end } },
+          { createdAt: { gte: start, lte: end } }
+        );
+      } else if (start) {
+        where.OR.push(
+          { fechaProgramada: { gte: start } },
+          { checkInHora: { gte: start } },
+          { createdAt: { gte: start } }
+        );
+      } else if (end) {
+        where.OR.push(
+          { fechaProgramada: { lte: end } },
+          { checkInHora: { lte: end } },
+          { createdAt: { lte: end } }
+        );
       }
     }
 
     if (search && search.trim()) {
       const q = search.trim();
-      where.OR = [
+      const searchConditions = [
         { codigo: { contains: q, mode: 'insensitive' } },
         { clienteExterno: { nombre: { contains: q, mode: 'insensitive' } } },
         { cliente: { nom: { contains: q, mode: 'insensitive' } } },
@@ -148,6 +156,11 @@ class VisitasService {
         { observaciones: { contains: q, mode: 'insensitive' } },
         { resultadoResumen: { contains: q, mode: 'insensitive' } }
       ];
+      if (where.OR && where.OR.length > 0) {
+        where.AND = [{ OR: searchConditions }];
+      } else {
+        where.OR = searchConditions;
+      }
     }
 
     return prisma.visitaCampo.findMany({
@@ -160,8 +173,8 @@ class VisitasService {
         cotizacion: true,
         venta: true
       },
-      orderBy: { fechaProgramada: 'desc' },
-      take: 300
+      orderBy: { createdAt: 'desc' },
+      take: 500
     });
   }
 
