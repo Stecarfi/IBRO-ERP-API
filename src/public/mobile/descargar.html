@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Instalar IBRO ERP en tu Celular (PWA)</title>
+  <title>Instalar IBRO ERP en tu Celular (PWA & Segundo Plano)</title>
   <link rel="icon" type="image/png" href="./Rombo_Nuevo.png">
   <link rel="apple-touch-icon" href="./Rombo_Nuevo.png">
   <link rel="manifest" href="./manifest.json">
@@ -31,14 +31,14 @@
       flex-direction: column;
       align-items: center;
       justify-content: flex-start;
-      padding: 24px 16px 48px;
+      padding: 24px 16px 60px;
       overflow-x: hidden;
     }
     .container {
       position: relative;
       z-index: 1;
       width: 100%;
-      max-width: 480px;
+      max-width: 500px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -54,12 +54,12 @@
       width: 80px;
       height: 80px;
       background: linear-gradient(145deg, #091a42, #040c1f);
-      border: 1.5px solid rgba(255, 255, 255, 0.15);
+      border: 1.5px solid rgba(255, 255, 255, 0.18);
       border-radius: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 14px 35px rgba(0, 0, 0, 0.6);
       margin-bottom: 12px;
       padding: 10px;
     }
@@ -69,7 +69,7 @@
       object-fit: contain;
     }
     .title-main {
-      font-size: 24px;
+      font-size: 26px;
       font-weight: 900;
       letter-spacing: -0.5px;
       color: #ffffff;
@@ -82,9 +82,22 @@
       letter-spacing: 0.5px;
       text-transform: uppercase;
     }
+    .badge-bg {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-top: 8px;
+    }
     .card-glass {
       width: 100%;
-      background: rgba(15, 23, 42, 0.7);
+      background: rgba(15, 23, 42, 0.75);
       backdrop-filter: blur(20px);
       border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 24px;
@@ -94,7 +107,7 @@
     }
     .btn-action-primary {
       width: 100%;
-      background: linear-gradient(135deg, #de4b5b 0%, #b91c1c 100%);
+      background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
       color: #ffffff;
       border: none;
       padding: 16px 20px;
@@ -107,34 +120,99 @@
       justify-content: center;
       gap: 10px;
       cursor: pointer;
-      box-shadow: 0 8px 25px rgba(222, 75, 91, 0.45);
+      box-shadow: 0 8px 25px rgba(2, 132, 199, 0.45);
       text-decoration: none;
       transition: all 0.2s ease;
+      margin-bottom: 12px;
     }
     .btn-action-primary:active {
       transform: scale(0.98);
     }
+    .btn-action-secondary {
+      width: 100%;
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: #ffffff;
+      border: none;
+      padding: 14px 18px;
+      border-radius: 16px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      box-shadow: 0 8px 25px rgba(16, 185, 129, 0.35);
+      text-decoration: none;
+      transition: all 0.2s ease;
+      margin-bottom: 12px;
+    }
+    .btn-action-secondary:active {
+      transform: scale(0.98);
+    }
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 4px;
+      border-radius: 14px;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      border: none;
+      background: transparent;
+      color: #94a3b8;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .tab-btn.active {
+      background: #0284c7;
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(2, 132, 199, 0.4);
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
     .instruction-box {
-      background: rgba(0, 0, 0, 0.3);
+      background: rgba(0, 0, 0, 0.35);
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 16px;
-      padding: 14px;
-      margin-top: 14px;
+      padding: 16px;
+      margin-top: 12px;
       text-align: left;
     }
     .instruction-box h4 {
       font-size: 13px;
       font-weight: 800;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
       display: flex;
       align-items: center;
       gap: 8px;
     }
-    .instruction-box ol {
+    .instruction-box ol, .instruction-box ul {
       font-size: 12px;
-      line-height: 1.6;
+      line-height: 1.65;
       color: #cbd5e1;
-      padding-left: 18px;
+      padding-left: 20px;
+    }
+    .instruction-box li {
+      margin-bottom: 8px;
+    }
+    .instruction-box li strong {
+      color: #ffffff;
     }
     .qr-box {
       background: #ffffff;
@@ -142,6 +220,43 @@
       border-radius: 16px;
       margin: 14px auto;
       display: inline-block;
+    }
+    .pill-tip {
+      background: rgba(245, 158, 11, 0.15);
+      border-left: 3px solid #f59e0b;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #fde68a;
+      line-height: 1.5;
+      margin-top: 10px;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+      font-size: 12px;
+    }
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #f59e0b;
+    }
+    .dot.online {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
     }
   </style>
 </head>
@@ -152,71 +267,241 @@
         <img src="./Rombo_Nuevo.png" alt="IBRO ERP">
       </div>
       <h1 class="title-main">IBRO ERP</h1>
-      <p class="subtitle-main">Instalación en Celular (PWA)</p>
+      <p class="subtitle-main">Instalación Móvil & Segundo Plano</p>
+      <div class="badge-bg">
+        <i class="fa-solid fa-bolt"></i>
+        <span>Segundo Plano Tipo WhatsApp Activo</span>
+      </div>
     </div>
 
     <div class="card-glass">
-      <p style="font-size: 13px; color: #cbd5e1; text-align: center; margin-bottom: 18px; line-height: 1.5;">
-        Accede al <strong>mismo sistema IBRO ERP completo</strong> en tu celular con pantalla completa y acceso directo como una app nativa.
-      </p>
-
-      <!-- Primary Action: Open ERP Web App directly -->
-      <a href="https://g-ibro.onrender.com" class="btn-action-primary" id="btnLaunchErp">
-        <i class="fa-solid fa-mobile-screen-button"></i>
-        <span>Abrir e Instalar IBRO ERP</span>
-      </a>
-
-      <!-- Android Guide -->
-      <div class="instruction-box">
-        <h4 style="color: #34d399;">
-          <i class="fa-brands fa-android"></i>
-          <span>En Android (Google Chrome)</span>
-        </h4>
-        <ol>
-          <li>Presiona el botón rojo superior <strong>"Abrir e Instalar IBRO ERP"</strong>.</li>
-          <li>Toca los <strong>tres puntos (⋮)</strong> en la esquina superior derecha del navegador.</li>
-          <li>Selecciona <strong>"Instalar aplicación"</strong> o <strong>"Agregar a la pantalla principal"</strong>.</li>
-          <li>¡Listo! El icono oficial de <strong>IBRO ERP</strong> aparecerá en tus aplicaciones.</li>
-        </ol>
+      <!-- Live Status of Push & Background -->
+      <div class="status-badge" id="statusBadge">
+        <span class="status-indicator">
+          <span class="dot" id="dotStatus"></span>
+          <span id="textStatus">Comprobando soporte en este móvil...</span>
+        </span>
+        <button id="btnCheckPerm" style="background: none; border: none; color: #38bdf8; font-size: 11px; font-weight: 800; cursor: pointer; text-decoration: underline;">
+          Verificar
+        </button>
       </div>
 
-      <!-- iOS Guide -->
-      <div class="instruction-box">
-        <h4 style="color: #38bdf8;">
-          <i class="fa-brands fa-apple"></i>
-          <span>En iPhone / iPad (Safari)</span>
-        </h4>
-        <ol>
-          <li>Abre el enlace en <strong>Safari</strong> presionando el botón superior.</li>
-          <li>Toca el botón <strong>Compartir</strong> (cuadrado con flecha hacia arriba [⎋]).</li>
-          <li>Desliza hacia abajo y presiona <strong>"Agregar a la pantalla de inicio"</strong> (+).</li>
-          <li>Toca <strong>"Agregar"</strong> para usarlo a pantalla completa sin barra de navegación.</li>
-        </ol>
+      <!-- Navigation Tabs -->
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('tab-install')">
+          <i class="fa-solid fa-download"></i>
+          <span>1. Instalar PWA</span>
+        </button>
+        <button class="tab-btn" onclick="switchTab('tab-background')">
+          <i class="fa-solid fa-bell"></i>
+          <span>2. Segundo Plano</span>
+        </button>
+        <button class="tab-btn" onclick="switchTab('tab-apk')">
+          <i class="fa-brands fa-android"></i>
+          <span>3. Alternativa APK</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: PWA Installation -->
+      <div id="tab-install" class="tab-content active">
+        <p style="font-size: 13px; color: #cbd5e1; text-align: center; margin-bottom: 16px; line-height: 1.5;">
+          Instala la aplicación en tu celular sin ocupar memoria pesada. Se actualiza automáticamente y funciona a pantalla completa.
+        </p>
+
+        <a href="https://g-ibro.onrender.com" class="btn-action-primary" id="btnLaunchErp">
+          <i class="fa-solid fa-mobile-screen-button"></i>
+          <span>Abrir e Instalar IBRO ERP</span>
+        </a>
+
+        <!-- Android Guide -->
+        <div class="instruction-box">
+          <h4 style="color: #34d399;">
+            <i class="fa-brands fa-android"></i>
+            <span>En Android (Google Chrome)</span>
+          </h4>
+          <ol>
+            <li>Toca el botón azul <strong>"Abrir e Instalar IBRO ERP"</strong>.</li>
+            <li>En la esquina superior derecha, toca los <strong>tres puntos (⋮)</strong>.</li>
+            <li>Selecciona <strong>"Instalar aplicación"</strong> o <strong>"Agregar a pantalla principal"</strong>.</li>
+            <li>Aparecerá el icono oficial de <strong>IBRO ERP</strong> en tu menú de aplicaciones de Android.</li>
+          </ol>
+        </div>
+
+        <!-- iOS Guide -->
+        <div class="instruction-box">
+          <h4 style="color: #38bdf8;">
+            <i class="fa-brands fa-apple"></i>
+            <span>En iPhone / iPad (Safari)</span>
+          </h4>
+          <ol>
+            <li>Abre el enlace en <strong>Safari</strong> presionando el botón superior.</li>
+            <li>Toca el botón <strong>Compartir</strong> (icono de cuadrado con flecha ↑).</li>
+            <li>Baja y selecciona <strong>"Agregar al inicio"</strong> (+).</li>
+            <li>¡Listo! Recibirás notificaciones push al abrirla por primera vez.</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- TAB 2: Background Configuration (WhatsApp Style) -->
+      <div id="tab-background" class="tab-content">
+        <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 14px; line-height: 1.5;">
+          Para que el aplicativo reciba chats y alertas <strong>con la aplicación cerrada o el teléfono bloqueado</strong> (exactamente como WhatsApp), Android requiere 2 permisos clave:
+        </p>
+
+        <!-- Quick Activation Button -->
+        <button class="btn-action-secondary" id="btnActivateBg" onclick="requestPushActivation()">
+          <i class="fa-solid fa-bell-concierge"></i>
+          <span>Activar Notificaciones en este Móvil</span>
+        </button>
+
+        <div class="instruction-box">
+          <h4 style="color: #f59e0b;">
+            <i class="fa-solid fa-battery-full"></i>
+            <span>Paso Crucial: Batería Sin Restricciones en Android</span>
+          </h4>
+          <p style="font-size: 11.5px; color: #cbd5e1; margin-bottom: 8px;">
+            Android apaga las aplicaciones en segundo plano para ahorrar batería. Para que IBRO ERP siempre te avise:
+          </p>
+          <ol>
+            <li>Ve a <strong>Ajustes del Teléfono</strong> &gt; <strong>Aplicaciones</strong>.</li>
+            <li>Busca y selecciona <strong>IBRO ERP</strong> (o Chrome).</li>
+            <li>Toca en <strong>Batería</strong> (o Uso de Batería).</li>
+            <li>Marca la opción <strong>"Sin restricciones"</strong> o <strong>"No optimizar"</strong>.</li>
+          </ol>
+        </div>
+
+        <div class="instruction-box" style="margin-top: 10px;">
+          <h4 style="color: #38bdf8;">
+            <i class="fa-solid fa-rotate"></i>
+            <span>En Xiaomi, Redmi, Samsung o Huawei:</span>
+          </h4>
+          <ul>
+            <li><strong>Inicio Automático:</strong> Activa "Inicio automático" en los ajustes de la app para que inicie tras reiniciar el celular.</li>
+            <li><strong>Notificaciones:</strong> Asegúrate de que las "Notificaciones emergentes / flotantes" estén en <strong>Permitido</strong>.</li>
+          </ul>
+        </div>
+
+        <div class="pill-tip">
+          <i class="fa-solid fa-circle-info"></i>
+          <strong>¿Cómo funciona técnicamente?</strong> El servidor envía el mensaje mediante <strong>Google Cloud Messaging (FCM)</strong>. Los servicios del sistema operativo despiertan la app en silencio, muestran la burbuja y actualizan el contador en el icono sin que tengas que abrir nada.
+        </div>
+      </div>
+
+      <!-- TAB 3: APK Alternative -->
+      <div id="tab-apk" class="tab-content">
+        <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 14px; line-height: 1.5;">
+          ¿Prefieres instalar un archivo <strong>.APK nativo de Android</strong> directamente sin pasar por el navegador?
+        </p>
+
+        <a href="/descargar/apk" class="btn-action-primary" style="background: linear-gradient(135deg, #10b981 0%, #047857 100%);">
+          <i class="fa-solid fa-box-archive"></i>
+          <span>Descargar APK Nativo (Android)</span>
+        </a>
+
+        <div class="instruction-box">
+          <h4 style="color: #34d399;">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>Instalación del APK</span>
+          </h4>
+          <ol>
+            <li>Toca el botón verde <strong>"Descargar APK Nativo"</strong>.</li>
+            <li>Si Android pregunta <em>"¿Descargar archivo potencialmente dañino?"</em>, selecciona <strong>"Descargar de todos modos"</strong> (es el instalador interno de IBRO S.A.S.).</li>
+            <li>Abre el archivo descargado y presiona <strong>Instalar</strong>.</li>
+            <li>Si te pide permiso para <em>"Instalar apps de fuentes desconocidas"</em>, actívalo en tu navegador.</li>
+            <li>¡Listo! La versión APK tiene permisos nativos integrados de arranque y segundo plano.</li>
+          </ol>
+        </div>
       </div>
 
       <!-- QR Code Section -->
-      <div style="text-align: center; margin-top: 16px;">
-        <p style="font-size: 11px; color: #94a3b8;">O escanea con la cámara de tu celular:</p>
+      <div style="text-align: center; margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);">
+        <p style="font-size: 11px; color: #94a3b8; margin-bottom: 6px;">O escanea con la cámara de tu teléfono:</p>
         <div class="qr-box">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=https%3A%2F%2Fg-ibro.onrender.com&color=002060&bgcolor=ffffff&margin=1" alt="QR IBRO ERP" width="140" height="140">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=https%3A%2F%2Fg-ibro.onrender.com&color=002060&bgcolor=ffffff&margin=1" alt="QR IBRO ERP" width="130" height="130">
         </div>
       </div>
     </div>
 
     <p style="font-size: 11px; color: #64748b; text-align: center;">
-      IBRO S.A.S. &copy; 2026 &bull; Plataforma Oficial PWA en Render Cloud
+      IBRO S.A.S. &copy; 2026 &bull; Plataforma Oficial PWA & Push Service
     </p>
   </div>
 
   <script>
-    // Si el usuario ingresa desde un teléfono celular a esta página, redirigir automáticamente a la app en 3 segundos
-    const ua = navigator.userAgent || navigator.vendor || window.opera || '';
-    const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(ua);
-    if (isMobile) {
-      setTimeout(() => {
-        window.location.href = 'https://g-ibro.onrender.com';
-      }, 2500);
+    // Manejo de Pestañas
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      
+      const targetBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+      if (targetBtn) targetBtn.classList.add('active');
+      
+      const targetContent = document.getElementById(tabId);
+      if (targetContent) targetContent.classList.add('active');
     }
+
+    // Comprobación de Estado en Tiempo Real
+    async function checkSystemStatus() {
+      const dot = document.getElementById('dotStatus');
+      const text = document.getElementById('textStatus');
+      
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        dot.className = 'dot';
+        text.innerText = 'Este navegador no soporta segundo plano (Usa Chrome o Safari).';
+        return;
+      }
+
+      if (!('Notification' in window)) {
+        dot.className = 'dot';
+        text.innerText = 'Notificaciones no soportadas.';
+        return;
+      }
+
+      const perm = Notification.permission;
+      if (perm === 'granted') {
+        dot.className = 'dot online';
+        text.innerText = '✓ Segundo plano y notificaciones AUTORIZADAS';
+        text.style.color = '#34d399';
+      } else if (perm === 'denied') {
+        dot.className = 'dot';
+        text.innerText = 'Notificaciones bloqueadas en este navegador.';
+        text.style.color = '#f87171';
+      } else {
+        dot.className = 'dot';
+        text.innerText = 'Segundo plano pendiente de activación.';
+        text.style.color = '#f59e0b';
+      }
+    }
+
+    async function requestPushActivation() {
+      if (!('Notification' in window)) {
+        alert('Este dispositivo no soporta la API de Notificaciones.');
+        return;
+      }
+      try {
+        const perm = await Notification.requestPermission();
+        checkSystemStatus();
+        if (perm === 'granted') {
+          // Registrar Service Worker localmente si está disponible
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.register('/sw.js').catch(() => null);
+            if (reg && 'periodicSync' in reg) {
+              try {
+                await reg.periodicSync.register('ibro-periodic-sync', { minInterval: 15 * 60 * 1000 });
+              } catch(e) {}
+            }
+          }
+          alert('¡Notificaciones en segundo plano ACTIVADAS con éxito!');
+        } else {
+          alert('El permiso fue cancelado o denegado.');
+        }
+      } catch (err) {
+        alert('Error solicitando permisos: ' + err.message);
+      }
+    }
+
+    document.getElementById('btnCheckPerm').addEventListener('click', checkSystemStatus);
+    window.addEventListener('load', checkSystemStatus);
   </script>
 </body>
 </html>

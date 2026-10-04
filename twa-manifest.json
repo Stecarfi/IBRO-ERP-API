@@ -1,0 +1,41 @@
+{
+  "packageId": "com.ibroerp.app",
+  "host": "g-ibro.onrender.com",
+  "name": "IBRO ERP",
+  "launcherName": "IBRO ERP",
+  "themeColor": "#071F63",
+  "navigationColor": "#071F63",
+  "navigationColorDark": "#030e28",
+  "navigationDividerColor": "#00000000",
+  "navigationDividerColorDark": "#00000000",
+  "backgroundColor": "#071F63",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://g-ibro.onrender.com/icons/icon-512.png",
+  "maskableIconUrl": "https://g-ibro.onrender.com/icons/icon-maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "ibroerp"
+  },
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://g-ibro.onrender.com/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": true
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false
+}

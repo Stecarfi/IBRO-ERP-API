@@ -1,0 +1,11 @@
+Guía para desplegar el APK nativo de IBRO ERP:
+
+1. El archivo twa-manifest.json ya se encuentra configurado en la raíz del proyecto.
+2. Para compilar el APK oficial utilizando Bubblewrap CLI (Google Oficial):
+   npm install -g @bubblewrap/cli
+   bubblewrap build
+3. O mediante PWA Builder (Microsoft):
+   Visitar https://www.pwabuilder.com, ingresar https://g-ibro.onrender.com y descargar el paquete Android APK.
+4. Colocar el archivo .apk generado en esta carpeta con el nombre:
+   ibro-erp.apk
+5. Los usuarios podrán descargarlo directamente desde https://g-ibro.onrender.com/descargar/apk

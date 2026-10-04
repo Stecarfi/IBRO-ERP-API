@@ -51,4 +51,78 @@ router.post('/test', async (req, res) => {
   });
 });
 
+const prisma = require('../prisma');
+
+// Endpoint para Periodic Background Sync: consultar novedades en segundo plano
+router.get('/unread-summary', async (req, res) => {
+  try {
+    const username = (req.query.username || '').trim().toLowerCase();
+    let unreadCount = 0;
+    let latestMessage = null;
+
+    if (username) {
+      const dbUser = await prisma.user.findFirst({
+        where: { user: { equals: username, mode: 'insensitive' } }
+      });
+
+      if (dbUser) {
+        const notifCount = await prisma.notificacion.count({
+          where: {
+            paraId: dbUser.id,
+            leida: false
+          }
+        });
+
+        const unreadChats = await prisma.chat.count({
+          where: {
+            OR: [
+              { receiverId: dbUser.id, readAt: null },
+              { receiverId: null, senderTabId: null, readAt: null }
+            ],
+            senderId: { not: dbUser.id }
+          }
+        });
+
+        unreadCount = notifCount + unreadChats;
+
+        latestMessage = await prisma.chat.findFirst({
+          where: {
+            OR: [
+              { receiverId: dbUser.id },
+              { receiverId: null, senderTabId: null }
+            ],
+            senderId: { not: dbUser.id }
+          },
+          orderBy: { timestamp: 'desc' },
+          select: { text: true, nombre: true }
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      unreadCount,
+      latest: latestMessage ? `${latestMessage.nombre}: ${latestMessage.text}` : null
+    });
+  } catch (err) {
+    res.json({ success: true, unreadCount: 0 });
+  }
+});
+
+// Marcar mensaje como leído desde la notificación push (sin abrir la PWA)
+router.post('/mark-read', async (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (messageId) {
+      await prisma.chat.updateMany({
+        where: { id: messageId },
+        data: { readAt: new Date() }
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

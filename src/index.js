@@ -1042,6 +1042,78 @@ app.post('/api/push/send-notification', async (req, res) => {
   }
 });
 
+// Endpoint para Periodic Background Sync: consultar novedades en segundo plano
+app.get('/api/push/unread-summary', async (req, res) => {
+  try {
+    const username = (req.query.username || '').trim().toLowerCase();
+    let unreadCount = 0;
+    let latestMessage = null;
+
+    if (username) {
+      const dbUser = await prisma.user.findFirst({
+        where: { user: { equals: username, mode: 'insensitive' } }
+      });
+
+      if (dbUser) {
+        const notifCount = await prisma.notificacion.count({
+          where: {
+            paraId: dbUser.id,
+            leida: false
+          }
+        });
+
+        const unreadChats = await prisma.chat.count({
+          where: {
+            OR: [
+              { receiverId: dbUser.id, readAt: null },
+              { receiverId: null, senderTabId: null, readAt: null }
+            ],
+            senderId: { not: dbUser.id }
+          }
+        });
+
+        unreadCount = notifCount + unreadChats;
+
+        latestMessage = await prisma.chat.findFirst({
+          where: {
+            OR: [
+              { receiverId: dbUser.id },
+              { receiverId: null, senderTabId: null }
+            ],
+            senderId: { not: dbUser.id }
+          },
+          orderBy: { timestamp: 'desc' },
+          select: { text: true, nombre: true }
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      unreadCount,
+      latest: latestMessage ? `${latestMessage.nombre}: ${latestMessage.text}` : null
+    });
+  } catch (err) {
+    res.json({ success: true, unreadCount: 0 });
+  }
+});
+
+// Marcar mensaje como leído desde la notificación push (sin abrir la PWA)
+app.post('/api/push/mark-read', async (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (messageId) {
+      await prisma.chat.updateMany({
+        where: { id: messageId },
+        data: { readAt: new Date() }
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/emergency-unlock/:user - Ruta temporal de emergencia para desbloquear la cuenta
 app.get('/api/emergency-unlock/:user', async (req, res) => {
   try {
