@@ -45,13 +45,29 @@ router.post('/geocercas', (req, res) => campoController.crearGeocerca(req, res))
 router.get('/zonas', (req, res) => campoController.getZonas(req, res));
 router.post('/zonas', (req, res) => campoController.crearZona(req, res));
 
-// 7. Actividades del Día y Tareas
+// 7. Actividades del Día y Tareas (Nomenclatura Unificada Oficial con Control Gerencial)
 router.get('/actividades', (req, res) => campoController.getActividades(req, res));
 router.post('/actividades', (req, res) => campoController.crearActividad(req, res));
 router.put('/actividades/:id', (req, res) => campoController.modificarActividad(req, res));
 router.delete('/actividades/:id', (req, res) => campoController.eliminarActividad(req, res));
 router.put('/actividades/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
+router.put('/actividades/:id/cumplimiento', (req, res) => campoController.actualizarEstadoActividad(req, res));
 router.post('/actividades/:id/comentarios', (req, res) => campoController.agregarComentarioActividad(req, res));
+router.post('/actividades/:id/aprobar', (req, res) => campoController.aprobarActividad(req, res));
+router.post('/actividades/:id/solicitar-correccion', (req, res) => campoController.solicitarCorreccionActividad(req, res));
+router.post('/actividades/:id/reabrir', (req, res) => campoController.reabrirActividad(req, res));
+
+// Rutas espejo /tareas para total equivalencia y compatibilidad absoluta entre módulos
+router.get('/tareas', (req, res) => campoController.getActividades(req, res));
+router.post('/tareas', (req, res) => campoController.crearActividad(req, res));
+router.put('/tareas/:id', (req, res) => campoController.modificarActividad(req, res));
+router.delete('/tareas/:id', (req, res) => campoController.eliminarActividad(req, res));
+router.put('/tareas/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
+router.put('/tareas/:id/cumplimiento', (req, res) => campoController.actualizarEstadoActividad(req, res));
+router.post('/tareas/:id/comentarios', (req, res) => campoController.agregarComentarioActividad(req, res));
+router.post('/tareas/:id/aprobar', (req, res) => campoController.aprobarActividad(req, res));
+router.post('/tareas/:id/solicitar-correccion', (req, res) => campoController.solicitarCorreccionActividad(req, res));
+router.post('/tareas/:id/reabrir', (req, res) => campoController.reabrirActividad(req, res));
 
 // 8. Evidencias Multimedia
 router.get('/evidencias', (req, res) => campoController.getEvidencias(req, res));
@@ -74,6 +90,9 @@ router.put('/rutas/:id/cumplimiento', (req, res) => campoController.actualizarEs
 router.put('/rutas/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
 router.put('/rutas/:id', (req, res) => campoController.actualizarRuta(req, res));
 router.delete('/rutas/:id', (req, res) => campoController.eliminarRuta(req, res));
+router.post('/rutas/:id/aprobar', (req, res) => campoController.aprobarActividad(req, res));
+router.post('/rutas/:id/solicitar-correccion', (req, res) => campoController.solicitarCorreccionActividad(req, res));
+router.post('/rutas/:id/reabrir', (req, res) => campoController.reabrirActividad(req, res));
 router.get('/trazabilidad/dia', (req, res) => campoController.getHistorialDiaCompleto(req, res));
 router.get('/operacion/panel', (req, res) => campoController.getPanelOperativo(req, res));
 router.get('/personal-campo', (req, res) => campoController.getPanelOperativo(req, res));

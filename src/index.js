@@ -4484,6 +4484,19 @@ app.use('/api/campo', campoRoutes);
 app.use('/operaciones-campo', campoRoutes);
 app.use('/campo', campoRoutes);
 
+// Endpoint de Auditoría de Sesiones y Presencia a demanda
+const { generateActivityReport } = require('./cron/backup');
+app.all(['/api/auditoria/sesiones/reporte-manual', '/auditoria/sesiones/reporte-manual'], async (req, res) => {
+  try {
+    const corte = req.body?.corteNombre || req.query?.corteNombre || "Corte a Demanda de Control Gerencial";
+    const result = await generateActivityReport(corte);
+    res.json(result);
+  } catch (err) {
+    console.error('[API Auditoría Sesiones Error]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 io = new Server(server, {

@@ -30,24 +30,26 @@ class ActividadesService {
       ]
     };
 
-    if (personalId && isAdminOrSupervisor) {
-      where.usuarioId = personalId;
-    } else if (query.usuarioId && isAdminOrSupervisor) {
-      where.usuarioId = query.usuarioId;
+    const targetUsuarioId = personalId || query.usuarioId;
+    if (targetUsuarioId && targetUsuarioId !== 'TODOS') {
+      where.usuarioId = targetUsuarioId;
     } else if (!isAdminOrSupervisor) {
       // Comercial en campo ve estrictamente sus actividades asignadas
       where.usuarioId = usuarioId;
     }
 
     if (estado && estado !== 'TODAS') {
-      where.estado = estado;
+      if (estado === 'Completada' || estado === 'Finalizada') {
+        where.estado = { in: ['Completada', 'Finalizada'] };
+      } else {
+        where.estado = estado;
+      }
     }
 
     if (fecha) {
-      const start = new Date(fecha);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(fecha);
-      end.setHours(23, 59, 59, 999);
+      const fechaStr = String(fecha).split('T')[0];
+      const start = new Date(`${fechaStr}T00:00:00.000Z`);
+      const end = new Date(new Date(`${fechaStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
       where.fechaProgramada = { gte: start, lte: end };
     }
 
@@ -65,7 +67,7 @@ class ActividadesService {
   }
 
   /**
-   * Crear nueva actividad en campo
+   * Crear nueva actividad / tarea en campo
    */
   async crearActividad(usuarioId, data) {
     const {
@@ -81,7 +83,7 @@ class ActividadesService {
     } = data;
 
     if (!titulo || !titulo.trim()) {
-      return { success: false, error: 'El título de la actividad es obligatorio.' };
+      return { success: false, error: 'El título de la tarea / actividad es obligatorio.' };
     }
 
     const targetUserId = asignadoAId || comercialId || usuarioAsignadoId || data.usuarioId || usuarioId;
@@ -93,6 +95,38 @@ class ActividadesService {
       codigo = `ACT-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
     }
 
+    const fechaObj = String(fechaProgramada).includes('T')
+      ? new Date(fechaProgramada)
+      : new Date(`${String(fechaProgramada).split('T')[0]}T12:00:00.000Z`);
+
+    let creadorNombre = 'Delegado de Gerencia';
+    try {
+      const creadorUser = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, apellido: true, user: true } });
+      if (creadorUser) creadorNombre = `${creadorUser.nombre || ''} ${creadorUser.apellido || ''}`.trim() || creadorUser.user;
+    } catch (e) {}
+
+    let responsableNombre = 'Asesor Asignado';
+    try {
+      const respUser = await prisma.user.findUnique({ where: { id: targetUserId }, select: { nombre: true, apellido: true, user: true } });
+      if (respUser) responsableNombre = `${respUser.nombre || ''} ${respUser.apellido || ''}`.trim() || respUser.user;
+    } catch (e) {}
+
+    const initialComments = [
+      {
+        fecha: new Date().toISOString(),
+        usuarioId,
+        usuario: creadorNombre,
+        accion: 'CREACION',
+        tipo: 'evento',
+        estadoAnterior: null,
+        estadoNuevo: 'Pendiente',
+        responsableAnterior: null,
+        responsableActual: responsableNombre,
+        responsableActualId: targetUserId,
+        texto: `Tarea asignada a ${responsableNombre} por ${creadorNombre}.${descripcion ? ` Instrucciones: ${descripcion.trim()}` : ''}`
+      }
+    ];
+
     const actividad = await prisma.actividadCampo.create({
       data: {
         codigo,
@@ -102,29 +136,29 @@ class ActividadesService {
         titulo: titulo.trim(),
         descripcion: descripcion.trim(),
         prioridad,
-        fechaProgramada: new Date(fechaProgramada),
+        fechaProgramada: fechaObj,
         horaEstimada,
         estado: 'Pendiente',
-        comentarios: [],
+        comentarios: initialComments,
         evidencias: Array.isArray(data.evidencias || data.adjuntos) ? (data.evidencias || data.adjuntos) : []
       },
       include: {
-        usuario: { select: { id: true, nombre: true, apellido: true } }
+        usuario: { select: { id: true, nombre: true, apellido: true } },
+        asignadoPor: { select: { id: true, nombre: true, apellido: true } }
       }
     });
 
     // Notificar al asesor/colaborador asignado
     if (targetUserId && String(targetUserId) !== String(usuarioId)) {
       try {
-        const delegado = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, user: true } });
         const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
         await prisma.notificacion.create({
           data: {
             id: notifId,
             paraId: targetUserId,
-            titulo: 'Nueva Actividad Asignada por Delegado',
-            mensaje: `El Delegado de Gerencia ${delegado?.nombre || delegado?.user || 'Delegado'} le ha asignado la tarea: "${titulo.trim()}". Prioridad: ${prioridad}.`,
-            de: `${delegado?.nombre || delegado?.user || 'Delegado de Gerencia'}`,
+            titulo: 'Nueva Tarea Asignada por el Delegado',
+            mensaje: `El Delegado de Gerencia ${creadorNombre} le ha asignado la tarea: "${titulo.trim()}". Prioridad: ${prioridad}.`,
+            de: creadorNombre,
             tipo: 'actividad_asignada',
             fecha: new Date(),
             leida: false,
@@ -132,7 +166,7 @@ class ActividadesService {
           }
         });
       } catch (errNotif) {
-        console.error('Error generando notificación de actividad:', errNotif);
+        console.error('Error generando notificación de tarea:', errNotif);
       }
     }
 
@@ -140,38 +174,82 @@ class ActividadesService {
   }
 
   /**
-   * Actualizar estado de una actividad (Pendiente, En ejecucion, Finalizada, Completada, Reprogramada)
+   * Actualizar estado de una actividad (Pendiente, En ejecucion, Finalizada, Completada, Aprobada, En Corrección, Reprogramada)
    */
   async actualizarEstado(usuarioId, actividadId, data) {
-    const { estado, comentario = '', nuevaFecha = null, evidencias = [], adjuntos = [] } = data;
+    const { estado, comentario = '', nuevaFecha = null, evidencias = [], adjuntos = [], accion = null, instrucciones = '', motivo = '' } = data;
 
     const actividad = await prisma.actividadCampo.findUnique({
-      where: { id: actividadId }
+      where: { id: actividadId },
+      include: {
+        usuario: { select: { id: true, nombre: true, apellido: true, user: true } },
+        asignadoPor: { select: { id: true, nombre: true, apellido: true, user: true } }
+      }
     });
 
     if (!actividad) {
-      return { success: false, error: 'Actividad no encontrada.' };
+      return { success: false, error: 'Actividad / Tarea no encontrada.' };
     }
 
-    const updateData = { estado };
-    if (estado === 'Finalizada' || estado === 'Completada') {
+    let nuevoEstado = estado || actividad.estado;
+    if (accion === 'APROBACION') nuevoEstado = 'Aprobada';
+    if (accion === 'SOLICITUD_CORRECCION') nuevoEstado = 'En Corrección';
+    if (accion === 'REAPERTURA') nuevoEstado = 'En ejecucion';
+
+    const updateData = { estado: nuevoEstado };
+    if (nuevoEstado === 'Finalizada' || nuevoEstado === 'Completada' || nuevoEstado === 'Aprobada') {
       updateData.fechaFinalizacion = new Date();
+    } else if (nuevoEstado === 'En Corrección' || nuevoEstado === 'En ejecucion' || nuevoEstado === 'Pendiente') {
+      updateData.fechaFinalizacion = null;
     }
-    if (estado === 'Reprogramada' && nuevaFecha) {
-      updateData.fechaProgramada = new Date(nuevaFecha);
+
+    if (nuevoEstado === 'Reprogramada' && nuevaFecha) {
+      updateData.fechaProgramada = String(nuevaFecha).includes('T')
+        ? new Date(nuevaFecha)
+        : new Date(`${String(nuevaFecha).split('T')[0]}T12:00:00.000Z`);
     }
+
+    let userName = 'Colaborador';
+    try {
+      const u = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, apellido: true, user: true } });
+      if (u) userName = `${u.nombre || ''} ${u.apellido || ''}`.trim() || u.user || 'Colaborador';
+    } catch (e) {}
 
     const existingComments = Array.isArray(actividad.comentarios) ? actividad.comentarios : [];
-    if (comentario && comentario.trim()) {
-      existingComments.push({
-        fecha: new Date().toISOString(),
-        usuarioId,
-        texto: comentario.trim()
-      });
-      updateData.comentarios = existingComments;
+    const incomingEvidencias = Array.isArray(evidencias) && evidencias.length > 0 ? evidencias : (Array.isArray(adjuntos) ? adjuntos : []);
+    
+    // Determinar detalle y tipo de acción de auditoría
+    let accionEvento = accion || 'CAMBIO_ESTADO';
+    let textoEvento = comentario || '';
+    if (nuevoEstado === 'Aprobada' || accion === 'APROBACION') {
+      accionEvento = 'APROBACION';
+      textoEvento = comentario || 'Gestión verificada y aprobada por el Delegado de Gerencia.';
+    } else if (nuevoEstado === 'En Corrección' || accion === 'SOLICITUD_CORRECCION') {
+      accionEvento = 'SOLICITUD_CORRECCION';
+      textoEvento = instrucciones || comentario || 'El Delegado de Gerencia solicitó correcciones sobre la gestión realizada.';
+    } else if (accion === 'REAPERTURA') {
+      accionEvento = 'REAPERTURA';
+      textoEvento = motivo || comentario || 'Actividad reabierta por el Delegado de Gerencia para seguimiento.';
+    } else if (nuevoEstado === 'Completada' || nuevoEstado === 'Finalizada') {
+      accionEvento = 'EJECUCION';
+      textoEvento = comentario || 'Tarea ejecutada y marcada como completada en terreno.';
     }
 
-    const incomingEvidencias = Array.isArray(evidencias) && evidencias.length > 0 ? evidencias : (Array.isArray(adjuntos) ? adjuntos : []);
+    const eventoAuditoria = {
+      fecha: new Date().toISOString(),
+      usuarioId,
+      usuario: userName,
+      accion: accionEvento,
+      tipo: 'evento',
+      estadoAnterior: actividad.estado,
+      estadoNuevo: nuevoEstado,
+      texto: textoEvento,
+      evidencias: incomingEvidencias.length > 0 ? incomingEvidencias : undefined
+    };
+
+    existingComments.push(eventoAuditoria);
+    updateData.comentarios = existingComments;
+
     if (incomingEvidencias.length > 0) {
       const existingEvidencias = Array.isArray(actividad.evidencias) ? actividad.evidencias : [];
       updateData.evidencias = [...existingEvidencias, ...incomingEvidencias];
@@ -181,32 +259,51 @@ class ActividadesService {
       where: { id: actividadId },
       data: updateData,
       include: {
-        usuario: { select: { id: true, nombre: true, apellido: true } }
+        usuario: { select: { id: true, nombre: true, apellido: true } },
+        asignadoPor: { select: { id: true, nombre: true, apellido: true } }
       }
     });
 
-    // Notificar al Delegado de Gerencia sobre el registro de cumplimiento
-    if (actividad.asignadoPorId && actividad.asignadoPorId !== usuarioId) {
-      try {
-        const asesor = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, user: true } });
-        const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
-        const esRuta = (actividad.codigo || '').startsWith('RUT-') || (actividad.titulo || '').toLowerCase().startsWith('ruta:');
+    // Notificaciones cruzadas automáticas
+    try {
+      const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+      const esRuta = (actividad.codigo || '').startsWith('RUT-') || (actividad.titulo || '').toLowerCase().startsWith('ruta:');
+      
+      // Si el Delegado solicita corrección o aprueba, notificar al asesor
+      if ((nuevoEstado === 'En Corrección' || nuevoEstado === 'Aprobada') && actividad.usuarioId) {
+        await prisma.notificacion.create({
+          data: {
+            id: notifId,
+            paraId: actividad.usuarioId,
+            titulo: nuevoEstado === 'Aprobada' ? 'Gestión de Tarea Aprobada' : '⚠️ Solicitud de Corrección en Tarea',
+            mensaje: nuevoEstado === 'Aprobada'
+              ? `El Delegado de Gerencia ${userName} ha aprobado la gestión de la tarea: "${actividad.titulo}".`
+              : `El Delegado de Gerencia ${userName} ha devuelto la tarea "${actividad.titulo}" para corrección: "${textoEvento}".`,
+            de: userName,
+            tipo: nuevoEstado === 'Aprobada' ? 'tarea_aprobada' : 'tarea_correccion',
+            fecha: new Date(),
+            leida: false,
+            targetModule: 'comercial_campo'
+          }
+        });
+      } else if ((nuevoEstado === 'Completada' || nuevoEstado === 'Finalizada') && actividad.asignadoPorId && actividad.asignadoPorId !== usuarioId) {
+        // Asesor cumplió la tarea: notificar al Delegado
         await prisma.notificacion.create({
           data: {
             id: notifId,
             paraId: actividad.asignadoPorId,
-            titulo: esRuta ? 'Cumplimiento de Ruta Registrado' : 'Cumplimiento de Actividad Registrado',
-            mensaje: `El asesor ${asesor?.nombre || asesor?.user || 'Comercial'} actualizó el estado a "${estado}" para: "${actividad.titulo}".${comentario ? ` Observaciones: ${comentario}` : ''}`,
-            de: `${asesor?.nombre || asesor?.user || 'Comercial en Campo'}`,
+            titulo: esRuta ? 'Cumplimiento de Ruta Registrado' : 'Cumplimiento de Tarea Registrado',
+            mensaje: `El asesor ${userName} completó la tarea: "${actividad.titulo}".${comentario ? ` Observaciones: ${comentario}` : ''}`,
+            de: userName,
             tipo: 'cumplimiento_asignacion',
             fecha: new Date(),
             leida: false,
             targetModule: 'control_gerencial'
           }
         });
-      } catch (errNotif) {
-        console.error('Error notificando cumplimiento al Delegado:', errNotif);
       }
+    } catch (errNotif) {
+      console.error('Error generando notificación de estado:', errNotif);
     }
 
     return { success: true, actividad: actividadActualizada };

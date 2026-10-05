@@ -42,11 +42,11 @@ function initSocket(server) {
                 try {
                     await prisma.user.updateMany({
                         where: { user: { equals: uStr, mode: 'insensitive' } },
-                        data: { isOnline: true }
+                        data: { isOnline: true, lastLogin: new Date() }
                     });
                     broadcastUpdate('DB_UPDATE');
                 } catch (err) {
-                    console.error("Error setting isOnline true:", err);
+                    console.error("Error setting isOnline and lastLogin true:", err);
                 }
             }
         });

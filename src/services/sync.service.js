@@ -1348,6 +1348,80 @@ class SyncService {
       }
     }
 
+    // 16. Roles y Permisos (Protección Jerárquica Absoluta del Administrador Máster)
+    if (diff.roles) {
+      const isMasterRoleUser = user && (
+        String(user.roleId) === '1' ||
+        user.roleId === 1 ||
+        String(user.user || '').toLowerCase() === 'admin'
+      );
+
+      // Solo el Administrador Máster puede crear, modificar o eliminar roles
+      if (isMasterRoleUser) {
+        // Eliminar roles (Protegiendo siempre el rol 1)
+        const toDelete = (diff.roles.deleted || []).filter(id => String(id) !== '1');
+        if (toDelete.length > 0) {
+          await tx.role.deleteMany({
+            where: { id: { in: toDelete } }
+          });
+        }
+
+        // Upsert roles
+        for (const item of diff.roles.upserted || []) {
+          const isTargetRole1 = String(item.id) === '1';
+          const cleanName = (item.name || '').trim();
+
+          // Validar que roles secundarios no usurpen nomenclatura máster
+          let finalName = cleanName;
+          if (!isTargetRole1) {
+            const lower = cleanName.toLowerCase();
+            if (lower.includes('master') || lower.includes('máster') || lower.includes('super admin')) {
+              finalName = cleanName.replace(/m[aá]ster/gi, 'Avanzado').replace(/super\s*admin/gi, 'Coordinador');
+            }
+          } else {
+            finalName = 'ADMINISTRADOR MÁSTER';
+          }
+
+          let finalPerms = item.permissions;
+          if (typeof finalPerms !== 'string') {
+            finalPerms = JSON.stringify(finalPerms || {});
+          }
+          if (isTargetRole1) {
+            finalPerms = JSON.stringify({ isSuperAdmin: true, fullAccess: true });
+          }
+
+          await tx.role.upsert({
+            where: { id: String(item.id) },
+            update: {
+              name: finalName,
+              modules: Array.isArray(item.modules) ? item.modules : [],
+              permissions: finalPerms,
+              canAssignSales: Boolean(item.canAssignSales),
+              clientLevel: isTargetRole1 ? 1 : (item.clientLevel || 3),
+              canManageEvals: isTargetRole1 ? true : Boolean(item.canManageEvals),
+              canCreateMeetings: isTargetRole1 ? true : Boolean(item.canCreateMeetings),
+              viewTechPrice: isTargetRole1 ? true : Boolean(item.viewTechPrice),
+              viewWholesalePrice: isTargetRole1 ? true : Boolean(item.viewWholesalePrice),
+              viewCostPrice: isTargetRole1 ? true : Boolean(item.viewCostPrice),
+            },
+            create: {
+              id: String(item.id),
+              name: finalName,
+              modules: Array.isArray(item.modules) ? item.modules : [],
+              permissions: finalPerms,
+              canAssignSales: Boolean(item.canAssignSales),
+              clientLevel: isTargetRole1 ? 1 : (item.clientLevel || 3),
+              canManageEvals: isTargetRole1 ? true : Boolean(item.canManageEvals),
+              canCreateMeetings: isTargetRole1 ? true : Boolean(item.canCreateMeetings),
+              viewTechPrice: isTargetRole1 ? true : Boolean(item.viewTechPrice),
+              viewWholesalePrice: isTargetRole1 ? true : Boolean(item.viewWholesalePrice),
+              viewCostPrice: isTargetRole1 ? true : Boolean(item.viewCostPrice),
+            }
+          });
+        }
+      }
+    }
+
     // 17. PendingResets
     if (diff.pendingResets) {
       await flatUpsert('pendingReset', diff.pendingResets.upserted || []);

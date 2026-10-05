@@ -1,6 +1,22 @@
 const jwt = require('jsonwebtoken');
 const prisma = require('../prisma');
 
+const userLastActivityMap = new Map();
+
+const trackUserLiveActivity = (userId) => {
+    if (!userId) return;
+    const now = Date.now();
+    const last = userLastActivityMap.get(userId) || 0;
+    // Throttle: actualizar cada 5 minutos por usuario activo en base de datos
+    if (now - last > 5 * 60 * 1000) {
+        userLastActivityMap.set(userId, now);
+        prisma.user.update({
+            where: { id: userId },
+            data: { lastLogin: new Date(), isOnline: true }
+        }).catch(() => {});
+    }
+};
+
 const authenticateToken = async (req, res, next) => {
     const bearerToken = req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null;
     const cookieToken = req.cookies?.token || null;
@@ -20,6 +36,7 @@ const authenticateToken = async (req, res, next) => {
 
     if (authenticatedUser) {
         req.user = authenticatedUser;
+        trackUserLiveActivity(authenticatedUser.id);
         try {
             const dbU = await prisma.user.findUnique({
                 where: { id: authenticatedUser.id },
@@ -59,6 +76,7 @@ const authenticateToken = async (req, res, next) => {
                         esDelegadoGerencia: Boolean(dbU.esDelegadoGerencia),
                         role: dbU.role
                     };
+                    trackUserLiveActivity(dbU.id);
                     return next();
                 }
             } catch (e) {}
@@ -76,6 +94,7 @@ const optionalAuthenticateToken = (req, res, next) => {
     jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', async (err, user) => {
         if (!err && user) {
             req.user = user;
+            if (user.id) trackUserLiveActivity(user.id);
             if (user.id && (user.esDelegadoGerencia === undefined || user.esComercialCampo === undefined)) {
                 try {
                     const dbU = await prisma.user.findUnique({

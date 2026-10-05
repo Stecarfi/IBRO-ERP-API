@@ -490,6 +490,13 @@ class CampoController {
         titulo: req.body.titulo
       });
 
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'CREAR', actividad: result.actividad, tarea: result.actividad });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'CREAR', tarea: result.actividad, actividad: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
+
       res.status(201).json(result);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -506,6 +513,14 @@ class CampoController {
         actividadId: id,
         nuevoEstado: req.body.estado
       });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ESTADO', actividad: result.actividad, tarea: result.actividad });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'ESTADO', tarea: result.actividad, actividad: result.actividad });
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'ESTADO', ruta: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
 
       res.json(result);
     } catch (err) {
@@ -966,15 +981,87 @@ class CampoController {
       if (titulo !== undefined) updateData.titulo = titulo.trim();
       if (descripcion !== undefined) updateData.descripcion = descripcion.trim();
       if (prioridad !== undefined) updateData.prioridad = prioridad;
-      if (fechaProgramada !== undefined) updateData.fechaProgramada = new Date(fechaProgramada);
+      if (fechaProgramada !== undefined) {
+        updateData.fechaProgramada = String(fechaProgramada).includes('T')
+          ? new Date(fechaProgramada)
+          : new Date(`${String(fechaProgramada).split('T')[0]}T12:00:00.000Z`);
+      }
       if (horaEstimada !== undefined) updateData.horaEstimada = horaEstimada;
-      if (estado !== undefined) {
-        updateData.estado = estado;
-        if (estado === 'Finalizada') updateData.fechaFinalizacion = new Date();
-      }
-      if (usuarioId !== undefined && esAdminODelegado) {
+      // Auditoría detallada de cambios
+      const existingComments = Array.isArray(actExistente.comentarios) ? [...actExistente.comentarios] : [];
+      const userNom = `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user;
+
+      if (usuarioId !== undefined && usuarioId !== actExistente.usuarioId && esAdminODelegado) {
         updateData.usuarioId = usuarioId;
+        let oldResp = 'Anterior';
+        let newResp = 'Nuevo';
+        try {
+          const uOld = await prisma.user.findUnique({ where: { id: actExistente.usuarioId }, select: { nombre: true, apellido: true } });
+          if (uOld) oldResp = `${uOld.nombre} ${uOld.apellido || ''}`.trim();
+          const uNew = await prisma.user.findUnique({ where: { id: usuarioId }, select: { nombre: true, apellido: true } });
+          if (uNew) newResp = `${uNew.nombre} ${uNew.apellido || ''}`.trim();
+        } catch (e) {}
+
+        existingComments.push({
+          fecha: new Date().toISOString(),
+          usuarioId: req.user.id,
+          usuario: userNom,
+          accion: 'REASIGNACION',
+          tipo: 'evento',
+          responsableAnterior: oldResp,
+          responsableActual: newResp,
+          responsableActualId: usuarioId,
+          texto: `Tarea reasignada de ${oldResp} a ${newResp} por el Delegado de Gerencia.`
+        });
+
+        // Notificar al nuevo asesor
+        try {
+          const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+          await prisma.notificacion.create({
+            data: {
+              id: notifId,
+              paraId: usuarioId,
+              titulo: 'Tarea Reasignada por el Delegado',
+              mensaje: `El Delegado de Gerencia ${userNom} le ha reasignado la tarea: "${actExistente.titulo}".`,
+              de: userNom,
+              tipo: 'actividad_reasignada',
+              fecha: new Date(),
+              leida: false,
+              targetModule: 'comercial_campo'
+            }
+          });
+        } catch (eNotif) {}
       }
+
+      if (estado !== undefined && estado !== actExistente.estado) {
+        updateData.estado = estado;
+        if (estado === 'Finalizada' || estado === 'Completada' || estado === 'Aprobada') updateData.fechaFinalizacion = new Date();
+        else updateData.fechaFinalizacion = null;
+
+        existingComments.push({
+          fecha: new Date().toISOString(),
+          usuarioId: req.user.id,
+          usuario: userNom,
+          accion: 'CAMBIO_ESTADO',
+          tipo: 'evento',
+          estadoAnterior: actExistente.estado,
+          estadoNuevo: estado,
+          texto: `Estado modificado de "${actExistente.estado}" a "${estado}" por ${userNom}.`
+        });
+      }
+
+      if (Object.keys(updateData).some(k => k === 'titulo' || k === 'descripcion' || k === 'prioridad' || k === 'fechaProgramada')) {
+        existingComments.push({
+          fecha: new Date().toISOString(),
+          usuarioId: req.user.id,
+          usuario: userNom,
+          accion: 'MODIFICACION',
+          tipo: 'evento',
+          texto: `Parámetros actualizados por ${userNom}: ${Object.keys(updateData).filter(k => k !== 'comentarios').join(', ')}.`
+        });
+      }
+
+      updateData.comentarios = existingComments;
 
       const actividadActualizada = await prisma.actividadCampo.update({
         where: { id },
@@ -990,7 +1077,109 @@ class CampoController {
         camposModificados: Object.keys(updateData)
       });
 
-      res.json({ success: true, actividad: actividadActualizada });
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'MODIFICAR', actividad: actividadActualizada, tarea: actividadActualizada });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'MODIFICAR', tarea: actividadActualizada, actividad: actividadActualizada });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, actividad: actividadActualizada, tarea: actividadActualizada });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Aprobar formalmente la gestión de una tarea o ruta
+  async aprobarActividad(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede aprobar gestiones de campo.' });
+      }
+      const { id } = req.params;
+      const { comentario, observacion } = req.body;
+      const result = await actividadesService.actualizarEstado(req.user.id, id, {
+        accion: 'APROBACION',
+        estado: 'Aprobada',
+        comentario: comentario || observacion || 'Gestión verificada y aprobada por el Delegado de Gerencia.'
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'APROBAR', actividad: result.actividad, tarea: result.actividad });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'APROBAR', tarea: result.actividad });
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'APROBAR', ruta: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Gestión aprobada exitosamente.', actividad: result.actividad });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Solicitar corrección / devolver tarea al asesor
+  async solicitarCorreccionActividad(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede solicitar correcciones.' });
+      }
+      const { id } = req.params;
+      const { instrucciones, observaciones, comentario } = req.body;
+      const textoInstrucciones = instrucciones || observaciones || comentario;
+      if (!textoInstrucciones || !textoInstrucciones.trim()) {
+        return res.status(400).json({ error: 'Debe especificar las instrucciones o motivo de la corrección.' });
+      }
+
+      const result = await actividadesService.actualizarEstado(req.user.id, id, {
+        accion: 'SOLICITUD_CORRECCION',
+        estado: 'En Corrección',
+        instrucciones: textoInstrucciones.trim(),
+        comentario: textoInstrucciones.trim()
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'SOLICITAR_CORRECCION', actividad: result.actividad, tarea: result.actividad });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'SOLICITAR_CORRECCION', tarea: result.actividad });
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'SOLICITAR_CORRECCION', ruta: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Solicitud de corrección enviada al asesor.', actividad: result.actividad });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Reabrir tarea o ruta para seguimiento
+  async reabrirActividad(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede reabrir actividades o rutas.' });
+      }
+      const { id } = req.params;
+      const { motivo, nuevaFecha } = req.body;
+
+      const result = await actividadesService.actualizarEstado(req.user.id, id, {
+        accion: 'REAPERTURA',
+        estado: 'En ejecucion',
+        motivo: motivo || 'Reapertura para seguimiento gerencial.',
+        nuevaFecha
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'REABRIR', actividad: result.actividad, tarea: result.actividad });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'REABRIR', tarea: result.actividad });
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'REABRIR', ruta: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Actividad reabierta correctamente.', actividad: result.actividad });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -1006,7 +1195,15 @@ class CampoController {
       await prisma.actividadCampo.delete({ where: { id } });
 
       await this.registrarAuditoria(req.user.id, 'CAMPO_ACTIVIDAD_ELIMINADA', { actividadId: id });
-      res.json({ success: true });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ELIMINAR', id });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'ELIMINAR', id });
+        io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Tarea / Actividad eliminada correctamente.' });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -1041,7 +1238,9 @@ class CampoController {
       if (!usuarioId) return res.status(400).json({ error: 'Debe seleccionar un comercial responsable para la ruta.' });
       if (!fechaFinal) return res.status(400).json({ error: 'Debe especificar la fecha de la ruta.' });
 
-      const fechaObj = new Date(fechaFinal);
+      const fechaObj = String(fechaFinal).includes('T')
+        ? new Date(fechaFinal)
+        : new Date(`${String(fechaFinal).split('T')[0]}T12:00:00.000Z`);
       const countAct = await prisma.actividadCampo.count();
       let codigoRuta = `RUT-${String(countAct + 1).padStart(5, '0')}`;
       const existsRuta = await prisma.actividadCampo.findUnique({ where: { codigo: codigoRuta } });
@@ -1071,6 +1270,10 @@ class CampoController {
               texto: `Ruta programada por el Delegado de Gerencia.`
             }
           ]
+        },
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
+          asignadoPor: { select: { id: true, nombre: true, apellido: true } }
         }
       });
 
@@ -1113,7 +1316,7 @@ class CampoController {
       // Notificar inmediatamente al Comercial en Campo sobre la ruta asignada
       try {
         const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
-        const fechaTexto = fechaFinal ? new Date(fechaFinal).toISOString().split('T')[0] : 'próximamente';
+        const fechaTexto = fechaFinal ? String(fechaFinal).split('T')[0] : 'próximamente';
         const nuevaNotif = await prisma.notificacion.create({
           data: {
             id: notifId,
@@ -1132,6 +1335,13 @@ class CampoController {
         }
       } catch (errNotif) {
         console.error('Error generando notificación de ruta para comercial:', errNotif);
+      }
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'CREAR', ruta: actividadRuta });
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'CREAR', actividad: actividadRuta, tarea: actividadRuta });
+        io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
       }
 
       res.status(201).json({
@@ -1242,7 +1452,9 @@ class CampoController {
 
       const nuevaFecha = fechaProgramada || fechaRuta;
       if (nuevaFecha) {
-        updateData.fechaProgramada = new Date(nuevaFecha);
+        updateData.fechaProgramada = String(nuevaFecha).includes('T')
+          ? new Date(nuevaFecha)
+          : new Date(`${String(nuevaFecha).split('T')[0]}T12:00:00.000Z`);
       }
 
       if (prioridad) updateData.prioridad = prioridad;
@@ -1273,6 +1485,13 @@ class CampoController {
         titulo: rutaActualizada.titulo,
         cambios: updateData
       });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'MODIFICAR', ruta: rutaActualizada });
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'MODIFICAR', actividad: rutaActualizada, tarea: rutaActualizada });
+        io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
+      }
 
       res.json({
         success: true,
@@ -1316,6 +1535,13 @@ class CampoController {
         codigo: rutaExistente.codigo,
         titulo: rutaExistente.titulo
       });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'ELIMINAR', id });
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ELIMINAR', id });
+        io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
+      }
 
       res.json({
         success: true,
@@ -1367,6 +1593,13 @@ class CampoController {
           totalEliminadas: result.count,
           usuarioFiltro: usuarioId || 'TODOS'
         });
+
+        const io = req.app ? req.app.get('io') : null;
+        if (io) {
+          io.emit('CAMPO_RUTA_UPDATE', { accion: 'ELIMINAR_TODAS', ids });
+          io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ELIMINAR_TODAS', ids });
+          io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
+        }
 
         return res.json({
           success: true,
@@ -1789,11 +2022,11 @@ class CampoController {
         where: {
           titulo: { startsWith: 'Ruta:' },
           fechaProgramada: { gte: startOfDay, lte: endOfDay },
-          estado: { not: 'Finalizada' }
+          estado: { notIn: ['Finalizada', 'Completada', 'Cancelada'] }
         }
       });
 
-      // 9. Actividades asignadas hoy
+      // 9. Actividades / Tareas asignadas hoy
       const actividadesHoy = await prisma.actividadCampo.findMany({
         where: {
           usuarioId: { in: comercialesIds },
@@ -1801,7 +2034,7 @@ class CampoController {
         }
       });
       const actAsignadasCount = actividadesHoy.length;
-      const actCumplidasCount = actividadesHoy.filter(a => a.estado === 'Finalizada').length;
+      const actCumplidasCount = actividadesHoy.filter(a => a.estado === 'Finalizada' || a.estado === 'Completada').length;
       const pctCumplimiento = actAsignadasCount > 0
         ? Math.round((actCumplidasCount / actAsignadasCount) * 100)
         : (totalVisitasHoy > 0 ? Math.round((realizadasHoy / totalVisitasHoy) * 100) : 100);
@@ -1825,6 +2058,8 @@ class CampoController {
           rutasActivas,
           actividadesAsignadas: actAsignadasCount,
           actividadesCumplidas: actCumplidasCount,
+          tareasAsignadas: actAsignadasCount,
+          tareasCumplidas: actCumplidasCount,
           pctCumplimiento
         },
         comerciales: comercialesDetalle,
