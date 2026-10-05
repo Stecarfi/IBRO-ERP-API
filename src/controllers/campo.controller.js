@@ -2574,6 +2574,18 @@ class CampoController {
         return res.status(403).json({ error: 'No autorizado para editar este movimiento.' });
       }
 
+      // Resolver fecha base de la parada
+      let targetFechaStr = fecha;
+      if (!targetFechaStr) {
+        if (movimiento.checkInHora) {
+          targetFechaStr = new Date(movimiento.checkInHora).toISOString().split('T')[0];
+        } else if (movimiento.fechaProgramada) {
+          targetFechaStr = new Date(movimiento.fechaProgramada).toISOString().split('T')[0];
+        } else {
+          targetFechaStr = new Date().toISOString().split('T')[0];
+        }
+      }
+
       // Resolver hora de llegada
       let newCheckIn = movimiento.checkInHora;
       if (horaLlegada) {
@@ -2581,34 +2593,48 @@ class CampoController {
           newCheckIn = new Date(horaLlegada);
         } else if (typeof horaLlegada === 'string' && horaLlegada.includes(':')) {
           const [hh, mm] = horaLlegada.split(':');
-          const baseDate = fecha ? new Date(`${fecha}T12:00:00`) : new Date(movimiento.checkInHora || new Date());
+          const baseDate = new Date(`${targetFechaStr}T12:00:00`);
           baseDate.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
           newCheckIn = baseDate;
         } else {
           newCheckIn = new Date(horaLlegada);
         }
+      } else if (fecha && movimiento.checkInHora) {
+        // Se cambió fecha pero no hora de llegada
+        const oldIn = new Date(movimiento.checkInHora);
+        const baseDate = new Date(`${targetFechaStr}T12:00:00`);
+        baseDate.setHours(oldIn.getHours(), oldIn.getMinutes(), oldIn.getSeconds(), 0);
+        newCheckIn = baseDate;
       }
 
       // Resolver hora de salida
       let newCheckOut = movimiento.checkOutHora;
       if (horaSalida !== undefined) {
-        if (!horaSalida) {
+        if (!horaSalida || !String(horaSalida).trim()) {
           newCheckOut = null;
         } else if (typeof horaSalida === 'string' && horaSalida.includes('T')) {
           newCheckOut = new Date(horaSalida);
         } else if (typeof horaSalida === 'string' && horaSalida.includes(':')) {
           const [hh, mm] = horaSalida.split(':');
-          const baseDate = newCheckIn ? new Date(newCheckIn) : new Date();
+          const baseDate = new Date(`${targetFechaStr}T12:00:00`);
           baseDate.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
           newCheckOut = baseDate;
         } else {
           newCheckOut = new Date(horaSalida);
         }
+      } else if (fecha && movimiento.checkOutHora) {
+        // Se cambió fecha pero no hora de salida
+        const oldOut = new Date(movimiento.checkOutHora);
+        const baseDate = new Date(`${targetFechaStr}T12:00:00`);
+        baseDate.setHours(oldOut.getHours(), oldOut.getMinutes(), oldOut.getSeconds(), 0);
+        newCheckOut = baseDate;
       }
 
       let duracionMin = movimiento.duracionMin || 0;
       if (newCheckIn && newCheckOut) {
         duracionMin = Math.max(1, Math.round((new Date(newCheckOut) - new Date(newCheckIn)) / 60000));
+      } else if (newCheckIn && !newCheckOut) {
+        duracionMin = Math.max(1, Math.round((Date.now() - new Date(newCheckIn)) / 60000));
       }
 
       const estado = newCheckOut ? 'Realizada' : (newCheckIn ? 'En Curso' : movimiento.estado);
@@ -2617,7 +2643,8 @@ class CampoController {
         estado,
         checkInHora: newCheckIn,
         checkOutHora: newCheckOut,
-        duracionMin
+        duracionMin,
+        fechaProgramada: newCheckIn ? new Date(newCheckIn) : (fecha ? new Date(`${targetFechaStr}T12:00:00.000Z`) : movimiento.fechaProgramada)
       };
 
       if (lugar !== undefined && String(lugar).trim()) dataToUpdate.resultadoResumen = String(lugar).trim();
@@ -2627,11 +2654,23 @@ class CampoController {
       if (observaciones !== undefined) dataToUpdate.observaciones = String(observaciones).trim() || null;
       if (resultado !== undefined && String(resultado).trim()) dataToUpdate.resultadoVisita = String(resultado).trim();
 
-      if (direccion !== undefined && String(direccion).trim() && movimiento.clienteExternoId) {
-        await prisma.clienteExternoCampo.update({
-          where: { id: movimiento.clienteExternoId },
-          data: { direccion: String(direccion).trim() }
-        }).catch(() => {});
+      if (direccion !== undefined) {
+        const dirTrimmed = String(direccion).trim();
+        if (movimiento.clienteExternoId) {
+          await prisma.clienteExternoCampo.update({
+            where: { id: movimiento.clienteExternoId },
+            data: { direccion: dirTrimmed }
+          }).catch(() => {});
+        }
+        if (dirTrimmed) {
+          let obs = dataToUpdate.observaciones !== undefined ? (dataToUpdate.observaciones || '') : (movimiento.observaciones || '');
+          if (obs.includes('(') && obs.includes(')')) {
+            obs = obs.replace(/\((.*?)\)/, `(${dirTrimmed})`);
+          } else {
+            obs = obs ? `${obs} (${dirTrimmed})` : `(${dirTrimmed})`;
+          }
+          dataToUpdate.observaciones = obs;
+        }
       }
 
       const actualizado = await prisma.visitaCampo.update({
@@ -2667,10 +2706,25 @@ class CampoController {
         duracionMin
       }, { usuarioNombre }, req);
 
+      let dirRetorno = actualizado.clienteExterno?.direccion || actualizado.cliente?.dir || (typeof direccion === 'string' ? direccion : '') || '';
+      if (!dirRetorno && actualizado.observaciones && actualizado.observaciones.includes('(') && actualizado.observaciones.includes(')')) {
+        const match = actualizado.observaciones.match(/\((.*?)\)/);
+        if (match && match[1]) dirRetorno = match[1];
+      }
+
+      const movimientoRetorno = {
+        ...actualizado,
+        lugar: actualizado.resultadoResumen || actualizado.clienteExterno?.nombre || actualizado.cliente?.nom || 'Punto de Ruta',
+        direccion: dirRetorno,
+        motivo: actualizado.tipoVisita,
+        contacto: actualizado.contactoAtendio || actualizado.clienteExterno?.contacto || '',
+        resultado: actualizado.resultadoVisita || (actualizado.checkOutHora ? 'Completada' : 'En Curso')
+      };
+
       res.json({
         success: true,
         message: 'Ruta / Parada actualizada exitosamente.',
-        movimiento: actualizado
+        movimiento: movimientoRetorno
       });
     } catch (err) {
       console.error('[actualizarMovimiento Error]', err);
@@ -2734,9 +2788,8 @@ class CampoController {
 
       const where = {
         OR: [
-          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
           { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { createdAt: { gte: startOfDay, lte: endOfDay } }
+          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
         ]
       };
 

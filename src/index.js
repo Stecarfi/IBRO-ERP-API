@@ -4481,6 +4481,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 const campoRoutes = require('./routes/campo.routes');
 app.use('/api/operaciones-campo', campoRoutes);
 app.use('/api/campo', campoRoutes);
+app.use('/operaciones-campo', campoRoutes);
+app.use('/campo', campoRoutes);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
