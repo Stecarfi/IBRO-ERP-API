@@ -8,7 +8,7 @@ class OperacionExternaService {
   /**
    * Obtiene la cartera de clientes externos y prospectos con filtros
    */
-  async getClientesExternos({ usuarioId, etapa, tipo, clasificacion, search, esDelegado = false }) {
+  async getClientesExternos({ usuarioId, etapa, tipo, search, esDelegado = false }) {
     const where = {};
 
     if (!esDelegado && usuarioId) {
@@ -23,10 +23,6 @@ class OperacionExternaService {
 
     if (tipo && tipo !== 'TODOS') {
       where.tipoRegistro = tipo;
-    }
-
-    if (clasificacion && clasificacion !== 'TODAS') {
-      where.clasificacion = clasificacion;
     }
 
     if (search && search.trim()) {
@@ -57,65 +53,6 @@ class OperacionExternaService {
       },
       orderBy: { createdAt: 'desc' }
     });
-  }
-
-  // =================================================================
-  // 1.1 CLASIFICACIÓN CONFIGURABLE DE CLIENTES
-  // =================================================================
-  async getClasificaciones(incluirInactivos = false) {
-    const where = incluirInactivos ? {} : { activo: true };
-    return prisma.clasificacionClienteCampo.findMany({
-      where,
-      orderBy: { nombre: 'asc' }
-    });
-  }
-
-  async crearClasificacion(data) {
-    const { nombre, descripcion = '', colorHex = '#1E88FF', activo = true } = data;
-    if (!nombre || !nombre.trim()) throw new Error('El nombre de la clasificación es obligatorio');
-    return prisma.clasificacionClienteCampo.create({
-      data: {
-        nombre: nombre.trim(),
-        descripcion: descripcion ? descripcion.trim() : null,
-        colorHex: colorHex || '#1E88FF',
-        activo: !!activo,
-        esSistema: false
-      }
-    });
-  }
-
-  async actualizarClasificacion(id, data) {
-    const { nombre, descripcion, colorHex, activo } = data;
-    const updateData = {};
-    if (nombre !== undefined) updateData.nombre = nombre.trim();
-    if (descripcion !== undefined) updateData.descripcion = descripcion ? descripcion.trim() : null;
-    if (colorHex !== undefined) updateData.colorHex = colorHex;
-    if (activo !== undefined) updateData.activo = Boolean(activo);
-    return prisma.clasificacionClienteCampo.update({
-      where: { id },
-      data: updateData
-    });
-  }
-
-  async eliminarClasificacion(id) {
-    const cat = await prisma.clasificacionClienteCampo.findUnique({ where: { id } });
-    if (!cat) throw new Error('Clasificación no encontrada');
-    if (cat.esSistema) {
-      return prisma.clasificacionClienteCampo.update({
-        where: { id },
-        data: { activo: false }
-      });
-    }
-    const countClientes = await prisma.clienteExternoCampo.count({
-      where: { clasificacion: cat.nombre }
-    });
-    if (countClientes > 0) {
-      return prisma.clasificacionClienteCampo.update({
-        where: { id },
-        data: { activo: false }
-      });
-    }
-    return prisma.clasificacionClienteCampo.delete({ where: { id } });
   }
 
   /**
@@ -164,7 +101,6 @@ class OperacionExternaService {
       ciudad = 'Barranquilla',
       direccion,
       sectorEconomico = 'Comercio',
-      clasificacion = 'Cliente Comercial',
       origen = 'En Frio / Puerta a Puerta',
       tipoRegistro = 'Cliente Potencial', // "Prospecto" | "Cliente Potencial" | "Cliente Activo" | "Cliente Inactivo"
       etapaEmbudo = 'Prospecto',
@@ -191,7 +127,6 @@ class OperacionExternaService {
         ciudad,
         direccion: direccion || null,
         sectorEconomico,
-        clasificacion,
         origen,
         tipoRegistro,
         etapaEmbudo,
@@ -376,50 +311,6 @@ class OperacionExternaService {
     });
 
     return nuevaCotizacion;
-  }
-
-  /**
-   * Actualiza una cotización externa existente
-   */
-  async actualizarCotizacionExterna(id, usuarioId, data) {
-    const existing = await prisma.cotizacionExternaCampo.findUnique({
-      where: { id }
-    });
-    if (!existing) throw new Error('Cotización no encontrada');
-
-    const updateData = {};
-    if (data.validezDias !== undefined) updateData.validezDias = parseInt(data.validezDias) || 15;
-    if (data.estado !== undefined) updateData.estado = data.estado;
-    if (data.observaciones !== undefined) updateData.observaciones = data.observaciones;
-    if (data.items !== undefined) {
-      updateData.items = data.items;
-      if (Array.isArray(data.items)) {
-        updateData.total = data.items.reduce((acc, it) => acc + (parseFloat(it.subtotal) || (parseFloat(it.cantidad || 1) * parseFloat(it.precioUnit || 0))), 0);
-      }
-    }
-    if (data.total !== undefined && updateData.total === undefined) {
-      updateData.total = parseFloat(data.total) || 0;
-    }
-
-    const historial = Array.isArray(existing.historial) ? [...existing.historial] : [];
-    historial.push({
-      fecha: new Date(),
-      evento: 'Actualización de cotización',
-      usuarioId,
-      estado: updateData.estado || existing.estado,
-      total: updateData.total !== undefined ? updateData.total : existing.total
-    });
-    updateData.historial = historial;
-    updateData.updatedAt = new Date();
-
-    return await prisma.cotizacionExternaCampo.update({
-      where: { id },
-      data: updateData,
-      include: {
-        clienteExterno: true,
-        comercial: { select: { id: true, nombre: true, apellido: true } }
-      }
-    });
   }
 
   /**
@@ -639,6 +530,46 @@ class OperacionExternaService {
 
     return conteo;
   }
+
+  /**
+   * Elimina un cliente externo y limpia sus relaciones en cascada
+   */
+  async eliminarClienteExterno(id) {
+    const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
+    if (!cliente) throw new Error('Cliente externo no encontrado');
+
+    await prisma.seguimientoCampo.deleteMany({ where: { clienteExternoId: id } }).catch(() => {});
+    await prisma.cotizacionExternaCampo.deleteMany({ where: { clienteExternoId: id } }).catch(() => {});
+    await prisma.ventaExternaCampo.deleteMany({ where: { clienteExternoId: id } }).catch(() => {});
+    await prisma.visitaCampo.deleteMany({ where: { clienteExternoId: id } }).catch(() => {});
+
+    return prisma.clienteExternoCampo.delete({ where: { id } });
+  }
+
+  /**
+   * Elimina todos los clientes externos con confirmación y cascada
+   */
+  async eliminarTodosClientesExternos({ usuarioId = null, esDelegado = false }) {
+    const where = {};
+    if (!esDelegado && usuarioId) {
+      where.comercialId = usuarioId;
+    } else if (usuarioId && usuarioId !== 'TODOS') {
+      where.comercialId = usuarioId;
+    }
+
+    const clientes = await prisma.clienteExternoCampo.findMany({ where, select: { id: true } });
+    const ids = clientes.map(c => c.id);
+
+    if (ids.length === 0) return { count: 0 };
+
+    await prisma.seguimientoCampo.deleteMany({ where: { clienteExternoId: { in: ids } } }).catch(() => {});
+    await prisma.cotizacionExternaCampo.deleteMany({ where: { clienteExternoId: { in: ids } } }).catch(() => {});
+    await prisma.ventaExternaCampo.deleteMany({ where: { clienteExternoId: { in: ids } } }).catch(() => {});
+    await prisma.visitaCampo.deleteMany({ where: { clienteExternoId: { in: ids } } }).catch(() => {});
+
+    return prisma.clienteExternoCampo.deleteMany({ where: { id: { in: ids } } });
+  }
 }
 
 module.exports = new OperacionExternaService();
+

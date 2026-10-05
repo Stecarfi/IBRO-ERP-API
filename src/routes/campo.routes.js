@@ -29,6 +29,8 @@ router.get('/visitas/historial', (req, res) => campoController.getHistorialVisit
 router.get('/visitas/todas', (req, res) => campoController.getHistorialVisitas(req, res));
 router.post('/visitas/check-in', (req, res) => campoController.checkInVisita(req, res));
 router.post('/visitas/check-out', (req, res) => campoController.checkOutVisita(req, res));
+router.delete('/visitas', (req, res) => campoController.eliminarTodasVisitas(req, res));
+router.delete('/visitas/:id', (req, res) => campoController.eliminarVisita(req, res));
 
 // 4. Prospectos de Campo
 router.post('/prospectos', (req, res) => campoController.crearProspecto(req, res));
@@ -49,6 +51,7 @@ router.post('/zonas', (req, res) => campoController.crearZona(req, res));
 router.get('/actividades', (req, res) => campoController.getActividades(req, res));
 router.post('/actividades', (req, res) => campoController.crearActividad(req, res));
 router.put('/actividades/:id', (req, res) => campoController.modificarActividad(req, res));
+router.delete('/actividades', (req, res) => campoController.eliminarTodasActividades(req, res));
 router.delete('/actividades/:id', (req, res) => campoController.eliminarActividad(req, res));
 router.put('/actividades/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
 router.put('/actividades/:id/cumplimiento', (req, res) => campoController.actualizarEstadoActividad(req, res));
@@ -61,6 +64,7 @@ router.post('/actividades/:id/reabrir', (req, res) => campoController.reabrirAct
 router.get('/tareas', (req, res) => campoController.getActividades(req, res));
 router.post('/tareas', (req, res) => campoController.crearActividad(req, res));
 router.put('/tareas/:id', (req, res) => campoController.modificarActividad(req, res));
+router.delete('/tareas', (req, res) => campoController.eliminarTodasActividades(req, res));
 router.delete('/tareas/:id', (req, res) => campoController.eliminarActividad(req, res));
 router.put('/tareas/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
 router.put('/tareas/:id/cumplimiento', (req, res) => campoController.actualizarEstadoActividad(req, res));
@@ -115,6 +119,9 @@ router.post('/novedades', (req, res) => campoController.crearNovedadDelegado(req
 router.get('/novedades', (req, res) => campoController.getNovedadesComercial(req, res));
 router.get('/novedades/:usuarioId', (req, res) => campoController.getNovedadesComercial(req, res));
 router.put('/novedades/:id/estado', (req, res) => campoController.actualizarEstadoNovedad(req, res));
+router.put('/novedades/:id', (req, res) => campoController.actualizarNovedad(req, res));
+router.delete('/novedades/:id', (req, res) => campoController.eliminarNovedad(req, res));
+router.delete('/novedades', (req, res) => campoController.eliminarTodasNovedades(req, res));
 router.get('/ficha-historica/:usuarioId', (req, res) => campoController.getFichaHistorica(req, res));
 
 // 14. Operación Comercial Externa Independiente (Clientes, Cotizaciones, Ventas y Embudo)
@@ -123,6 +130,8 @@ router.get('/externo/clientes/:id/historial', (req, res) => campoController.getC
 router.get('/externo/clientes/:id', (req, res) => campoController.getClienteExternoById(req, res));
 router.post('/externo/clientes', (req, res) => campoController.crearClienteExterno(req, res));
 router.put('/externo/clientes/:id', (req, res) => campoController.actualizarClienteExterno(req, res));
+router.delete('/externo/clientes/:id', (req, res) => campoController.eliminarClienteExterno(req, res));
+router.delete('/externo/clientes', (req, res) => campoController.eliminarTodosClientesExternos(req, res));
 router.put('/externo/clientes/:id/etapa', (req, res) => campoController.cambiarEtapaEmbudo(req, res));
 
 router.get('/externo/cotizaciones', (req, res) => campoController.getCotizacionesExternas(req, res));
@@ -148,6 +157,8 @@ router.post('/movimientos/salida', (req, res) => campoController.registrarSalida
 router.put('/movimientos/:id', (req, res) => campoController.actualizarMovimiento(req, res));
 router.get('/movimientos/activo', (req, res) => campoController.getMovimientoActivo(req, res));
 router.get('/movimientos/dia', (req, res) => campoController.getMovimientosDia(req, res));
+router.delete('/movimientos/dia', (req, res) => campoController.eliminarMovimientosDia(req, res));
+router.delete('/movimientos', (req, res) => campoController.eliminarMovimientosDia(req, res));
 router.delete('/movimientos/:id', (req, res) => campoController.eliminarMovimiento(req, res));
 
 module.exports = router;

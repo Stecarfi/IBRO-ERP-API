@@ -747,6 +747,95 @@ class CampoController {
     }
   }
 
+  async actualizarNovedad(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede modificar novedades.' });
+      }
+      const { id } = req.params;
+      const { titulo, descripcion, tipo, gravedad, prioridad, fechaCompromiso, accionCorrectiva, estado } = req.body;
+
+      const novedad = await prisma.novedadDelegadoCampo.update({
+        where: { id },
+        data: {
+          ...(titulo ? { titulo } : {}),
+          ...(descripcion ? { descripcion } : {}),
+          ...(tipo ? { tipo } : {}),
+          ...(gravedad || prioridad ? { gravedad: gravedad || prioridad } : {}),
+          ...(fechaCompromiso !== undefined ? { fechaCompromiso: fechaCompromiso ? new Date(fechaCompromiso) : null } : {}),
+          ...(accionCorrectiva !== undefined ? { accionCorrectiva } : {}),
+          ...(estado ? { estado } : {})
+        },
+        include: {
+          delegado: { select: { id: true, nombre: true, apellido: true } },
+          usuario: { select: { id: true, nombre: true, apellido: true } }
+        }
+      });
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_NOVEDAD_UPDATE', { accion: 'ACTUALIZAR', novedad, timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_NOVEDAD_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, novedad });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarNovedad(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar novedades.' });
+      }
+      const { id } = req.params;
+      await prisma.novedadDelegadoCampo.delete({ where: { id } });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_NOVEDAD_ELIMINADA', { novedadId: id }, null, req);
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_NOVEDAD_UPDATE', { accion: 'ELIMINAR', id, timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_NOVEDAD_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Novedad eliminada correctamente.' });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarTodasNovedades(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar todas las novedades.' });
+      }
+      const { usuarioId } = req.query;
+      const where = {};
+      if (usuarioId && usuarioId !== 'TODOS') {
+        where.usuarioId = usuarioId;
+      }
+
+      const result = await prisma.novedadDelegadoCampo.deleteMany({ where });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_TODAS_NOVEDADES_ELIMINADAS', {
+        totalEliminadas: result.count,
+        usuarioFiltro: usuarioId || 'TODOS'
+      }, null, req);
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_NOVEDAD_UPDATE', { accion: 'ELIMINAR_TODAS', timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_NOVEDAD_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, count: result.count, message: `Se eliminaron ${result.count} novedades correctamente.` });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // --- 11. FICHA HISTÓRICA COMPLETA DEL COMERCIAL ---
   async getFichaHistorica(req, res) {
     try {
@@ -1206,6 +1295,71 @@ class CampoController {
       res.json({ success: true, message: 'Tarea / Actividad eliminada correctamente.' });
     } catch (err) {
       res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Eliminar TODAS las Actividades / Tareas Asignadas
+  async eliminarTodasActividades(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar todas las tareas asignadas.' });
+      }
+
+      const { usuarioId } = req.query;
+      const where = {
+        AND: [
+          { NOT: { codigo: { startsWith: 'RUT-' } } },
+          { NOT: { titulo: { contains: 'Ruta', mode: 'insensitive' } } }
+        ]
+      };
+
+      if (usuarioId && usuarioId !== 'TODOS') {
+        where.usuarioId = usuarioId;
+      }
+
+      const actividades = await prisma.actividadCampo.findMany({
+        where,
+        select: { id: true }
+      });
+
+      const ids = actividades.map(a => a.id);
+
+      if (ids.length > 0) {
+        await prisma.evidenciaCampo.deleteMany({
+          where: { actividadId: { in: ids } }
+        }).catch(() => {});
+
+        const result = await prisma.actividadCampo.deleteMany({
+          where: { id: { in: ids } }
+        });
+
+        await this.registrarAuditoria(req.user.id, 'CAMPO_TODAS_TAREAS_ELIMINADAS', {
+          totalEliminadas: result.count,
+          usuarioFiltro: usuarioId || 'TODOS'
+        });
+
+        const io = req.app ? req.app.get('io') : null;
+        if (io) {
+          io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ELIMINAR_TODAS', ids });
+          io.emit('CAMPO_TAREA_UPDATE', { accion: 'ELIMINAR_TODAS', ids });
+          io.emit('db_update', { type: 'CAMPO_TAREA_UPDATE', timestamp: Date.now() });
+        }
+
+        return res.json({
+          success: true,
+          count: result.count,
+          message: `Se eliminaron ${result.count} tareas asignadas correctamente.`
+        });
+      }
+
+      res.json({
+        success: true,
+        count: 0,
+        message: 'No hay tareas asignadas para eliminar.'
+      });
+    } catch (err) {
+      console.error('Error eliminando todas las tareas de campo:', err);
+      res.status(500).json({ error: err.message });
     }
   }
 
@@ -2221,6 +2375,65 @@ class CampoController {
     }
   }
 
+  async eliminarClienteExterno(req, res) {
+    try {
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      
+      const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
+      if (!cliente) {
+        return res.status(404).json({ error: 'Cliente externo no encontrado.' });
+      }
+
+      if (!esDel && cliente.comercialId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para eliminar este cliente.' });
+      }
+
+      await operacionExternaService.eliminarClienteExterno(id);
+
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_CLIENTE_EXTERNO', { id, nombre: cliente.nombre }, null, req);
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_CLIENTE_UPDATE', { accion: 'ELIMINAR', id, timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_CLIENTE_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Cliente externo y su historial eliminados correctamente.' });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarTodosClientesExternos(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar la cartera completa de clientes.' });
+      }
+
+      const { usuarioId } = req.query;
+      const result = await operacionExternaService.eliminarTodosClientesExternos({
+        usuarioId: usuarioId || null,
+        esDelegado: true
+      });
+
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_TODOS_CLIENTES_EXTERNOS', {
+        totalEliminados: result.count,
+        usuarioFiltro: usuarioId || 'TODOS'
+      }, null, req);
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_CLIENTE_UPDATE', { accion: 'ELIMINAR_TODOS', timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_CLIENTE_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, count: result.count, message: `Se eliminaron ${result.count} clientes externos correctamente.` });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   async getCotizacionesExternas(req, res) {
     try {
       const { clienteExternoId, estado, usuarioId } = req.query;
@@ -3139,13 +3352,14 @@ class CampoController {
       const { id } = req.params;
       const movimiento = await prisma.visitaCampo.findUnique({ where: { id } });
       if (!movimiento) {
-        return res.status(404).json({ error: 'Movimiento no encontrado.' });
+        return res.status(404).json({ error: 'Movimiento o parada no encontrada.' });
       }
 
       if (!this.esDelegado(req.user) && movimiento.usuarioId !== req.user.id) {
         return res.status(403).json({ error: 'No autorizado para eliminar este movimiento.' });
       }
 
+      await prisma.seguimientoCampo.deleteMany({ where: { visitaId: id } }).catch(() => {});
       await prisma.visitaCampo.delete({ where: { id } });
 
       await this.registrarAuditoria(req.user.id, 'CAMPO_MOVIMIENTO_ELIMINADO', {
@@ -3154,7 +3368,136 @@ class CampoController {
         lugar: movimiento.resultadoResumen
       });
 
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_MOVIMIENTO_UPDATE', { accion: 'ELIMINAR', id, timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_MOVIMIENTO_UPDATE', timestamp: Date.now() });
+      }
+
       res.json({ success: true, message: 'Parada eliminada correctamente.' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async eliminarMovimientosDia(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar todas las paradas/movimientos del día.' });
+      }
+      const { fecha, usuarioId } = req.query;
+      let fechaStr = fecha;
+      if (!fechaStr) {
+        const nowCol = new Date(Date.now() - 5 * 3600 * 1000);
+        fechaStr = nowCol.toISOString().split('T')[0];
+      }
+      const startOfDay = new Date(`${fechaStr}T00:00:00.000Z`);
+      const endOfDay = new Date(new Date(`${fechaStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
+
+      const where = {
+        OR: [
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
+        ]
+      };
+      if (usuarioId && usuarioId !== 'TODOS') {
+        where.usuarioId = usuarioId;
+      }
+
+      const visitas = await prisma.visitaCampo.findMany({ where, select: { id: true } });
+      const ids = visitas.map(v => v.id);
+
+      if (ids.length > 0) {
+        await prisma.seguimientoCampo.deleteMany({ where: { visitaId: { in: ids } } }).catch(() => {});
+        const result = await prisma.visitaCampo.deleteMany({ where: { id: { in: ids } } });
+
+        await this.registrarAuditoria(req.user.id, 'CAMPO_MOVIMIENTOS_DIA_ELIMINADOS', {
+          fecha: fechaStr,
+          usuarioId: usuarioId || 'TODOS',
+          totalEliminados: result.count
+        });
+
+        const io = req.app?.get ? req.app.get('io') : null;
+        if (io) {
+          io.emit('CAMPO_MOVIMIENTO_UPDATE', { accion: 'ELIMINAR_TODOS', fecha: fechaStr, timestamp: Date.now() });
+          io.emit('db_update', { type: 'CAMPO_MOVIMIENTO_UPDATE', timestamp: Date.now() });
+        }
+
+        return res.json({ success: true, count: result.count, message: `Se eliminaron ${result.count} paradas de la fecha ${fechaStr}.` });
+      }
+
+      res.json({ success: true, count: 0, message: 'No hay paradas registradas para la fecha seleccionada.' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async eliminarVisita(req, res) {
+    try {
+      const { id } = req.params;
+      const visita = await prisma.visitaCampo.findUnique({ where: { id } });
+      if (!visita) {
+        return res.status(404).json({ error: 'Visita no encontrada.' });
+      }
+
+      if (!this.esDelegado(req.user) && visita.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para eliminar esta visita.' });
+      }
+
+      await prisma.seguimientoCampo.deleteMany({ where: { visitaId: id } }).catch(() => {});
+      await prisma.visitaCampo.delete({ where: { id } });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_VISITA_ELIMINADA', {
+        id,
+        codigo: visita.codigo
+      });
+
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_VISITA_UPDATE', { accion: 'ELIMINAR', id, timestamp: Date.now() });
+        io.emit('CAMPO_MOVIMIENTO_UPDATE', { accion: 'ELIMINAR', id, timestamp: Date.now() });
+        io.emit('db_update', { type: 'CAMPO_VISITA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, message: 'Visita eliminada correctamente.' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async eliminarTodasVisitas(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede eliminar todas las visitas.' });
+      }
+      const { usuarioId } = req.query;
+      const where = {};
+      if (usuarioId && usuarioId !== 'TODOS') {
+        where.usuarioId = usuarioId;
+      }
+
+      const visitas = await prisma.visitaCampo.findMany({ where, select: { id: true } });
+      const ids = visitas.map(v => v.id);
+
+      if (ids.length > 0) {
+        await prisma.seguimientoCampo.deleteMany({ where: { visitaId: { in: ids } } }).catch(() => {});
+        const result = await prisma.visitaCampo.deleteMany({ where: { id: { in: ids } } });
+
+        await this.registrarAuditoria(req.user.id, 'CAMPO_TODAS_VISITAS_ELIMINADAS', {
+          totalEliminadas: result.count,
+          usuarioFiltro: usuarioId || 'TODOS'
+        });
+
+        const io = req.app?.get ? req.app.get('io') : null;
+        if (io) {
+          io.emit('CAMPO_VISITA_UPDATE', { accion: 'ELIMINAR_TODAS', timestamp: Date.now() });
+          io.emit('db_update', { type: 'CAMPO_VISITA_UPDATE', timestamp: Date.now() });
+        }
+
+        return res.json({ success: true, count: result.count, message: `Se eliminaron ${result.count} visitas correctamente.` });
+      }
+
+      res.json({ success: true, count: 0, message: 'No hay visitas para eliminar.' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
