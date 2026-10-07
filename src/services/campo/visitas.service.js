@@ -77,8 +77,8 @@ class VisitasService {
 
     if (fechaStr && fechaStr !== 'TODAS') {
       const datePart = fechaStr.includes('T') ? fechaStr.split('T')[0] : fechaStr;
-      const startOfDay = new Date(`${datePart}T00:00:00.000Z`);
-      const endOfDay = new Date(new Date(`${datePart}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
+      const startOfDay = new Date(`${datePart}T00:00:00-05:00`);
+      const endOfDay = new Date(`${datePart}T23:59:59.999-05:00`);
       where.OR = [
         { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
         { checkInHora: { gte: startOfDay, lte: endOfDay } },

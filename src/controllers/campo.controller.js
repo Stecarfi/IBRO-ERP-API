@@ -23,6 +23,105 @@ const {
   zonaComercialSchema
 } = require('../validators/campo.validators');
 
+// Helpers de zona horaria oficial Colombia (America/Bogota / UTC-5)
+const parseColombiaDateTime = (fechaStr, horaStr) => {
+  if (horaStr instanceof Date && !isNaN(horaStr.getTime())) {
+    return horaStr;
+  }
+  if (typeof horaStr === 'string') {
+    const s = horaStr.trim();
+    if (s.endsWith('Z') || (s.includes('T') && (s.includes('+') || s.includes('-')))) {
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+
+  let f = fechaStr;
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date());
+  } else if (f instanceof Date) {
+    f = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(f);
+  } else if (typeof f === 'string') {
+    if (f.includes('T')) f = f.split('T')[0];
+    f = f.trim();
+  }
+
+  let h = horaStr;
+  if (!h || (typeof h !== 'string' && !(h instanceof Date))) {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/Bogota',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(new Date());
+    const hh = parts.find(p => p.type === 'hour')?.value || '12';
+    const mm = parts.find(p => p.type === 'minute')?.value || '00';
+    h = `${hh}:${mm}`;
+  } else if (h instanceof Date) {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/Bogota',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(h);
+    const hh = parts.find(p => p.type === 'hour')?.value || '12';
+    const mm = parts.find(p => p.type === 'minute')?.value || '00';
+    h = `${hh}:${mm}`;
+  } else if (typeof h === 'string') {
+    h = h.trim();
+    if (h.includes('T')) {
+      h = h.split('T')[1].replace(/Z|[+-].*$/, '');
+    }
+  }
+
+  let isPM = false;
+  let isAM = false;
+  if (typeof h === 'string') {
+    if (/pm/i.test(h)) isPM = true;
+    if (/am/i.test(h)) isAM = true;
+    h = h.replace(/[^\d:]/g, '');
+  }
+
+  const [rawH, rawM, rawS] = String(h).split(':');
+  let intH = parseInt(rawH, 10) || 0;
+  const intM = parseInt(rawM, 10) || 0;
+  const intS = parseInt(rawS, 10) || 0;
+
+  if (isPM && intH < 12) intH += 12;
+  if (isAM && intH === 12) intH = 0;
+
+  const hPad = String(intH).padStart(2, '0');
+  const mPad = String(intM).padStart(2, '0');
+  const sPad = String(intS).padStart(2, '0');
+
+  return new Date(`${f}T${hPad}:${mPad}:${sPad}-05:00`);
+};
+
+const getFechaColombia = (date = new Date()) => {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+};
+
+const getHoraColombia = (date = new Date()) => {
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Bogota',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(d);
+  const h = parts.find(p => p.type === 'hour')?.value || '00';
+  const m = parts.find(p => p.type === 'minute')?.value || '00';
+  return `${h}:${m}`;
+};
+
 class CampoController {
   // Helper de permisos del Delegado de Gerencia (estrictamente por atributo del usuario, rol directivo o Master Admin)
   esDelegado(user) {
@@ -1778,10 +1877,10 @@ class CampoController {
     try {
       const { usuarioId, fecha } = req.query;
       const targetUserId = this.esDelegado(req.user) ? (usuarioId || req.user.id) : req.user.id;
-      const fechaConsulta = fecha || new Date().toISOString().split('T')[0];
+      const fechaConsulta = fecha || getFechaColombia(new Date());
 
-      const startOfDay = new Date(`${fechaConsulta}T00:00:00.000Z`);
-      const endOfDay = new Date(`${fechaConsulta}T23:59:59.999Z`);
+      const startOfDay = new Date(`${fechaConsulta}T00:00:00-05:00`);
+      const endOfDay = new Date(`${fechaConsulta}T23:59:59.999-05:00`);
 
       // 1. Jornada laboral de ese día
       const jornada = await prisma.jornadaLaboral.findFirst({
@@ -2717,38 +2816,31 @@ class CampoController {
       const numLat = parseFloat(lat) || 10.9878;
       const numLng = parseFloat(lng) || -74.7889;
 
-      // Resolver fecha y hora de llegada (soporte para registro posterior)
-      let ahora = new Date();
+      // Resolver fecha y hora de llegada (hora oficial Colombia America/Bogota / UTC-5)
+      let ahora;
       if (horaLlegada) {
-        if (typeof horaLlegada === 'string' && horaLlegada.includes('T')) {
+        if (typeof horaLlegada === 'string' && horaLlegada.includes('T') && horaLlegada.includes('-05:00')) {
           ahora = new Date(horaLlegada);
         } else if (typeof horaLlegada === 'string' && horaLlegada.includes(':')) {
-          const [hh, mm] = horaLlegada.split(':');
-          const baseDate = fecha ? new Date(`${fecha}T12:00:00`) : new Date();
-          baseDate.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-          ahora = baseDate;
+          ahora = parseColombiaDateTime(fecha, horaLlegada);
         } else {
           ahora = new Date(horaLlegada);
         }
       } else if (fecha) {
-        const baseDate = new Date(`${fecha}T12:00:00`);
-        const now = new Date();
-        baseDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), 0);
-        ahora = baseDate;
+        ahora = parseColombiaDateTime(fecha, null);
+      } else {
+        ahora = new Date();
       }
 
-      // Si también se envió hora de salida (parada ya concluida / registro posterior completo)
+      // Si también se envió hora de salida (parada ya concluida / registro completo)
       let checkOutDate = null;
       let duracionMin = 0;
       let estadoVisita = 'En Curso';
       if (horaSalida) {
-        if (typeof horaSalida === 'string' && horaSalida.includes('T')) {
+        if (typeof horaSalida === 'string' && horaSalida.includes('T') && horaSalida.includes('-05:00')) {
           checkOutDate = new Date(horaSalida);
         } else if (typeof horaSalida === 'string' && horaSalida.includes(':')) {
-          const [hh, mm] = horaSalida.split(':');
-          const baseDate = new Date(ahora);
-          baseDate.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-          checkOutDate = baseDate;
+          checkOutDate = parseColombiaDateTime(fecha || ahora, horaSalida);
         } else {
           checkOutDate = new Date(horaSalida);
         }
@@ -2917,7 +3009,15 @@ class CampoController {
         return res.status(403).json({ error: 'No autorizado para modificar este registro.' });
       }
 
-      const checkOutHora = new Date();
+      let checkOutHora = new Date();
+      if (req.body.horaSalida) {
+        if (typeof req.body.horaSalida === 'string' && req.body.horaSalida.includes('T') && req.body.horaSalida.includes('-05:00')) {
+          checkOutHora = new Date(req.body.horaSalida);
+        } else if (typeof req.body.horaSalida === 'string' && req.body.horaSalida.includes(':')) {
+          const baseDateStr = req.body.fecha || (movimiento.checkInHora ? getFechaColombia(movimiento.checkInHora) : getFechaColombia(new Date()));
+          checkOutHora = parseColombiaDateTime(baseDateStr, req.body.horaSalida);
+        }
+      }
       const inicio = movimiento.checkInHora ? new Date(movimiento.checkInHora) : checkOutHora;
       const duracionMin = Math.max(1, Math.round((checkOutHora - inicio) / 60000));
       const numLat = parseFloat(lat) || movimiento.checkInLat || 10.9878;
@@ -3022,60 +3122,50 @@ class CampoController {
         return res.status(403).json({ error: 'No autorizado para editar este movimiento.' });
       }
 
-      // Resolver fecha base de la parada
+      // Resolver fecha base de la parada en Colombia (UTC-5)
       let targetFechaStr = fecha;
       if (!targetFechaStr) {
         if (movimiento.checkInHora) {
-          targetFechaStr = new Date(movimiento.checkInHora).toISOString().split('T')[0];
+          targetFechaStr = getFechaColombia(movimiento.checkInHora);
         } else if (movimiento.fechaProgramada) {
-          targetFechaStr = new Date(movimiento.fechaProgramada).toISOString().split('T')[0];
+          targetFechaStr = getFechaColombia(movimiento.fechaProgramada);
         } else {
-          targetFechaStr = new Date().toISOString().split('T')[0];
+          targetFechaStr = getFechaColombia(new Date());
         }
       }
 
-      // Resolver hora de llegada
+      // Resolver hora de llegada en hora oficial Colombia
       let newCheckIn = movimiento.checkInHora;
       if (horaLlegada) {
-        if (typeof horaLlegada === 'string' && horaLlegada.includes('T')) {
+        if (typeof horaLlegada === 'string' && horaLlegada.includes('T') && horaLlegada.includes('-05:00')) {
           newCheckIn = new Date(horaLlegada);
         } else if (typeof horaLlegada === 'string' && horaLlegada.includes(':')) {
-          const [hh, mm] = horaLlegada.split(':');
-          const baseDate = new Date(`${targetFechaStr}T12:00:00`);
-          baseDate.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-          newCheckIn = baseDate;
+          newCheckIn = parseColombiaDateTime(targetFechaStr, horaLlegada);
         } else {
           newCheckIn = new Date(horaLlegada);
         }
       } else if (fecha && movimiento.checkInHora) {
-        // Se cambió fecha pero no hora de llegada
-        const oldIn = new Date(movimiento.checkInHora);
-        const baseDate = new Date(`${targetFechaStr}T12:00:00`);
-        baseDate.setHours(oldIn.getHours(), oldIn.getMinutes(), oldIn.getSeconds(), 0);
-        newCheckIn = baseDate;
+        // Se cambió fecha pero se mantiene la hora original de llegada
+        const oldHora = getHoraColombia(movimiento.checkInHora);
+        newCheckIn = parseColombiaDateTime(targetFechaStr, oldHora);
       }
 
-      // Resolver hora de salida
+      // Resolver hora de salida en hora oficial Colombia
       let newCheckOut = movimiento.checkOutHora;
       if (horaSalida !== undefined) {
         if (!horaSalida || !String(horaSalida).trim()) {
           newCheckOut = null;
-        } else if (typeof horaSalida === 'string' && horaSalida.includes('T')) {
+        } else if (typeof horaSalida === 'string' && horaSalida.includes('T') && horaSalida.includes('-05:00')) {
           newCheckOut = new Date(horaSalida);
         } else if (typeof horaSalida === 'string' && horaSalida.includes(':')) {
-          const [hh, mm] = horaSalida.split(':');
-          const baseDate = new Date(`${targetFechaStr}T12:00:00`);
-          baseDate.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-          newCheckOut = baseDate;
+          newCheckOut = parseColombiaDateTime(targetFechaStr, horaSalida);
         } else {
           newCheckOut = new Date(horaSalida);
         }
       } else if (fecha && movimiento.checkOutHora) {
-        // Se cambió fecha pero no hora de salida
-        const oldOut = new Date(movimiento.checkOutHora);
-        const baseDate = new Date(`${targetFechaStr}T12:00:00`);
-        baseDate.setHours(oldOut.getHours(), oldOut.getMinutes(), oldOut.getSeconds(), 0);
-        newCheckOut = baseDate;
+        // Se cambió fecha pero se mantiene la hora original de salida
+        const oldOutHora = getHoraColombia(movimiento.checkOutHora);
+        newCheckOut = parseColombiaDateTime(targetFechaStr, oldOutHora);
       }
 
       let duracionMin = movimiento.duracionMin || 0;
@@ -3092,7 +3182,7 @@ class CampoController {
         checkInHora: newCheckIn,
         checkOutHora: newCheckOut,
         duracionMin,
-        fechaProgramada: newCheckIn ? new Date(newCheckIn) : (fecha ? new Date(`${targetFechaStr}T12:00:00.000Z`) : movimiento.fechaProgramada)
+        fechaProgramada: newCheckIn ? new Date(newCheckIn) : (fecha ? parseColombiaDateTime(targetFechaStr, '12:00') : movimiento.fechaProgramada)
       };
 
       if (lugar !== undefined && String(lugar).trim()) dataToUpdate.resultadoResumen = String(lugar).trim();
@@ -3132,14 +3222,38 @@ class CampoController {
       });
 
       const usuarioNombre = `${actualizado.usuario?.nombre || ''} ${actualizado.usuario?.apellido || ''}`.trim() || actualizado.usuario?.user || 'Asesor';
+
+      let dirRetorno = actualizado.clienteExterno?.direccion || actualizado.cliente?.dir || (typeof direccion === 'string' ? direccion : '') || '';
+      if (!dirRetorno && actualizado.observaciones && actualizado.observaciones.includes('(') && actualizado.observaciones.includes(')')) {
+        const match = actualizado.observaciones.match(/\((.*?)\)/);
+        if (match && match[1]) dirRetorno = match[1];
+      }
+
+      const movimientoRetorno = {
+        ...actualizado,
+        usuarioNombre,
+        asesorNombre: usuarioNombre,
+        usuarioCargo: actualizado.usuario?.cargo || 'Asesor Comercial',
+        lugar: actualizado.resultadoResumen || actualizado.clienteExterno?.nombre || actualizado.cliente?.nom || 'Punto de Ruta',
+        direccion: dirRetorno,
+        motivo: actualizado.tipoVisita,
+        contacto: actualizado.contactoAtendio || actualizado.clienteExterno?.contacto || '',
+        resultado: actualizado.resultadoVisita || (actualizado.checkOutHora ? 'Completada' : 'En Curso'),
+        duracionMin,
+        estado: actualizado.checkOutHora ? 'Realizada' : (actualizado.checkInHora ? 'En el Lugar' : actualizado.estado),
+        checkInHora: actualizado.checkInHora,
+        checkOutHora: actualizado.checkOutHora
+      };
+
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) {
         io.emit('CAMPO_MOVIMIENTO_UPDATE', {
           accion: 'EDICION',
-          movimiento: actualizado,
+          movimiento: movimientoRetorno,
           usuarioId: movimiento.usuarioId,
           usuarioNombre,
           lugar: actualizado.resultadoResumen,
+          fecha: targetFechaStr,
           timestamp: Date.now()
         });
         io.emit('db_update', { type: 'CAMPO_MOVIMIENTO_UPDATE', timestamp: Date.now() });
@@ -3153,21 +3267,6 @@ class CampoController {
         checkOutHora: newCheckOut?.toISOString(),
         duracionMin
       }, { usuarioNombre }, req);
-
-      let dirRetorno = actualizado.clienteExterno?.direccion || actualizado.cliente?.dir || (typeof direccion === 'string' ? direccion : '') || '';
-      if (!dirRetorno && actualizado.observaciones && actualizado.observaciones.includes('(') && actualizado.observaciones.includes(')')) {
-        const match = actualizado.observaciones.match(/\((.*?)\)/);
-        if (match && match[1]) dirRetorno = match[1];
-      }
-
-      const movimientoRetorno = {
-        ...actualizado,
-        lugar: actualizado.resultadoResumen || actualizado.clienteExterno?.nombre || actualizado.cliente?.nom || 'Punto de Ruta',
-        direccion: dirRetorno,
-        motivo: actualizado.tipoVisita,
-        contacto: actualizado.contactoAtendio || actualizado.clienteExterno?.contacto || '',
-        resultado: actualizado.resultadoVisita || (actualizado.checkOutHora ? 'Completada' : 'En Curso')
-      };
 
       res.json({
         success: true,
@@ -3222,17 +3321,15 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
 
-      // Obtener fecha del día (si no se envía, usar hora local de Colombia UTC-5)
+      // Obtener fecha del día en hora oficial de Colombia (UTC-5)
       let fechaStr = fecha;
       if (!fechaStr) {
-        const nowCol = new Date(Date.now() - 5 * 3600 * 1000);
-        fechaStr = nowCol.toISOString().split('T')[0];
+        fechaStr = getFechaColombia(new Date());
       }
 
-      // Ventana que cubre el día calendario completo tanto en UTC como en hora Colombia (UTC-5)
-      // Desde las 00:00 UTC hasta las 06:00 UTC del día siguiente
-      const startOfDay = new Date(`${fechaStr}T00:00:00.000Z`);
-      const endOfDay = new Date(new Date(`${fechaStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
+      // Ventana que cubre el día calendario completo en Colombia (UTC-5)
+      const startOfDay = new Date(`${fechaStr}T00:00:00-05:00`);
+      const endOfDay = new Date(`${fechaStr}T23:59:59.999-05:00`);
 
       const where = {
         OR: [
@@ -3388,11 +3485,10 @@ class CampoController {
       const { fecha, usuarioId } = req.query;
       let fechaStr = fecha;
       if (!fechaStr) {
-        const nowCol = new Date(Date.now() - 5 * 3600 * 1000);
-        fechaStr = nowCol.toISOString().split('T')[0];
+        fechaStr = getFechaColombia(new Date());
       }
-      const startOfDay = new Date(`${fechaStr}T00:00:00.000Z`);
-      const endOfDay = new Date(new Date(`${fechaStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
+      const startOfDay = new Date(`${fechaStr}T00:00:00-05:00`);
+      const endOfDay = new Date(`${fechaStr}T23:59:59.999-05:00`);
 
       const where = {
         OR: [
