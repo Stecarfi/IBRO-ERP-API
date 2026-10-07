@@ -569,6 +569,77 @@ class OperacionExternaService {
 
     return prisma.clienteExternoCampo.deleteMany({ where: { id: { in: ids } } });
   }
+
+  // =================================================================
+  // CLASIFICACIONES DE CLIENTES PARAMETRIZABLES
+  // =================================================================
+  async getClasificaciones(incluirInactivos = false) {
+    const fallbackList = [
+      { id: 'def-1', nombre: 'Cliente Comercial', colorHex: '#1E88FF', activo: true, esSistema: true },
+      { id: 'def-2', nombre: 'Distribuidor Mayorista', colorHex: '#10B981', activo: true, esSistema: true },
+      { id: 'def-3', nombre: 'Restaurante / Hotel', colorHex: '#F59E0B', activo: true, esSistema: true },
+      { id: 'def-4', nombre: 'Punto de Venta / Retail', colorHex: '#8B5CF6', activo: true, esSistema: true },
+      { id: 'def-5', nombre: 'Prospecto Frío', colorHex: '#64748B', activo: true, esSistema: true }
+    ];
+
+    try {
+      if (prisma.clasificacionClienteCampo) {
+        const where = incluirInactivos ? {} : { activo: true };
+        const items = await prisma.clasificacionClienteCampo.findMany({
+          where,
+          orderBy: { nombre: 'asc' }
+        });
+        if (items && items.length > 0) return items;
+      }
+      return fallbackList;
+    } catch (err) {
+      console.warn('[OperacionExternaService] getClasificaciones fallback:', err.message);
+      return fallbackList;
+    }
+  }
+
+  async crearClasificacion(data) {
+    if (!data.nombre || !data.nombre.trim()) {
+      throw new Error('El nombre de la clasificación es obligatorio');
+    }
+    const nombre = data.nombre.trim();
+    if (prisma.clasificacionClienteCampo) {
+      return prisma.clasificacionClienteCampo.create({
+        data: {
+          nombre,
+          descripcion: data.descripcion || '',
+          colorHex: data.colorHex || '#1E88FF',
+          activo: data.activo !== false,
+          esSistema: false
+        }
+      });
+    }
+    return { id: `clasif-${Date.now()}`, nombre, colorHex: data.colorHex || '#1E88FF', activo: true };
+  }
+
+  async actualizarClasificacion(id, data) {
+    if (prisma.clasificacionClienteCampo) {
+      return prisma.clasificacionClienteCampo.update({
+        where: { id },
+        data: {
+          ...(data.nombre && { nombre: data.nombre.trim() }),
+          ...(data.descripcion !== undefined && { descripcion: data.descripcion }),
+          ...(data.colorHex && { colorHex: data.colorHex }),
+          ...(data.activo !== undefined && { activo: Boolean(data.activo) })
+        }
+      });
+    }
+    return { id, ...data };
+  }
+
+  async eliminarClasificacion(id) {
+    if (prisma.clasificacionClienteCampo) {
+      return prisma.clasificacionClienteCampo.delete({
+        where: { id }
+      });
+    }
+    return { success: true };
+  }
 }
 
 module.exports = new OperacionExternaService();

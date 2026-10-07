@@ -3321,25 +3321,23 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
 
-      // Obtener fecha del día en hora oficial de Colombia (UTC-5)
-      let fechaStr = fecha;
-      if (!fechaStr) {
-        fechaStr = getFechaColombia(new Date());
-      }
-
-      // Ventana que cubre el día calendario completo en Colombia (UTC-5)
-      const startOfDay = new Date(`${fechaStr}T00:00:00-05:00`);
-      const endOfDay = new Date(`${fechaStr}T23:59:59.999-05:00`);
-
-      const where = {
-        OR: [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
-        ]
-      };
-
+      const where = {};
       if (targetUserId) {
         where.usuarioId = targetUserId;
+      }
+
+      // Si se especifica una fecha puntual (YYYY-MM-DD), se filtra por ese día.
+      // Si no se envía fecha o es 'TODOS' / 'ALL', NO se restringe para garantizar la permanencia histórica de todos los registros.
+      let fechaStr = fecha;
+      if (fecha && fecha !== 'TODOS' && fecha !== 'ALL' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+        const startOfDay = new Date(`${fecha}T00:00:00-05:00`);
+        const endOfDay = new Date(`${fecha}T23:59:59.999-05:00`);
+        where.OR = [
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
+        ];
+      } else {
+        fechaStr = 'TODOS';
       }
 
       const items = await prisma.visitaCampo.findMany({
@@ -3352,7 +3350,10 @@ class CampoController {
           clienteExterno: true,
           prospecto: true
         },
-        orderBy: { checkInHora: 'asc' }
+        orderBy: [
+          { checkInHora: 'desc' },
+          { createdAt: 'desc' }
+        ]
       });
 
       // Numerar paradas por usuario cronológicamente
@@ -3377,10 +3378,14 @@ class CampoController {
         }
 
         const nombreAsesor = `${item.usuario?.nombre || ''} ${item.usuario?.apellido || ''}`.trim() || item.usuario?.user || 'Asesor';
+        const rawDate = item.checkInHora || item.fechaProgramada || item.createdAt;
+        const fechaCol = rawDate ? getFechaColombia(new Date(rawDate)) : getFechaColombia();
 
         return {
           id: item.id,
           codigo: item.codigo,
+          fecha: fechaCol,
+          fechaIso: rawDate,
           paradaNumero: paradasPorUsuario[uId],
           usuarioId: item.usuarioId,
           usuarioNombre: nombreAsesor,
@@ -3434,7 +3439,12 @@ class CampoController {
           tiempoTotalMin,
           tiempoPromedioMin,
           primeraLlegada,
-          ultimaSalida
+          ultimaSalida,
+          totalParadas: totalMovimientos,
+          finalizadas: completados,
+          tiempoTotalMinutos: tiempoTotalMin,
+          promedioMinutosPorParada: tiempoPromedioMin,
+          asesoresActivos: Object.keys(paradasPorUsuario).length
         },
         movimientos
       });
