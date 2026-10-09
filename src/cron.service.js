@@ -1,33 +1,55 @@
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const prisma = require('./prisma');
 
-// Simular DB leyendo el db.json 
+// Simular DB leyendo el db.json (para retrocompatibilidad local)
 const dbPath = path.join(__dirname, '..', '..', 'IBRIO-ERP-APP', 'public', 'db.json');
 
 const initCronJobs = () => {
-    // Tarea programada que corre cada minuto para publicar comunicados programados
-    cron.schedule('* * * * *', () => {
+    // Tarea programada que corre cada minuto para publicar comunicados programados y expirar vencidos
+    cron.schedule('* * * * *', async () => {
         try {
-            if (!fs.existsSync(dbPath)) return;
-            const data = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-            const comunicados = data.comunicados || [];
-            let updated = false;
             const now = new Date();
 
-            comunicados.forEach(c => {
-                if (c.estado === 'Programado' && c.fechaProgramada) {
-                    const scheduledDate = new Date(c.fechaProgramada);
-                    if (now >= scheduledDate) {
-                        c.estado = 'Activo';
-                        updated = true;
-                        console.log(`[Cron] Comunicado ${c.id} publicado automáticamente.`);
+            // 1. Persistencia fiel en PostgreSQL (Prisma)
+            try {
+                // Expirar comunicados cuya fecha de vencimiento ya pasó
+                await prisma.anuncio.updateMany({
+                    where: {
+                        expired: false,
+                        expiresAt: {
+                            lte: now
+                        }
+                    },
+                    data: {
+                        expired: true
                     }
-                }
-            });
+                });
+            } catch (dbErr) {
+                // Silencioso o log si la tabla aún no tiene registros
+            }
 
-            if (updated) {
-                fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+            // 2. Retrocompatibilidad con db.json si existe en entorno local
+            if (fs.existsSync(dbPath)) {
+                const data = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                const comunicados = data.comunicados || [];
+                let updated = false;
+
+                comunicados.forEach(c => {
+                    if (c.estado === 'Programado' && c.fechaProgramada) {
+                        const scheduledDate = new Date(c.fechaProgramada);
+                        if (now >= scheduledDate) {
+                            c.estado = 'Activo';
+                            updated = true;
+                            console.log(`[Cron] Comunicado ${c.id} publicado automáticamente.`);
+                        }
+                    }
+                });
+
+                if (updated) {
+                    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+                }
             }
         } catch (error) {
             console.error('[Cron] Error en la tarea de comunicados:', error);
@@ -51,3 +73,4 @@ const initCronJobs = () => {
 };
 
 module.exports = { initCronJobs };
+

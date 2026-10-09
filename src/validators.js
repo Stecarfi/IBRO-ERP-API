@@ -584,6 +584,7 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.fechaComision = safeDate(cleaned.fechaComision, null);
     cleaned.equipos = safeJson(cleaned.equipos, []);
     cleaned.materiales = safeJson(cleaned.materiales, []);
+    cleaned.vendedorId = cleaned.vendedorId || item.vendedorId;
     delete cleaned.vendedor;
     delete cleaned.cliente;
     delete cleaned.comisionista;
@@ -596,6 +597,7 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.comisionistaValor = cleaned.comisionistaValor !== undefined && cleaned.comisionistaValor !== null ? parseFloat(cleaned.comisionistaValor) || null : null;
     cleaned.equipos = safeJson(cleaned.equipos, []);
     cleaned.materiales = safeJson(cleaned.materiales, []);
+    cleaned.vendedorId = cleaned.vendedorId || item.vendedorId;
     if (!cleaned.cuentas && item.cuentasBancarias) {
       cleaned.cuentas = typeof item.cuentasBancarias === 'string' ? item.cuentasBancarias : JSON.stringify(item.cuentasBancarias);
     }
@@ -617,7 +619,7 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.inventarioId = cleaned.inventarioId ? String(cleaned.inventarioId) : null;
     cleaned.ventaId = cleaned.ventaId ? String(cleaned.ventaId) : null;
     cleaned.cotizacionId = cleaned.cotizacionId ? String(cleaned.cotizacionId) : null;
-    cleaned.tecnicoId = cleaned.tecnicoId ? String(cleaned.tecnicoId) : null;
+    cleaned.tecnicoId = cleaned.tecnicoId ? String(cleaned.tecnicoId) : (item.tecnicoId ? String(item.tecnicoId) : null);
     delete cleaned.cliente;
     delete cleaned.tecnico;
     delete cleaned.inventario;
@@ -789,7 +791,7 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.integrantes = safeJson(cleaned.integrantes, []);
   } else if (modelKey === 'auditoria') {
     cleaned.fecha = safeDate(cleaned.fecha, new Date());
-    cleaned.userId = cleaned.userId || item.userId;
+    cleaned.userId = cleaned.userId || item.userId || '1';
     delete cleaned.user;
     cleaned.action = cleaned.action ? String(cleaned.action) : 'AUDITORIA';
     cleaned.modulo = cleaned.modulo ? String(cleaned.modulo) : 'SISTEMA';

@@ -156,6 +156,7 @@ router.post('/movimientos/llegada', (req, res) => campoController.registrarLlega
 router.post('/movimientos/salida', (req, res) => campoController.registrarSalidaMovimiento(req, res));
 router.put('/movimientos/:id', (req, res) => campoController.actualizarMovimiento(req, res));
 router.get('/movimientos/activo', (req, res) => campoController.getMovimientoActivo(req, res));
+router.get('/movimientos/panel-gerencial', (req, res) => campoController.getPanelGerencialMovimientos(req, res));
 router.get('/movimientos/dia', (req, res) => campoController.getMovimientosDia(req, res));
 router.delete('/movimientos/dia', (req, res) => campoController.eliminarMovimientosDia(req, res));
 router.delete('/movimientos', (req, res) => campoController.eliminarMovimientosDia(req, res));

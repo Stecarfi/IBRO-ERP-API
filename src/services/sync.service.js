@@ -51,7 +51,8 @@ class SyncService {
         fechaIso: v.fechaIso,
         venceGarantiaIso: v.venceGarantiaIso,
         mesesGarantia: v.mesesGarantia,
-        vendedor: v.vendedor?.user || '',
+        vendedor: v.vendedor?.user || v.vendedorNombre || '',
+        vendedorNombre: v.vendedorNombre || (v.vendedor ? `${v.vendedor.nombre} ${v.vendedor.apellido || ''}`.trim() : ''),
         vendedorId: v.vendedorId,
         clienteId: v.clienteId,
         docCli: v.cliente?.doc || meta.clienteNit || '',
@@ -263,7 +264,8 @@ class SyncService {
         numCotizacion: c.numCotizacion || meta.numCotizacion || '',
         fecha: c.fecha,
         fechaIso: c.fecha,
-        vendedor: c.vendedor?.user || '',
+        vendedor: c.vendedor?.user || c.vendedorNombre || '',
+        vendedorNombre: c.vendedorNombre || (c.vendedor ? `${c.vendedor.nombre} ${c.vendedor.apellido || ''}`.trim() : ''),
         vendedorId: c.vendedorId,
         clienteId: c.clienteId,
         docCli: c.cliente?.doc || meta.clienteNit || '',
@@ -754,13 +756,31 @@ class SyncService {
         }
 
         if (table === 'auditoria') {
-          if (data.user && typeof data.user === 'string') {
-            const dbU = await tx.user.findFirst({ where: { user: data.user } });
-            if (dbU) {
-              data.userId = dbU.id;
-            }
-            delete data.user;
+          let authorUser = null;
+          if (data.userId) {
+            authorUser = await tx.user.findUnique({ where: { id: String(data.userId) } });
           }
+          if (!authorUser && data.user && typeof data.user === 'string') {
+            const str = String(data.user).trim();
+            authorUser = await tx.user.findFirst({
+              where: {
+                OR: [
+                  { user: { equals: str, mode: 'insensitive' } },
+                  { nombre: { equals: str, mode: 'insensitive' } }
+                ]
+              }
+            });
+          }
+          if (authorUser) {
+            data.userId = authorUser.id;
+          } else {
+            // Fallback seguro: usuario actual autenticado, o primer usuario del sistema disponible
+            data.userId = user?.id || (await getUsersCache())[0]?.id || '1';
+          }
+          if (data.user && typeof data.user === 'string' && (!authorUser || authorUser.user !== data.user)) {
+            data.recordDetails = `[Autor original: ${data.user}] ${data.recordDetails || ''}`.trim();
+          }
+          delete data.user;
           if (data.fecha) {
             const d = new Date(data.fecha);
             if (!isNaN(d)) {
@@ -959,11 +979,13 @@ class SyncService {
           throw new Error(`Sync Venta ${item.id} fallida: Cliente (${item.clienteId || item.docCli}) o Producto (${item.productoId || item.idProd}) no encontrado.`);
         }
 
+        const sellerId = await resolveUser(item.vendedorId || item.vendedor, true);
         const data = {
           fecha: item.fecha ? new Date(item.fecha) : new Date(),
           fechaIso: item.fechaIso ? new Date(item.fechaIso) : new Date(),
           venceGarantiaIso: item.venceGarantiaIso ? new Date(item.venceGarantiaIso) : new Date(),
           mesesGarantia: parseInt(item.mesesGarantia) || 0,
+          vendedorId: sellerId,
           vendedor: item.vendedor,
           clienteId: client.id,
           productoId: product.id,
@@ -979,7 +1001,7 @@ class SyncService {
           precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           lockedBy: item.lockedBy || null,
           serialEquipo: item.serialEquipo || null,
-          vendedorNombre: item.vendedorNombre || null,
+          vendedorNombre: item.vendedorNombre || (typeof item.vendedor === 'string' ? item.vendedor : null),
           vendedorCargo: item.vendedorCargo || null,
           vendedorEmail: item.vendedorEmail || null,
           vendedorMovil: item.vendedorMovil || null,
@@ -1025,9 +1047,11 @@ class SyncService {
           throw new Error(`Sync Cotizacion ${item.id} fallida: Cliente o Producto no encontrado.`);
         }
 
+        const sellerId = await resolveUser(item.vendedorId || item.vendedor, true);
         const data = {
           numCotizacion: item.numCotizacion || null,
           fecha: item.fecha ? new Date(item.fecha) : new Date(),
+          vendedorId: sellerId,
           vendedor: item.vendedor,
           clienteId: client.id,
           productoId: product.id,
@@ -1051,15 +1075,15 @@ class SyncService {
           firmanteMovil: item.firmanteMovil || null,
           garantia: item.garantia || null,
           observacion: item.observacion || null,
-          vendedorNombre: item.vendedorNombre || null,
+          vendedorNombre: item.vendedorNombre || (typeof item.vendedor === 'string' ? item.vendedor : null),
           vendedorCargo: item.vendedorCargo || null,
           vendedorEmail: item.vendedorEmail || null,
           vendedorMovil: item.vendedorMovil || null,
           vendedorCodigoAsesor: item.vendedorCodigoAsesor || null,
           vigencia: item.vigencia ? parseInt(item.vigencia) : 10,
           ivaTipo: item.ivaTipo || "exento",
-          equipos: item.equipos ? JSON.stringify(item.equipos) : null,
-          materiales: item.materiales ? JSON.stringify(item.materiales) : null,
+          equipos: item.equipos ? (typeof item.equipos === 'string' ? item.equipos : JSON.stringify(item.equipos)) : null,
+          materiales: item.materiales ? (typeof item.materiales === 'string' ? item.materiales : JSON.stringify(item.materiales)) : null,
           tipo_precio: item.tipo_precio || null,
           precioUnitario: item.precioUnitario ? parseFloat(item.precioUnitario) : null,
           fechaSeguimiento: item.fechaSeguimiento || null,
@@ -1143,6 +1167,7 @@ class SyncService {
           throw new Error(`Sync Servicio ${item.id} fallida: Cliente con doc ${item.docCli} / ID ${item.clienteId} no encontrado.`);
         }
 
+        const tecnicoId = await resolveUser(item.tecnicoId || item.tecnico, false);
         const data = {
           clienteId: client.id,
           fechaProg: item.fechaProg ? new Date(item.fechaProg) : new Date(),
@@ -1151,6 +1176,7 @@ class SyncService {
           estado: item.estado,
           obsAdmin: item.obsAdmin || null,
           lockedBy: item.lockedBy || null,
+          tecnicoId: tecnicoId,
           tecnico: item.tecnico || null,
           equipoDetalle: item.equipoDetalle || null,
           obsRecepcion: item.obsRecepcion || null,

@@ -36,6 +36,7 @@ const { setupCronJobs } = require('./cron/backup');
 
 // Iniciar tareas en segundo plano
 setupCronJobs();
+initCronJobs();
 
 // Middleware de Autenticación Ultra-Resiliente (Bearer > Cookies > Fallback BD)
 const authenticateToken = async (req, res, next) => {
@@ -1778,7 +1779,8 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         fechaIso: v.fechaIso,
         venceGarantiaIso: v.venceGarantiaIso,
         mesesGarantia: v.mesesGarantia,
-        vendedor: v.vendedor?.user || '',
+        vendedor: v.vendedor?.user || v.vendedorNombre || '',
+        vendedorNombre: v.vendedorNombre || (v.vendedor ? `${v.vendedor.nombre} ${v.vendedor.apellido || ''}`.trim() : ''),
         vendedorId: v.vendedorId,
         clienteId: v.clienteId,
         docCli: v.cliente?.doc || meta.clienteNit || '',
@@ -1993,7 +1995,8 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         numCotizacion: c.numCotizacion || meta.numCotizacion || '',
         fecha: c.fecha,
         fechaIso: c.fecha,
-        vendedor: c.vendedor?.user || '',
+        vendedor: c.vendedor?.user || c.vendedorNombre || '',
+        vendedorNombre: c.vendedorNombre || (c.vendedor ? `${c.vendedor.nombre} ${c.vendedor.apellido || ''}`.trim() : ''),
         vendedorId: c.vendedorId,
         clienteId: c.clienteId,
         docCli: c.cliente?.doc || meta.clienteNit || '',

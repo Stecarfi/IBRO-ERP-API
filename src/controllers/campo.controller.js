@@ -122,6 +122,18 @@ const getHoraColombia = (date = new Date()) => {
   return `${h}:${m}`;
 };
 
+const formatHoraColombia = (dateVal) => {
+  if (!dateVal) return '--:--';
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return '--:--';
+  return new Intl.DateTimeFormat('es-CO', {
+    timeZone: 'America/Bogota',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(d);
+};
+
 class CampoController {
   // Helper de permisos del Delegado de Gerencia (estrictamente por atributo del usuario, rol directivo o Master Admin)
   esDelegado(user) {
@@ -3311,6 +3323,420 @@ class CampoController {
         }
       });
     } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  // --- CONTROL GERENCIAL: PANELES INDEPENDIENTES POR ASESOR COMERCIAL ---
+  async getPanelGerencialMovimientos(req, res) {
+    try {
+      const { fecha, usuarioId, busqueda } = req.query;
+      const esDel = this.esDelegado(req.user);
+
+      // 1. Obtener lista de usuarios que pertenecen a la operación comercial de campo
+      const whereUsers = {
+        OR: [
+          { esComercialCampo: true },
+          { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
+          { role: { name: { contains: 'VENTAS', mode: 'insensitive' } } },
+          { role: { name: { contains: 'EXTERNO', mode: 'insensitive' } } },
+          { role: { name: { contains: 'EJECUTIVO', mode: 'insensitive' } } },
+          { role: { name: { contains: 'ASESOR', mode: 'insensitive' } } },
+          { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
+          { cargo: { contains: 'VENTAS', mode: 'insensitive' } },
+          { cargo: { contains: 'ASESOR', mode: 'insensitive' } },
+          { cargo: { contains: 'EXTERNO', mode: 'insensitive' } },
+          { cargo: { contains: 'EJECUTIVO', mode: 'insensitive' } },
+          { cargo: { contains: 'CAMPO', mode: 'insensitive' } },
+          { cargo: { contains: 'VENDEDOR', mode: 'insensitive' } }
+        ]
+      };
+
+      if (!esDel && req.user?.id) {
+        whereUsers.id = String(req.user.id);
+      } else if (usuarioId && usuarioId !== 'TODOS') {
+        whereUsers.id = String(usuarioId);
+      }
+
+      const usuariosCampo = await prisma.user.findMany({
+        where: whereUsers,
+        select: {
+          id: true,
+          nombre: true,
+          apellido: true,
+          user: true,
+          cargo: true,
+          telefono: true,
+          correo: true,
+          foto: true,
+          isOnline: true,
+          lat: true,
+          lng: true,
+          lastLocationUpdate: true,
+          roleId: true,
+          esComercialCampo: true,
+          esDelegadoGerencia: true,
+          role: { select: { id: true, name: true } }
+        },
+        orderBy: { nombre: 'asc' }
+      });
+
+      const userIds = usuariosCampo.map(u => u.id);
+
+      // Si el usuario actual no es delegado y no está en la lista (por alguna configuración de cargo), incluirlo para que pueda ver su panel
+      if (!esDel && !userIds.includes(req.user.id)) {
+        const me = await prisma.user.findUnique({
+          where: { id: req.user.id },
+          select: {
+            id: true,
+            nombre: true,
+            apellido: true,
+            user: true,
+            cargo: true,
+            telefono: true,
+            correo: true,
+            foto: true,
+            isOnline: true,
+            lat: true,
+            lng: true,
+            lastLocationUpdate: true,
+            roleId: true,
+            esComercialCampo: true,
+            esDelegadoGerencia: true,
+            role: { select: { id: true, name: true } }
+          }
+        });
+        if (me) {
+          usuariosCampo.push(me);
+          userIds.push(me.id);
+        }
+      }
+
+      // 2. Resolver filtro de fecha para las visitas
+      // NOTA: Para no perder histórico permanente, si fecha es 'TODOS' o vacía, no se filtra por fecha.
+      let fechaStr = fecha;
+      const whereVisitas = {
+        usuarioId: { in: userIds }
+      };
+
+      if (fecha && fecha !== 'TODOS' && fecha !== 'ALL' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+        const startOfDay = new Date(`${fecha}T00:00:00-05:00`);
+        const endOfDay = new Date(`${fecha}T23:59:59.999-05:00`);
+        whereVisitas.OR = [
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
+        ];
+      } else {
+        fechaStr = 'TODOS';
+      }
+
+      // 3. Consultar visitas de base de datos ordenadas cronológicamente
+      const todasVisitas = await prisma.visitaCampo.findMany({
+        where: whereVisitas,
+        include: {
+          usuario: {
+            select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true }
+          },
+          cliente: true,
+          clienteExterno: true,
+          prospecto: true
+        },
+        orderBy: [
+          { checkInHora: 'asc' },
+          { createdAt: 'asc' }
+        ]
+      });
+
+      // 4. Consultar jornadas activas / recientes de estos usuarios
+      const ahora = new Date();
+      const startOfToday = new Date(ahora);
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const jornadasRecientes = await prisma.jornadaLaboral.findMany({
+        where: {
+          usuarioId: { in: userIds },
+          OR: [
+            { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] } },
+            { horaInicio: { gte: startOfToday } }
+          ]
+        },
+        orderBy: { horaInicio: 'desc' }
+      });
+
+      const jornadaPorUsuario = new Map();
+      jornadasRecientes.forEach(j => {
+        if (!jornadaPorUsuario.has(j.usuarioId)) {
+          jornadaPorUsuario.set(j.usuarioId, j);
+        }
+      });
+
+      // 5. Agrupar visitas por usuario y calcular métricas individuales
+      const visitasPorUsuario = new Map();
+      todasVisitas.forEach(v => {
+        const uId = v.usuarioId;
+        if (!visitasPorUsuario.has(uId)) {
+          visitasPorUsuario.set(uId, []);
+        }
+        visitasPorUsuario.get(uId).push(v);
+      });
+
+      const asesoresPaneles = usuariosCampo.map(u => {
+        const uVisitas = visitasPorUsuario.get(u.id) || [];
+        const j = jornadaPorUsuario.get(u.id);
+
+        // Parada en curso si existe
+        const paradaEnCurso = uVisitas.find(v => v.estado === 'En Curso' || v.estado === 'En el Lugar' || (v.checkInHora && !v.checkOutHora));
+
+        // Determinar estado oficial para el banner:
+        // "Visitando Cliente", "En ruta", "En pausa", "Finalizada", "Disponible", "Sin actividad"
+        let estado = 'Sin actividad';
+        let estadoColor = 'gray';
+
+        if (paradaEnCurso) {
+          estado = 'Visitando Cliente';
+          estadoColor = 'amber';
+        } else if (j && ['Iniciada', 'En Ruta', 'Activa'].includes(j.estado)) {
+          estado = 'En ruta';
+          estadoColor = 'emerald';
+        } else if (j && j.estado === 'En Pausa') {
+          estado = 'En pausa';
+          estadoColor = 'orange';
+        } else if (j && j.estado === 'Finalizada') {
+          estado = 'Finalizada';
+          estadoColor = 'slate';
+        } else if (u.isOnline) {
+          estado = 'Disponible';
+          estadoColor = 'blue';
+        } else if (uVisitas.length > 0) {
+          estado = 'Finalizada';
+          estadoColor = 'slate';
+        }
+
+        // Determinar última actividad registrada
+        let ultimaActividad = {
+          tipo: 'NINGUNA',
+          hora: '--:--',
+          horaIso: null,
+          descripcion: 'Sin actividad reciente',
+          lugar: null
+        };
+
+        // Buscar el evento más reciente entre visitas y jornada
+        let eventos = [];
+        uVisitas.forEach(v => {
+          if (v.checkOutHora) {
+            eventos.push({
+              fecha: new Date(v.checkOutHora),
+              tipo: 'SALIDA',
+              lugar: v.resultadoResumen || 'Cliente',
+              descripcion: `Salida de ${v.resultadoResumen || 'Cliente'}`
+            });
+          }
+          if (v.checkInHora) {
+            eventos.push({
+              fecha: new Date(v.checkInHora),
+              tipo: 'LLEGADA',
+              lugar: v.resultadoResumen || 'Cliente',
+              descripcion: `Llegada a ${v.resultadoResumen || 'Cliente'}`
+            });
+          }
+        });
+
+        if (j?.horaInicio) {
+          eventos.push({
+            fecha: new Date(j.horaInicio),
+            tipo: 'INICIO_TURNO',
+            lugar: 'Punto de partida',
+            descripcion: 'Inicio de Jornada en Campo'
+          });
+        }
+        if (j?.horaFin) {
+          eventos.push({
+            fecha: new Date(j.horaFin),
+            tipo: 'FIN_TURNO',
+            lugar: 'Fin de jornada',
+            descripcion: 'Finalización de Jornada'
+          });
+        }
+
+        eventos.sort((a, b) => b.fecha - a.fecha);
+
+        if (eventos.length > 0) {
+          const ult = eventos[0];
+          ultimaActividad = {
+            tipo: ult.tipo,
+            hora: formatHoraColombia(ult.fecha),
+            horaIso: ult.fecha.toISOString(),
+            descripcion: ult.descripcion,
+            lugar: ult.lugar
+          };
+        }
+
+        // Tiempos y totales
+        let tiempoTotalMin = 0;
+        const movimientosCronologicos = uVisitas.map((item, idx) => {
+          let durMin = item.duracionMin || 0;
+          if (item.checkInHora && !item.checkOutHora) {
+            durMin = Math.max(1, Math.round((ahora - new Date(item.checkInHora)) / 60000));
+          }
+          tiempoTotalMin += durMin;
+
+          const lugarNombre = item.resultadoResumen || item.clienteExterno?.nombre || item.cliente?.nom || item.prospecto?.nombreComercial || 'Punto de Ruta';
+          let direccionLugar = item.clienteExterno?.direccion || item.cliente?.dir || item.prospecto?.direccion || '';
+          if (!direccionLugar && item.observaciones && item.observaciones.includes('(') && item.observaciones.includes(')')) {
+            const match = item.observaciones.match(/\((.*?)\)/);
+            if (match && match[1]) direccionLugar = match[1];
+          }
+
+          const rawDate = item.checkInHora || item.fechaProgramada || item.createdAt;
+          const fechaCol = rawDate ? getFechaColombia(new Date(rawDate)) : getFechaColombia();
+
+          return {
+            id: item.id,
+            codigo: item.codigo || `MOV-${idx + 1}`,
+            numeroParada: idx + 1,
+            paradaNumero: idx + 1,
+            fecha: fechaCol,
+            fechaIso: rawDate,
+            horaLlegada: item.checkInHora ? formatHoraColombia(item.checkInHora) : '--:--',
+            horaLlegadaIso: item.checkInHora,
+            horaSalida: item.checkOutHora ? formatHoraColombia(item.checkOutHora) : (item.checkInHora ? 'En el Lugar' : '--:--'),
+            horaSalidaIso: item.checkOutHora,
+            clienteVisitado: lugarNombre,
+            lugar: lugarNombre,
+            direccion: direccionLugar,
+            checkInLat: item.checkInLat,
+            checkInLng: item.checkInLng,
+            checkOutLat: item.checkOutLat,
+            checkOutLng: item.checkOutLng,
+            checkInHora: item.checkInHora,
+            checkOutHora: item.checkOutHora,
+            coordenadas: {
+              lat: item.checkInLat || 10.9878,
+              lng: item.checkInLng || -74.7889
+            },
+            duracionMin: durMin,
+            tiempoPermanenciaMin: durMin,
+            tiempoPermanenciaFormateado: durMin >= 60 ? `${Math.floor(durMin / 60)}h ${durMin % 60}m` : `${durMin} min`,
+            observaciones: item.observaciones || '',
+            actividadesRealizadas: item.actividadesRealizadas || '',
+            resultado: item.resultadoVisita || (item.checkOutHora ? 'Completada' : 'En Curso'),
+            resultadoVisita: item.resultadoVisita || (item.checkOutHora ? 'Completada' : 'En Curso'),
+            fotografias: Array.isArray(item.evidencias) ? item.evidencias : [],
+            evidencias: Array.isArray(item.evidencias) ? item.evidencias : [],
+            geolocalizacion: {
+              lat: item.checkInLat,
+              lng: item.checkInLng,
+              precision: item.checkInPrecision || 10
+            },
+            estado: item.checkOutHora ? 'Realizada' : (item.checkInHora ? 'En el Lugar' : item.estado),
+            motivo: item.tipoVisita || 'Visita Comercial',
+            tipoVisita: item.tipoVisita || 'Visita Comercial',
+            contacto: item.contactoAtendio || item.clienteExterno?.contacto || ''
+          };
+        });
+
+        const horasTotal = Math.floor(tiempoTotalMin / 60);
+        const minsTotal = tiempoTotalMin % 60;
+        const tiempoEnCampoFormateado = horasTotal > 0 ? `${horasTotal} h ${minsTotal} min` : `${minsTotal} min`;
+
+        return {
+          id: u.id,
+          nombre: `${u.nombre} ${u.apellido || ''}`.trim(),
+          usuario: u.user,
+          user: u.user,
+          cargo: u.cargo || 'Asesor Comercial',
+          foto: u.foto || null,
+          telefono: u.telefono || null,
+          correo: u.correo || null,
+          estado,
+          estadoAsesor: estado,
+          estadoColor,
+          estadoAsesorColor: estadoColor,
+          ultimaActividad: ultimaActividad.descripcion,
+          ultimaActividadHora: ultimaActividad.hora,
+          ultimaActividadObj: ultimaActividad,
+          totalVisitas: uVisitas.length,
+          visitasCompletadas: uVisitas.filter(v => v.checkOutHora).length,
+          visitasEnCurso: paradaEnCurso ? 1 : 0,
+          tiempoEnCampoMinutos: tiempoTotalMin,
+          tiempoEnCampoMin: tiempoTotalMin,
+          tiempoEnCampoFormateado,
+          tiempoEnCampoTexto: tiempoEnCampoFormateado,
+          paradaActiva: paradaEnCurso ? {
+            id: paradaEnCurso.id,
+            lugar: paradaEnCurso.resultadoResumen,
+            checkInHora: paradaEnCurso.checkInHora,
+            horaLlegada: formatHoraColombia(paradaEnCurso.checkInHora),
+            motivo: paradaEnCurso.tipoVisita
+          } : null,
+          movimientoActivo: paradaEnCurso ? {
+            id: paradaEnCurso.id,
+            lugar: paradaEnCurso.resultadoResumen,
+            resultadoResumen: paradaEnCurso.resultadoResumen,
+            checkInHora: paradaEnCurso.checkInHora,
+            horaLlegada: formatHoraColombia(paradaEnCurso.checkInHora),
+            tipoVisita: paradaEnCurso.tipoVisita,
+            motivo: paradaEnCurso.tipoVisita
+          } : null,
+          trazabilidad: movimientosCronologicos,
+          movimientos: movimientosCronologicos
+        };
+      });
+
+      // Si hay término de búsqueda, filtrar asesores
+      let asesoresResultado = asesoresPaneles;
+      if (busqueda && String(busqueda).trim()) {
+        const q = String(busqueda).trim().toLowerCase();
+        asesoresResultado = asesoresPaneles.filter(a => {
+          const matchAsesor = a.nombre.toLowerCase().includes(q) || a.user.toLowerCase().includes(q) || a.cargo.toLowerCase().includes(q);
+          const matchVisitas = a.trazabilidad.some(t =>
+            t.clienteVisitado.toLowerCase().includes(q) ||
+            t.direccion.toLowerCase().includes(q) ||
+            t.observaciones.toLowerCase().includes(q) ||
+            t.actividadesRealizadas.toLowerCase().includes(q)
+          );
+          return matchAsesor || matchVisitas;
+        });
+      }
+
+      // Métricas globales para el Delegado
+      const totalAsesores = asesoresResultado.length;
+      const enRutaCount = asesoresResultado.filter(a => a.estado === 'En ruta').length;
+      const visitandoCount = asesoresResultado.filter(a => a.estado === 'Visitando Cliente').length;
+      const finalizadasCount = asesoresResultado.filter(a => a.estado === 'Finalizada').length;
+      const totalVisitasGlobal = asesoresResultado.reduce((acc, a) => acc + a.totalVisitas, 0);
+      const tiempoGlobalMin = asesoresResultado.reduce((acc, a) => acc + a.tiempoEnCampoMinutos, 0);
+      const promedioMinPorParada = totalVisitasGlobal > 0 ? Math.round(tiempoGlobalMin / totalVisitasGlobal) : 0;
+      const tiempoTotalTexto = `${Math.floor(tiempoGlobalMin / 60)}h ${tiempoGlobalMin % 60}m`;
+
+      res.json({
+        success: true,
+        fecha: fechaStr,
+        metricasGlobales: {
+          totalAsesores,
+          enRuta: enRutaCount,
+          visitandoCliente: visitandoCount,
+          finalizadas: finalizadasCount,
+          totalVisitas: totalVisitasGlobal,
+          tiempoTotalMinutos: tiempoGlobalMin,
+          tiempoTotalFormateado: tiempoTotalTexto,
+          tiempoTotalTexto,
+          promedioMinutosPorParada: promedioMinPorParada
+        },
+        resumenGlobal: {
+          totalAsesores,
+          asesoresEnRuta: enRutaCount,
+          asesoresVisitando: visitandoCount,
+          totalVisitas: totalVisitasGlobal,
+          tiempoTotalMin: tiempoGlobalMin,
+          tiempoTotalTexto,
+          tiempoPromedioPorVisitaMin: promedioMinPorParada
+        },
+        asesores: asesoresResultado
+      });
+    } catch (err) {
+      console.error('[getPanelGerencialMovimientos Error]', err);
       res.status(500).json({ error: err.message });
     }
   }
