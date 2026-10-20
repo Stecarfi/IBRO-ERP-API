@@ -8,6 +8,7 @@ const evidenciasService = require('../services/campo/evidencias.service');
 const reportesService = require('../services/campo/reportes.service');
 const evaluacionesCampoService = require('../services/campo/evaluacionesCampo.service');
 const operacionExternaService = require('../services/campo/operacionExterna.service');
+const auditoriaService = require('../services/auditoria.service');
 const {
   iniciarJornadaSchema,
   pausaJornadaSchema,
@@ -132,6 +133,42 @@ const formatHoraColombia = (dateVal) => {
     minute: '2-digit',
     hour12: true
   }).format(d);
+};
+
+const getColombiaDayBounds = (date = new Date()) => {
+  const d = date instanceof Date ? date : new Date(date);
+  const colombiaStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+  const startOfDay = new Date(`${colombiaStr}T00:00:00-05:00`);
+  const endOfDay = new Date(`${colombiaStr}T23:59:59.999-05:00`);
+  return { startOfDay, endOfDay, colombiaStr };
+};
+
+const autoCerrarJornadasVencidas = async (prismaInstance) => {
+  try {
+    const ahora = new Date();
+    const { startOfDay } = getColombiaDayBounds(ahora);
+
+    // Cierre estricto e irrevocable de cualquier turno de días anteriores que haya quedado abierto
+    await prismaInstance.jornadaLaboral.updateMany({
+      where: {
+        horaFin: null,
+        horaInicio: { lt: startOfDay },
+        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
+      },
+      data: {
+        estado: 'Cierre Automatico',
+        horaFin: startOfDay,
+        observaciones: 'Cierre automático por cambio de fecha calendario (Auditoría)'
+      }
+    });
+  } catch (err) {
+    console.warn('[autoCerrarJornadasVencidas] Advertencia en auto-cierre:', err?.message);
+  }
 };
 
 class CampoController {
@@ -969,12 +1006,26 @@ class CampoController {
         return res.status(403).json({ error: 'Acceso restringido al Delegado de Gerencia.' });
       }
 
+      await autoCerrarJornadasVencidas(prisma);
+
       const ahora = new Date();
-      const startOfDay = new Date(ahora);
-      startOfDay.setHours(0, 0, 0, 0);
+      const { startOfDay, endOfDay } = getColombiaDayBounds(ahora);
+
+      // Consulta de presencia real conectada a la secuencia de inicio de sesión y telemetría
+      let dataPresencia = null;
+      try {
+        dataPresencia = await auditoriaService.obtenerSesionesActivas(ahora);
+      } catch (ePres) {
+        console.warn('[getComercialesEnCampo] Error consultando auditoriaService:', ePres?.message);
+      }
+      const presenciaMap = new Map();
+      (dataPresencia?.usuarios || []).forEach(p => {
+        presenciaMap.set(String(p.id), p);
+      });
 
       const comerciales = await prisma.user.findMany({
         where: {
+          isLocked: false,
           OR: [
             { esComercialCampo: true },
             { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
@@ -1006,7 +1057,8 @@ class CampoController {
           role: { select: { id: true, name: true } },
           jornadas: {
             where: {
-              estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
+              estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] },
+              horaInicio: { gte: startOfDay, lte: endOfDay }
             },
             take: 1,
             orderBy: { horaInicio: 'desc' },
@@ -1016,18 +1068,62 @@ class CampoController {
         orderBy: { nombre: 'asc' }
       });
 
+      const comercialesIds = comerciales.map(c => c.id);
+      const ultimosPings = await prisma.rastreoUbicacion.findMany({
+        where: {
+          usuarioId: { in: comercialesIds },
+          timestamp: { gte: startOfDay }
+        },
+        orderBy: { timestamp: 'desc' }
+      });
+      const pingMap = new Map();
+      ultimosPings.forEach(p => {
+        const uId = String(p.usuarioId);
+        if (!pingMap.has(uId)) pingMap.set(uId, p);
+      });
+
       const mapped = comerciales.map(c => {
+        const cKey = String(c.id);
+        const pres = presenciaMap.get(cKey);
+        const pingGps = pingMap.get(cKey);
+
         const tieneJornadaActivaHoy = Boolean(c.jornadas && c.jornadas.length > 0);
-        const updateTime = c.lastLocationUpdate ? Number(c.lastLocationUpdate) : null;
-        const pingReciente = updateTime ? (Date.now() - updateTime < 15 * 60 * 1000) : false;
-        const estaOnline = Boolean(c.isOnline || tieneJornadaActivaHoy || pingReciente);
+        const jActiva = tieneJornadaActivaHoy ? c.jornadas[0] : null;
+
+        // Trazabilidad real de conexión desde la secuencia de login / auditoría
+        const isOnlineReal = Boolean(pres?.isOnline || (pres?.estadoPresencia === 'EN_LINEA'));
+        const primerIngreso = pres?.primerIngreso || (jActiva ? jActiva.horaInicio : null);
+        const ultimoAccesoHoy = pres?.ultimoAccesoHoy || null;
+
+        const updateTime = pingGps?.timestamp
+          ? new Date(pingGps.timestamp).getTime()
+          : (c.lastLocationUpdate ? Number(c.lastLocationUpdate) : null);
+        const diffMs = updateTime ? (ahora.getTime() - updateTime) : Infinity;
+        const pingReciente = diffMs < 15 * 60 * 1000;
+
+        // Batería: SOLO valor real si fue reportado, NUNCA inventar 90 o 95
+        const bateriaReal = (pingReciente && pingGps?.bateria != null)
+          ? Number(pingGps.bateria)
+          : (jActiva?.bateriaInicio != null ? Number(jActiva.bateriaInicio) : null);
+
+        // En Vivo: Requiere reporte reciente de GPS Y estar en jornada activa hoy Y estar en línea
+        const enVivo = Boolean(tieneJornadaActivaHoy && pingReciente && isOnlineReal);
+
         return {
           ...c,
-          isOnline: estaOnline,
-          jornadaActivaId: tieneJornadaActivaHoy ? c.jornadas[0].id : null,
-          estadoJornada: tieneJornadaActivaHoy ? c.jornadas[0].estado : 'Sin Turno',
-          bateria: c.jornadas?.[0]?.bateriaInicio ?? 90,
-          enVivo: Boolean(tieneJornadaActivaHoy || pingReciente)
+          isOnline: isOnlineReal,
+          primerIngreso,
+          ultimoAccesoHoy,
+          estadoPresencia: pres?.estadoPresencia || (isOnlineReal ? 'EN_LINEA' : 'DESCONECTADO'),
+          jornadaActivaId: jActiva ? jActiva.id : null,
+          horaInicioJornada: jActiva ? jActiva.horaInicio : null,
+          estadoJornada: jActiva ? jActiva.estado : 'Sin Turno',
+          bateria: bateriaReal,
+          velocidad: pingReciente && pingGps?.velocidad != null ? Math.round(Number(pingGps.velocidad)) : 0,
+          lat: pingReciente && pingGps?.lat ? Number(pingGps.lat) : (c.lat ? Number(c.lat) : null),
+          lng: pingReciente && pingGps?.lng ? Number(pingGps.lng) : (c.lng ? Number(c.lng) : null),
+          lastLocationUpdate: updateTime ? new Date(updateTime).toISOString() : null,
+          enVivo
         };
       });
 
@@ -2037,15 +2133,27 @@ class CampoController {
         return res.status(403).json({ error: 'Acceso restringido al Delegado de Gerencia.' });
       }
 
+      await autoCerrarJornadasVencidas(prisma);
+
       const ahora = new Date();
-      const nowCol = new Date(Date.now() - 5 * 3600 * 1000);
-      const hoyStr = nowCol.toISOString().split('T')[0];
-      const startOfDay = new Date(`${hoyStr}T00:00:00.000Z`);
-      const endOfDay = new Date(new Date(`${hoyStr}T23:59:59.999Z`).getTime() + 6 * 3600 * 1000);
+      const { startOfDay, endOfDay } = getColombiaDayBounds(ahora);
+
+      // Consulta de presencia real conectada a la secuencia de inicio de sesión y telemetría
+      let dataPresencia = null;
+      try {
+        dataPresencia = await auditoriaService.obtenerSesionesActivas(ahora);
+      } catch (ePres) {
+        console.warn('[getPanelOperativo] Error consultando auditoriaService:', ePres?.message);
+      }
+      const presenciaMap = new Map();
+      (dataPresencia?.usuarios || []).forEach(p => {
+        presenciaMap.set(String(p.id), p);
+      });
 
       // 1. Obtener todos los comerciales de campo
       const comerciales = await prisma.user.findMany({
         where: {
+          isLocked: false,
           OR: [
             { esComercialCampo: true },
             { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
@@ -2099,14 +2207,11 @@ class CampoController {
         ? `${delegadoSupervisor.nombre} ${delegadoSupervisor.apellido || ''}`.trim() + (delegadoSupervisor.cargo ? ` (${delegadoSupervisor.cargo})` : ' (Delegado de Gerencia)')
         : 'Delegación General de Gerencia';
 
-      // 2. Todas las jornadas de HOY (o activas actualmente)
+      // 2. Todas las jornadas de HOY (estrictamente dentro de la fecha de hoy)
       const todasJornadasHoy = await prisma.jornadaLaboral.findMany({
         where: {
           usuarioId: { in: comercialesIds },
-          OR: [
-            { horaInicio: { gte: startOfDay, lte: endOfDay } },
-            { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] } }
-          ]
+          horaInicio: { gte: startOfDay, lte: endOfDay }
         },
         orderBy: { id: 'desc' }
       });
@@ -2172,10 +2277,20 @@ class CampoController {
 
       const comercialesDetalle = comerciales.map(c => {
         const cKey = String(c.id);
+        const pres = presenciaMap.get(cKey) || presenciaMap.get(String(c.id));
         const jActiva = jornadasActivasPorUsuario.get(cKey) || jornadasActivasPorUsuario.get(c.id);
         const jUltima = ultimaJornadaPorUsuario.get(cKey) || ultimaJornadaPorUsuario.get(c.id);
         const vEnCurso = visitasEnCursoPorUsuario.get(cKey) || visitasEnCursoPorUsuario.get(c.id);
         const pingGps = pingPorUsuario.get(cKey) || pingPorUsuario.get(c.id);
+
+        const isOnlineReal = Boolean(pres?.isOnline || (pres?.estadoPresencia === 'EN_LINEA'));
+        const primerIngreso = pres?.primerIngreso || (jActiva ? jActiva.horaInicio : null);
+        const ultimoAccesoHoy = pres?.ultimoAccesoHoy || null;
+
+        const updateTime = pingGps?.timestamp
+          ? new Date(pingGps.timestamp).getTime()
+          : (c.lastLocationUpdate ? Number(c.lastLocationUpdate) : null);
+        const pingReciente = updateTime ? (ahora.getTime() - updateTime < 15 * 60 * 1000) : false;
 
         let estadoOperativo = 'desconectado';
         let estado = 'Fuera de Turno';
@@ -2203,26 +2318,24 @@ class CampoController {
             estado = 'En Pausa';
           } else {
             estadoOperativo = 'en_jornada';
-            estado = 'En Ruta';
+            estado = pingReciente ? 'En Ruta' : 'En Ruta (Sin Señal)';
             disponible = true;
             disponiblesCount++;
           }
         } else if (jUltima?.estado === 'Finalizada') {
           estadoOperativo = 'finalizada';
           estado = 'Jornada finalizada';
-        } else if (c.isOnline) {
+        } else if (isOnlineReal) {
           estadoOperativo = 'en_espera';
-          estado = 'Disponible';
-          disponible = true;
-          disponiblesCount++;
+          estado = 'En Línea (Sin Turno)';
+          disponible = false;
         }
 
         // Ubicación
-        let latVal = c.lat || pingGps?.lat;
-        let lngVal = c.lng || pingGps?.lng;
-        let updateTime = c.lastLocationUpdate || pingGps?.timestamp;
+        let latVal = (pingReciente && pingGps?.lat) ? pingGps.lat : (c.lat || null);
+        let lngVal = (pingReciente && pingGps?.lng) ? pingGps.lng : (c.lng || null);
         let ultimaUbicacion = 'Sin reporte GPS';
-        if (latVal && lngVal) {
+        if (latVal && lngVal && (jActiva || pingReciente)) {
           const horaGps = updateTime ? ` (${formatHora(updateTime)})` : '';
           ultimaUbicacion = `Lat: ${Number(latVal).toFixed(4)}, Lng: ${Number(lngVal).toFixed(4)}${horaGps}`;
         }
@@ -2234,15 +2347,23 @@ class CampoController {
           ? (vEnCurso.clienteExterno?.nombre || vEnCurso.cliente?.nom || vEnCurso.prospecto?.nombreComercial || 'Cliente en Visita')
           : 'Ninguno';
 
-        const bateriaVal = pingGps?.bateria ?? jActiva?.bateriaInicio ?? 90;
-        const velocidadVal = pingGps?.velocidad ? Math.round(Number(pingGps.velocidad)) : 0;
+        // Batería real (0 simulación)
+        const bateriaVal = (pingReciente && pingGps?.bateria != null)
+          ? Number(pingGps.bateria)
+          : (jActiva?.bateriaInicio != null ? Number(jActiva.bateriaInicio) : null);
+        const velocidadVal = (pingReciente && pingGps?.velocidad != null)
+          ? Math.round(Number(pingGps.velocidad))
+          : 0;
 
         return {
           ...c,
           nombreCompleto: `${c.nombre} ${c.apellido || ''}`.trim(),
           perfil: c.role?.name || c.cargo || 'Comercial en Campo',
           cargo: c.cargo || 'Asesor Comercial',
-          isOnline: Boolean(c.isOnline || jActiva),
+          isOnline: isOnlineReal,
+          primerIngreso,
+          ultimoAccesoHoy,
+          estadoPresencia: pres?.estadoPresencia || (isOnlineReal ? 'EN_LINEA' : 'DESCONECTADO'),
           estado,
           estadoOperativo,
           disponible,
@@ -2257,6 +2378,7 @@ class CampoController {
           horaInicioJornada: jActiva?.horaInicio || null,
           latActual: latVal || null,
           lngActual: lngVal || null,
+          enVivo: Boolean(jActiva && pingReciente && isOnlineReal),
           detalleVisita
         };
       });
@@ -3743,12 +3865,23 @@ class CampoController {
 
   async getMovimientosDia(req, res) {
     try {
+      await autoCerrarJornadasVencidas(prisma);
+
       const { fecha, periodo, usuarioId, desde, hasta } = req.query;
       const esDel = this.esDelegado(req.user);
       const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
 
       const ahora = new Date();
       const hoyColombia = getFechaColombia(ahora);
+
+      let dataPresencia = null;
+      try {
+        dataPresencia = await auditoriaService.obtenerSesionesActivas(ahora);
+      } catch (ePres) {}
+      const presenciaMap = new Map();
+      (dataPresencia?.usuarios || []).forEach(p => {
+        presenciaMap.set(String(p.id), p);
+      });
 
       const where = {};
       if (targetUserId) {
@@ -3850,10 +3983,14 @@ class CampoController {
         advisorColorMap[u.id] = i % 8;
       });
 
-      // 4. Obtener jornadas de campo activas o recientes
+      // 4. Obtener jornadas de campo activas o recientes (estrictamente filtradas por fecha válida de hoy)
+      const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
       const jornadas = await prisma.jornadaLaboral.findMany({
-        where: targetUserId ? { usuarioId: targetUserId } : {},
-        orderBy: { fecha: 'desc' },
+        where: {
+          ...(targetUserId ? { usuarioId: targetUserId } : {}),
+          horaInicio: { gte: startOfToday, lte: endOfToday }
+        },
+        orderBy: { horaInicio: 'desc' },
         take: 50
       });
       const jornadasPorUsuario = new Map();
@@ -4018,6 +4155,8 @@ class CampoController {
       const asesoresDetalle = usuariosCampo.map(u => {
         const uMovs = movimientos.filter(m => m.usuarioId === u.id);
         const j = jornadasPorUsuario.get(u.id);
+        const pres = presenciaMap.get(String(u.id));
+        const isOnlineReal = Boolean(pres?.isOnline || (pres?.estadoPresencia === 'EN_LINEA'));
         const paradaActiva = uMovs.find(m => m.estado === 'En Curso' || !m.checkOutHora);
 
         let estadoOperativo = 'Sin actividad';
@@ -4035,7 +4174,7 @@ class CampoController {
         } else if (j && j.estado === 'Finalizada') {
           estadoOperativo = 'Finalizada';
           estadoColor = 'slate';
-        } else if (u.isOnline) {
+        } else if (isOnlineReal) {
           estadoOperativo = 'Disponible';
           estadoColor = 'blue';
         } else if (uMovs.length > 0) {
@@ -4057,7 +4196,8 @@ class CampoController {
           cargo: u.cargo || 'Asesor Comercial',
           foto: u.foto || null,
           telefono: u.telefono || null,
-          isOnline: Boolean(u.isOnline),
+          isOnline: isOnlineReal,
+          primerIngreso: pres?.primerIngreso || (j ? j.horaInicio : null),
           colorIndex: advisorColorMap[u.id] !== undefined ? advisorColorMap[u.id] : 0,
           estado: estadoOperativo,
           estadoColor,

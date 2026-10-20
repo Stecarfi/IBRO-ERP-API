@@ -316,8 +316,12 @@ class TrackingService {
         estadoOperativo,
         estado,
         jornadaId: jornadaActiva?.id || null,
-        bateria: ultimoPing?.bateria ?? jornadaActiva?.bateriaInicio ?? 90,
-        velocidad: ultimoPing?.velocidad ? Math.round(Number(ultimoPing.velocidad)) : 0,
+        bateria: (pingReciente && ultimoPing?.bateria != null)
+          ? Number(ultimoPing.bateria)
+          : (jornadaActiva?.bateriaInicio != null ? Number(jornadaActiva.bateriaInicio) : null),
+        velocidad: (pingReciente && ultimoPing?.velocidad != null)
+          ? Math.round(Number(ultimoPing.velocidad))
+          : 0,
         clienteActual: visitaEnCurso?.clienteExterno?.nombre || visitaEnCurso?.cliente?.nom || visitaEnCurso?.prospecto?.nombreComercial || null
       };
     });

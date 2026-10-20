@@ -114,6 +114,21 @@ class AuthService {
             }
         }).catch(() => {});
 
+        // Conectar a la secuencia oficial de AuditoriaSesion
+        try {
+            const auditoriaService = require('./auditoria.service');
+            await auditoriaService.registrarActividad(
+                dbUser.id,
+                'LOGIN',
+                'Autenticación',
+                'Inicio de sesión exitoso',
+                '127.0.0.1',
+                'Sistema ERP Web'
+            );
+        } catch (e) {
+            console.warn('[LOGIN] Advertencia registrando sesión de auditoría:', e?.message);
+        }
+
         return { token, refreshToken, user: updatedUser };
     }
 
@@ -138,6 +153,19 @@ class AuthService {
                         isOnline: activeTokens.length > 0
                     }
                 });
+
+                // Registrar cierre de sesión en AuditoriaSesion
+                try {
+                    const auditoriaService = require('./auditoria.service');
+                    await auditoriaService.registrarActividad(
+                        decoded.id,
+                        'LOGOUT',
+                        'Autenticación',
+                        'Cierre de sesión de usuario',
+                        '127.0.0.1',
+                        'Sistema ERP Web'
+                    );
+                } catch (e) {}
             }
         } catch (e) {
             // Ignorar si el token ya expiró o es inválido

@@ -331,15 +331,11 @@ class AuditoriaService {
         orderBy: { fechaInicio: 'desc' }
       }) : null;
 
-      // 3. Jornada laboral iniciada hoy
+      // 3. Jornada laboral iniciada hoy (estrictamente en la fecha actual)
       const jornadaToday = await prisma.jornadaLaboral.findFirst({
         where: {
           usuarioId: u.id,
-          OR: [
-            { horaInicio: { gte: startOfDay, lte: endOfDay } },
-            { fecha: { gte: startOfDay, lte: endOfDay } },
-            { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } }
-          ]
+          horaInicio: { gte: startOfDay, lte: endOfDay }
         },
         orderBy: { horaInicio: 'desc' }
       });
