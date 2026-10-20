@@ -311,11 +311,16 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
   // 1. Filas Usuarios en Línea
   let onlineRowsHtml = '';
   if (onlineUsers.length === 0) {
-    onlineRowsHtml = `<tr><td colspan="5" style="padding: 12px; text-align: center; color: #6b7280; font-style: italic;">No hay usuarios conectados en línea en este momento.</td></tr>`;
+    onlineRowsHtml = `<tr><td colspan="6" style="padding: 16px; text-align: center; color: #6b7280; font-style: italic;">No hay colaboradores con actividad verificada en los últimos 5 minutos.</td></tr>`;
   } else {
     onlineRowsHtml = onlineUsers.map((u, idx) => {
-      const horaIngreso = u.primerIngreso ? formatColombiaTime(u.primerIngreso, timeZone) : (u.lastLogin ? formatColombiaTime(u.lastLogin, timeZone) : 'Activo ahora');
-      const ultActividad = u.ultimoAccesoHoy ? formatColombiaTime(u.ultimoAccesoHoy, timeZone) : 'En vivo';
+      const horaIngreso = u.primerIngreso ? formatColombiaTime(u.primerIngreso, timeZone) : 'Hoy';
+      const ultActividad = u.ultimoAccesoHoy ? formatColombiaTime(u.ultimoAccesoHoy, timeZone) : 'Reciente';
+      const ev = u.evidencia || {};
+      const eventoDesc = ev.ultimoEventoDesc ? (ev.ultimoEventoDesc.length > 35 ? ev.ultimoEventoDesc.substring(0, 32) + '...' : ev.ultimoEventoDesc) : (ev.ultimoEventoTipo || 'Interacción');
+      const moduloStr = ev.ultimoEventoModulo || 'Sistema';
+      const dispInfo = `${ev.dispositivo || 'Desktop'} · ${ev.ip || 'IP'}`;
+
       return `
         <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f9fafb'}; border-bottom: 1px solid #e5e7eb;">
           <td style="padding: 10px 12px; font-weight: 600; color: #111827;">
@@ -324,7 +329,14 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
           </td>
           <td style="padding: 10px 12px; color: #374151; font-size: 12px;">${u.correo || 'Sin correo'}</td>
           <td style="padding: 10px 12px; color: #047857; font-size: 12px; font-weight: 600;">${horaIngreso}</td>
-          <td style="padding: 10px 12px; color: #1f2937; font-size: 12px;">${ultActividad}</td>
+          <td style="padding: 10px 12px; color: #1f2937; font-size: 12px;">
+            <div style="font-weight: 700; color: #111827;">${ultActividad}</div>
+            <div style="font-size: 10px; color: #059669; font-weight: 600;">Hace ${u.minutesSinceLast !== null ? u.minutesSinceLast : 0} min</div>
+          </td>
+          <td style="padding: 10px 12px; font-size: 11px; color: #4b5563;">
+            <div style="font-weight: 700; color: #1e3a8a;">📁 ${moduloStr}: <span style="font-weight: normal; color: #374151;">${eventoDesc}</span></div>
+            <div style="font-size: 10px; color: #6b7280;">💻 ${dispInfo}</div>
+          </td>
           <td style="padding: 10px 12px; text-align: center;">
             <span style="display: inline-block; background-color: #d1fae5; color: #065f46; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 9999px;">
               🟢 EN LÍNEA
@@ -338,12 +350,16 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
   // 2. Filas Usuarios Activos Hoy (Desconectados)
   let activeTodayRowsHtml = '';
   if (activeTodayUsers.length === 0) {
-    activeTodayRowsHtml = `<tr><td colspan="5" style="padding: 12px; text-align: center; color: #6b7280; font-style: italic;">No hay colaboradores desconectados con actividad previa registrada hoy.</td></tr>`;
+    activeTodayRowsHtml = `<tr><td colspan="6" style="padding: 16px; text-align: center; color: #6b7280; font-style: italic;">No hay colaboradores desconectados con actividad previa registrada hoy.</td></tr>`;
   } else {
     activeTodayRowsHtml = activeTodayUsers.map((u, idx) => {
-      const horaIngreso = u.primerIngreso ? formatColombiaTime(u.primerIngreso, timeZone) : 'Registrado';
+      const horaIngreso = u.primerIngreso ? formatColombiaTime(u.primerIngreso, timeZone) : 'Hoy';
       const ultActividad = u.ultimoAccesoHoy ? formatColombiaTime(u.ultimoAccesoHoy, timeZone) : 'Hoy';
       const tiempoOff = u.ultimoAccesoHoy ? formatTimeAgo(u.ultimoAccesoHoy, now) : 'Hace poco';
+      const ev = u.evidencia || {};
+      const eventoDesc = ev.ultimoEventoDesc ? (ev.ultimoEventoDesc.length > 35 ? ev.ultimoEventoDesc.substring(0, 32) + '...' : ev.ultimoEventoDesc) : (ev.ultimoEventoTipo || 'Interacción');
+      const moduloStr = ev.ultimoEventoModulo || 'Sistema';
+
       return `
         <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f9fafb'}; border-bottom: 1px solid #e5e7eb;">
           <td style="padding: 10px 12px; font-weight: 600; color: #111827;">
@@ -353,6 +369,10 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
           <td style="padding: 10px 12px; color: #374151; font-size: 12px;">${u.correo || 'Sin correo'}</td>
           <td style="padding: 10px 12px; color: #1e40af; font-size: 12px; font-weight: 600;">${horaIngreso}</td>
           <td style="padding: 10px 12px; color: #1f2937; font-size: 12px;">${ultActividad}</td>
+          <td style="padding: 10px 12px; font-size: 11px; color: #4b5563;">
+            <div style="font-weight: 600; color: #475569;">📁 ${moduloStr}: ${eventoDesc}</div>
+            <div style="font-size: 10px; color: #94a3b8;">${ev.dispositivo || 'Desktop'} · ${ev.ip || 'IP'}</div>
+          </td>
           <td style="padding: 10px 12px; text-align: center;">
             <span style="display: inline-block; background-color: #e0f2fe; color: #0369a1; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 9999px;">
               ⏱️ ${tiempoOff}
@@ -463,7 +483,8 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
                   <th style="padding: 8px 12px;">Colaborador</th>
                   <th style="padding: 8px 12px;">Correo</th>
                   <th style="padding: 8px 12px;">Primer Ingreso</th>
-                  <th style="padding: 8px 12px;">Última Actividad</th>
+                  <th style="padding: 8px 12px;">Última Actividad Real</th>
+                  <th style="padding: 8px 12px;">Evidencia Frontend</th>
                   <th style="padding: 8px 12px; text-align: center;">Estado</th>
                 </tr>
               </thead>
@@ -487,6 +508,7 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
                   <th style="padding: 8px 12px;">Correo</th>
                   <th style="padding: 8px 12px;">Primer Ingreso</th>
                   <th style="padding: 8px 12px;">Último Registro</th>
+                  <th style="padding: 8px 12px;">Evidencia Frontend</th>
                   <th style="padding: 8px 12px; text-align: center;">Desconectado</th>
                 </tr>
               </thead>

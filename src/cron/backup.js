@@ -112,20 +112,12 @@ function setupCronJobs() {
 
 // Función oficial para generar y enviar el reporte de actividad con trazabilidad real
 async function generateActivityReport(reportName = "Corte de Control") {
-    console.log(`[CRON] Generando reporte oficial de actividad de sesiones: ${reportName}...`);
+    console.log(`[CRON] Generando reporte oficial de auditoría de sesiones basado en evidencia: ${reportName}...`);
     try {
       const { sendDailyLoginReportEmail } = require('../emailService');
+      const auditoriaService = require('../services/auditoria.service');
       const timeZone = process.env.TIMEZONE || 'America/Bogota';
       const now = new Date();
-
-      // Calcular fecha comercial de Colombia (UTC-5)
-      const formatterDate = new Intl.DateTimeFormat('en-CA', { 
-        timeZone, 
-        year: 'numeric', 
-        month: '2-digit', 
-        day: '2-digit' 
-      });
-      const fechaHoyStr = formatterDate.format(now); // 'YYYY-MM-DD'
 
       const formatterPretty = new Intl.DateTimeFormat('es-CO', {
         timeZone,
@@ -135,121 +127,17 @@ async function generateActivityReport(reportName = "Corte de Control") {
         day: 'numeric'
       });
       const dateStr = formatterPretty.format(now);
-
-      // Límites exactos del día comercial en UTC (00:00:00 COT = 05:00:00Z | 23:59:59 COT = 04:59:59Z día siguiente)
+      const fechaHoyStr = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
       const startOfDay = new Date(`${fechaHoyStr}T05:00:00.000Z`);
       const endOfDay = new Date(startOfDay.getTime() + 24 * 3600 * 1000 - 1);
 
-      // Obtener todos los colaboradores habilitados en el sistema
-      const allUsers = await prisma.user.findMany({
-        where: { isLocked: false },
-        include: { role: { select: { id: true, name: true } } },
-        orderBy: { nombre: 'asc' }
-      });
-
-      const onlineUsers = [];
-      const activeTodayUsers = [];
-      const inactiveUsers = [];
-
-      for (const u of allUsers) {
-        // 1. Auditorías del día (inicios de sesión o acciones registradas)
-        const auditsToday = await prisma.auditoria.findMany({
-          where: {
-            userId: u.id,
-            fecha: { gte: startOfDay, lte: endOfDay }
-          },
-          orderBy: { fecha: 'asc' }
-        });
-
-        const loginAuditToday = auditsToday.filter(a => a.action === 'LOGIN');
-
-        // 2. Jornada laboral iniciada, en ruta o completada hoy
-        const jornadaToday = await prisma.jornadaLaboral.findFirst({
-          where: {
-            usuarioId: u.id,
-            OR: [
-              { horaInicio: { gte: startOfDay, lte: endOfDay } },
-              { fecha: { gte: startOfDay, lte: endOfDay } },
-              { estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] } }
-            ]
-          },
-          orderBy: { horaInicio: 'desc' }
-        });
-
-        // 3. Telemetría y visitas en campo registradas hoy
-        const visitasHoy = await prisma.visitaCampo.count({
-          where: {
-            usuarioId: u.id,
-            checkInHora: { gte: startOfDay, lte: endOfDay }
-          }
-        });
-
-        // 4. Verificación de última sesión
-        const lastLoginDate = u.lastLogin ? new Date(u.lastLogin) : null;
-        const lastLoginToday = Boolean(lastLoginDate && lastLoginDate.getTime() >= startOfDay.getTime() && lastLoginDate.getTime() <= endOfDay.getTime());
-        const isOnlineNow = Boolean(u.isOnline);
-
-        // Determinación de ingreso real en la jornada
-        const ingresoHoy = isOnlineNow || lastLoginToday || auditsToday.length > 0 || Boolean(jornadaToday) || visitasHoy > 0;
-
-        // Determinar hora de primer ingreso hoy
-        let primerIngreso = null;
-        if (loginAuditToday.length > 0) {
-          primerIngreso = loginAuditToday[0].fecha;
-        } else if (jornadaToday?.horaInicio) {
-          primerIngreso = jornadaToday.horaInicio;
-        } else if (auditsToday.length > 0) {
-          primerIngreso = auditsToday[0].fecha;
-        } else if (lastLoginToday) {
-          primerIngreso = lastLoginDate;
-        }
-
-        // Determinar hora de última actividad hoy
-        let ultimoAccesoHoy = null;
-        if (isOnlineNow) {
-          ultimoAccesoHoy = now;
-        } else if (auditsToday.length > 0) {
-          ultimoAccesoHoy = auditsToday[auditsToday.length - 1].fecha;
-        } else if (jornadaToday?.horaFin) {
-          ultimoAccesoHoy = jornadaToday.horaFin;
-        } else if (lastLoginToday) {
-          ultimoAccesoHoy = lastLoginDate;
-        }
-
-        // Determinar último acceso histórico si no entró hoy
-        let ultimoAccesoHistorico = lastLoginDate;
-        if (!ultimoAccesoHistorico) {
-          const lastAudit = await prisma.auditoria.findFirst({
-            where: { userId: u.id },
-            orderBy: { fecha: 'desc' }
-          });
-          if (lastAudit) ultimoAccesoHistorico = lastAudit.fecha;
-        }
-
-        const userData = {
-          id: u.id,
-          user: u.user,
-          nombre: `${u.nombre} ${u.apellido || ''}`.trim(),
-          cargo: u.cargo || u.role?.name || 'Colaborador',
-          correo: u.correo,
-          isOnline: isOnlineNow,
-          primerIngreso,
-          ultimoAccesoHoy,
-          ultimoAccesoHistorico,
-          tieneJornada: Boolean(jornadaToday),
-          estadoJornada: jornadaToday?.estado || null,
-          visitasHoy,
-          totalAuditsToday: auditsToday.length
-        };
-
-        if (isOnlineNow) {
-          onlineUsers.push(userData);
-        } else if (ingresoHoy) {
-          activeTodayUsers.push(userData);
-        } else {
-          inactiveUsers.push(userData);
-        }
-      }
+      // OBTENER SESIONES BASADO EXCLUSIVAMENTE EN EVIDENCIA REAL (PROHIBIDO SIMULAR O ESTIMAR)
+      const dataPresencia = await auditoriaService.obtenerSesionesActivas(now);
+      const onlineUsers = dataPresencia.onlineUsers;
+      const activeTodayUsers = dataPresencia.activeTodayUsers;
+      const inactivosPendientes = dataPresencia.inactivosPendientes;
+      const inactivosProlongados = dataPresencia.inactivosProlongados;
+      const inactiveUsers = [...inactivosPendientes, ...inactivosProlongados];
 
       // Obtener Administrador Master, Directores, Gerencia y Delegados
       const adminsAndDirectors = await prisma.user.findMany({

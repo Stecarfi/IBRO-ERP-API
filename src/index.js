@@ -25,6 +25,7 @@ const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('.
 const driveService = require('./services/drive.service');
 const videoStreamService = require('./services/video-stream.service');
 const pushNotificationService = require('./services/pushNotification.service');
+const auditoriaService = require('./services/auditoria.service');
 
 const path = require('path');
 const app = express();
@@ -1239,16 +1240,13 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         }
       });
 
-      // Registrar auditoría
-      await prisma.auditoria.create({
-        data: {
-          userId: dbUser.id,
-          fecha: new Date(),
-          action: 'LOGIN',
-          modulo: 'Autenticación',
-          recordDetails: 'Inicio de sesión exitoso'
-        }
-      }).catch(() => {});
+      // Registrar auditoría oficial e iniciar sesión de presencia verificada
+      await auditoriaService.registrarEvento(req, {
+        userId: dbUser.id,
+        action: 'LOGIN',
+        modulo: 'Autenticación',
+        recordDetails: 'Inicio de sesión exitoso'
+      }).catch(err => console.error('[LOGIN Audit Error]', err.message));
 
       // Update clients
       broadcastUpdate('DB_UPDATE');
@@ -1362,15 +1360,13 @@ app.all('/api/logout', async (req, res) => {
           }
         });
 
-        await prisma.auditoria.create({
-          data: {
-            userId: targetUserId,
-            fecha: new Date(),
-            action: 'LOGOUT',
-            modulo: 'Autenticación',
-            recordDetails: 'Cierre de sesión exitoso'
-          }
-        }).catch(() => {});
+        // Registrar auditoría oficial y marcar sesión como DESCONECTADA
+        await auditoriaService.registrarEvento(req, {
+          userId: targetUserId,
+          action: 'LOGOUT',
+          modulo: 'Autenticación',
+          recordDetails: 'Cierre de sesión exitoso'
+        }).catch(err => console.error('[LOGOUT Audit Error]', err.message));
       }
     } catch (e) {
       console.log('Error invalidating session on logout:', e.message);
@@ -4487,18 +4483,12 @@ app.use('/api/campo', campoRoutes);
 app.use('/operaciones-campo', campoRoutes);
 app.use('/campo', campoRoutes);
 
-// Endpoint de Auditoría de Sesiones y Presencia a demanda
-const { generateActivityReport } = require('./cron/backup');
-app.all(['/api/auditoria/sesiones/reporte-manual', '/auditoria/sesiones/reporte-manual'], async (req, res) => {
-  try {
-    const corte = req.body?.corteNombre || req.query?.corteNombre || "Corte a Demanda de Control Gerencial";
-    const result = await generateActivityReport(corte);
-    res.json(result);
-  } catch (err) {
-    console.error('[API Auditoría Sesiones Error]', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+// ==========================================
+// 🛡️ MÓDULO: AUDITORÍA DE SESIONES Y PRESENCIA (FUENTE OFICIAL: FRONTEND)
+// ==========================================
+const auditoriaRoutes = require('./routes/auditoria.routes');
+app.use('/api/auditoria', auditoriaRoutes);
+app.use('/auditoria', auditoriaRoutes);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
@@ -4530,6 +4520,12 @@ io.on('connection', (socket) => {
   // Enviar lista actual al nuevo cliente
   socket.emit('online_users', Array.from(new Set(onlineUsers.values())));
 
+  socket.on('disconnect', () => {
+    onlineUsers.delete(socket.id);
+    broadcastOnlineUsers();
+    console.log(`[Socket.io] Client disconnected: ${socket.id}`);
+  });
+
   socket.on('join_chat', async (data) => {
     if (data && data.user) {
       const uStr = String(data.user).trim();
@@ -4538,15 +4534,6 @@ io.on('connection', (socket) => {
       onlineUsers.set(socket.id, uStr);
       broadcastOnlineUsers();
       console.log(`User ${uStr} joined personal room`);
-      try {
-        await prisma.user.updateMany({
-          where: { user: { equals: uStr, mode: 'insensitive' } },
-          data: { isOnline: true }
-        });
-        broadcastUpdate('DB_UPDATE');
-      } catch (err) {
-        console.error("Error setting isOnline true:", err);
-      }
     }
   });
 

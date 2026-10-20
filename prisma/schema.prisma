@@ -87,6 +87,7 @@ model User {
   chatsReceived         Chat[]                 @relation("ChatReceiver")
   chatGroupsCreated     ChatGroup[]            @relation("GroupCreator")
   auditorias            Auditoria[]
+  auditoriasSesiones    AuditoriaSesion[]
   notificaciones        Notificacion[]
   comisionistas         Comisionista[]
   pendingResets         PendingReset[]
@@ -559,12 +560,58 @@ model Auditoria {
   id            String   @id @default(uuid())
   userId        String
   user          User     @relation(fields: [userId], references: [id])
-  fecha         DateTime
+  fecha         DateTime @default(now())
   action        String
   modulo        String
   recordDetails String?
   shadowingData Json? // Mejorado de String @db.Text a Json
   hash          String?
+
+  // Trazabilidad real de presencia y dispositivo
+  ip            String?
+  navegador     String?
+  so            String?
+  dispositivo   String?
+  sessionId     String?
+  tabStatus     String?  @default("ACTIVA")
+
+  @@index([userId, fecha])
+  @@index([fecha])
+  @@index([action])
+}
+
+// 14.1 Auditoría de Sesiones y Presencia Efectiva (Frontend Source of Truth)
+model AuditoriaSesion {
+  id                     String    @id @default(uuid())
+  userId                 String
+  user                   User      @relation(fields: [userId], references: [id])
+  tokenSession           String?   @unique
+  fechaInicio            DateTime  @default(now())
+  fechaFin               DateTime?
+  ultimaActividad        DateTime  @default(now())
+  estado                 String    @default("EN_LINEA") // EN_LINEA | INACTIVO | DESCONECTADO
+  ip                     String?
+  navegador              String?
+  so                     String?
+  dispositivo            String?
+  userAgent              String?
+  tabStatus              String?   @default("ACTIVA")
+  tiempoTotalSegundos    Int       @default(0)
+  tiempoActivoSegundos   Int       @default(0)
+  tiempoInactivoSegundos Int       @default(0)
+  totalEventos           Int       @default(0)
+  modulosVisitados       String[]  @default([])
+  ultimoEventoId         String?
+  ultimoEventoTipo       String?
+  ultimoEventoModulo     String?
+  ultimoEventoDesc       String?
+  ultimoEventoFecha      DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([userId, estado])
+  @@index([fechaInicio])
+  @@index([ultimaActividad])
 }
 
 // 15. Notificaciones
