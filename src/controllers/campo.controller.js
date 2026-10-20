@@ -3838,7 +3838,7 @@ class CampoController {
             { cargo: { contains: 'Campo', mode: 'insensitive' } },
             { cargo: { contains: 'Ventas', mode: 'insensitive' } },
             { visitasCampo: { some: {} } },
-            { jornadasLaborales: { some: {} } }
+            { jornadas: { some: {} } }
           ]
         },
         select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true, telefono: true, isOnline: true }
@@ -4066,6 +4066,7 @@ class CampoController {
           direccionActual: paradaActiva ? paradaActiva.direccion : (ultimaParada ? ultimaParada.direccion : ''),
           coordenadasActuales: paradaActiva ? { lat: paradaActiva.checkInLat, lng: paradaActiva.checkInLng } : (ultimaParada ? { lat: ultimaParada.checkInLat || ultimaParada.checkOutLat, lng: ultimaParada.checkInLng || ultimaParada.checkOutLng } : null),
           totalVisitas: uMovs.length,
+          totalParadas: uMovs.length,
           visitasCompletadas: completadas,
           visitasEnCurso: paradaActiva ? 1 : 0,
           tiempoEnCampoMin,
