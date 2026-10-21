@@ -538,6 +538,12 @@ class SyncService {
         tutorFirma: c.tutorFirma || null,
         tutor: c.tutor || null,
         creadoEn: c.creadoEn ? (typeof c.creadoEn === 'string' ? c.creadoEn : c.creadoEn.toISOString()) : '',
+        duracionMinutos: c.duracionMinutos ?? null,
+        duracionSegundos: c.duracionSegundos ?? null,
+        musicaFondo: c.musicaFondo || null,
+        velocidadVoz: c.velocidadVoz ?? 1.0,
+        narracionActiva: !!c.narracionActiva,
+        tipoVoz: c.tipoVoz || null,
         materiales: c.materiales ? (typeof c.materiales === 'string' ? JSON.parse(c.materiales) : c.materiales) : [],
         asistentes: rawAsistentes,
         evaluacion: c.evaluacion ? (typeof c.evaluacion === 'string' ? JSON.parse(c.evaluacion) : c.evaluacion) : null,
@@ -981,6 +987,7 @@ class SyncService {
 
         const sellerId = await resolveUser(item.vendedorId || item.vendedor, true);
         const data = {
+          ...item,
           fecha: item.fecha ? new Date(item.fecha) : new Date(),
           fechaIso: item.fechaIso ? new Date(item.fechaIso) : new Date(),
           venceGarantiaIso: item.venceGarantiaIso ? new Date(item.venceGarantiaIso) : new Date(),
@@ -1049,6 +1056,7 @@ class SyncService {
 
         const sellerId = await resolveUser(item.vendedorId || item.vendedor, true);
         const data = {
+          ...item,
           numCotizacion: item.numCotizacion || null,
           fecha: item.fecha ? new Date(item.fecha) : new Date(),
           vendedorId: sellerId,
@@ -1515,6 +1523,7 @@ class SyncService {
         if (!crId) crId = user?.id || (await getUsersCache())[0]?.id;
 
         const data = {
+          ...item,
           tipo: item.tipo || 'Capacitación',
           tema: item.tema,
           descripcion: item.descripcion || null,

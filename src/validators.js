@@ -2,7 +2,7 @@ const { z } = require('zod');
 
 /**
  * IBRO ERP - Backend Schema Validators & Sanitizers (validators.js)
- * Validación Zod y sanitización estricta para garantizar compatibilidad con PostgreSQL y Prisma ORM.
+ * Validación Zod y sanitización estricta para garantizar compatibilidad 1:1 con PostgreSQL y Prisma ORM.
  */
 
 // 1. Esquemas Zod por Entidad
@@ -107,26 +107,47 @@ const PRISMA_ALLOWED_FIELDS = {
   inventario: [
     'id', 'cod', 'ref', 'nom', 'marca', 'clasif', 'subclasif', 'tech', 'btu',
     'volt', 'cant', 'pedido', 'precio', 'precio_publico', 'precio_tecnico',
-    'precio_mayorista', 'precio_costo', 'vendidas', 'lockedBy', 'datosExt'
+    'precio_mayorista', 'precio_costo', 'vendidas', 'lockedBy', 'datosExt',
+    'tipo_item', 'refrigerante', 'techClass', 'grupo', 'detalleTecnico',
+    'cuenta', 'peso', 'pesoEmpaque', 'nombreEmpaque', 'unidadesEmpaque',
+    'fabricante', 'presentacion', 'cuentaInventario', 'cuentaCosto',
+    'cuentaIngreso', 'cuentaDevolucion', 'categoriaImpuesto', 'porcentajeIva',
+    'kardexHistory'
   ],
 
   venta: [
-    'id', 'fecha', 'fechaIso', 'venceGarantiaIso', 'mesesGarantia', 'vendedorId',
-    'clienteId', 'metodoPago', 'total', 'comisionistaId', 'comisionistaNombre',
+    'id', 'numPedido', 'numCotizacion', 'cotizacionId',
+    'fecha', 'fechaIso', 'venceGarantiaIso', 'mesesGarantia', 'vendedorId',
+    'clienteId', 'clienteNombre', 'clienteNit', 'clienteDireccion',
+    'clienteCiudadDpto', 'clientePais', 'clienteTelefono', 'clienteMovil', 'clienteEmail',
+    'desc', 'metodoPago', 'total', 'comisionistaId', 'comisionistaNombre',
     'comisionistaPct', 'comisionistaValor', 'estadoComision', 'fechaComision',
-    'tipo_precio', 'lockedBy', 'vendedorNombre', 'vendedorCargo', 'vendedorEmail',
-    'vendedorMovil', 'vendedorCodigoAsesor', 'cotizacionId', 'numCotizacion', 'equipos', 'materiales'
+    'tipo_precio', 'lockedBy', 'lockedAt',
+    'contacto', 'condiciones', 'detallePagoMixto', 'tiempoEntrega', 'direccionEntrega',
+    'fechaEntrega', 'horaEntrega', 'franjaHoraria', 'diasEntrega',
+    'cuentas', 'cuentasBancarias', 'firmanteNombre', 'firmanteCargo', 'firmanteCorreo', 'firmanteMovil',
+    'garantia', 'tipoGarantia', 'tiempoGarantia', 'tiempoGarantiaDefecto',
+    'observacion', 'vigencia', 'ivaTipo', 'customIva', 'iva', 'ivaValor', 'priceTier',
+    'firmaAsesor', 'estadoAprobacion', 'estadoFacturacion', 'facturado',
+    'vendedorNombre', 'vendedorCargo', 'vendedorEmail',
+    'vendedorMovil', 'vendedorCodigoAsesor', 'equipos', 'materiales'
   ],
 
   cotizacion: [
-    'id', 'numCotizacion', 'fecha', 'vendedorId', 'clienteId', 'total',
-    'comisionistaId', 'comisionistaNombre', 'comisionistaPct', 'comisionistaValor',
-    'lockedBy', 'contacto', 'condiciones', 'tiempoEntrega', 'franjaHoraria', 'diasEntrega', 'customIva', 'iva', 'ivaValor', 'direccionEntrega',
-    'detallePagoMixto', 'cuentas', 'firmanteNombre', 'firmanteCargo', 'firmanteCorreo',
-    'firmanteMovil', 'garantia', 'observacion', 'vigencia', 'ivaTipo', 'equipos',
-    'materiales', 'tipo_precio', 'fechaSeguimiento', 'estadoSeguimiento',
-    'motivoSeguimiento', 'motivoNoCompra', 'vendedorNombre', 'vendedorCargo',
-    'vendedorEmail', 'vendedorMovil', 'vendedorCodigoAsesor'
+    'id', 'numCotizacion', 'fecha', 'fechaIso', 'vendedorId', 'clienteId',
+    'clienteNombre', 'clienteNit', 'clienteDireccion', 'clienteCiudadDpto',
+    'clientePais', 'clienteTelefono', 'clienteMovil', 'clienteEmail',
+    'desc', 'total', 'comisionistaId', 'comisionistaNombre', 'comisionistaPct', 'comisionistaValor',
+    'lockedBy', 'lockedAt', 'contacto', 'condiciones', 'tiempoEntrega',
+    'fechaEntrega', 'horaEntrega', 'franjaHoraria', 'diasEntrega',
+    'customIva', 'iva', 'ivaValor', 'priceTier', 'direccionEntrega',
+    'detallePagoMixto', 'cuentas', 'cuentasBancarias',
+    'firmanteNombre', 'firmanteCargo', 'firmanteCorreo', 'firmanteMovil',
+    'garantia', 'tipoGarantia', 'tiempoGarantia', 'tiempoGarantiaDefecto',
+    'observacion', 'vigencia', 'ivaTipo', 'firmaAsesor', 'estadoAprobacion',
+    'equipos', 'materiales', 'tipo_precio', 'fechaSeguimiento', 'estadoSeguimiento',
+    'motivoSeguimiento', 'motivoNoCompra', 'noCompraronDetalle',
+    'vendedorNombre', 'vendedorCargo', 'vendedorEmail', 'vendedorMovil', 'vendedorCodigoAsesor'
   ],
 
   servicio: [
@@ -167,7 +188,9 @@ const PRISMA_ALLOWED_FIELDS = {
   capacitacion: [
     'id', 'tipo', 'tema', 'descripcion', 'fecha', 'hora', 'obligatoria',
     'creadorId', 'videoLink', 'videoFile', 'videoFileName', 'plataforma', 'enlaceReunion',
-    'tutorFirma', 'tutor', 'creadoEn', 'materiales', 'asistentes', 'evaluacion',
+    'tutorFirma', 'tutor', 'creadoEn',
+    'duracionMinutos', 'duracionSegundos', 'musicaFondo', 'velocidadVoz', 'narracionActiva', 'tipoVoz',
+    'materiales', 'asistentes', 'evaluacion',
     'estado', 'lockedBy'
   ],
 
@@ -200,7 +223,7 @@ const PRISMA_ALLOWED_FIELDS = {
   ],
 
   notificacion: [
-    'id', 'paraId', 'titulo', 'mensaje', 'de', 'tipo', 'fecha', 'leida', 'targetModule', 'chatTarget'
+    'id', 'paraId', 'titulo', 'mensaje', 'de', 'tipo', 'fecha', 'leida', 'targetModule'
   ],
 
   role: [
@@ -267,11 +290,13 @@ const PRISMA_ALLOWED_FIELDS = {
   ],
 
   visitaCampo: [
-    'id', 'codigo', 'jornadaId', 'usuarioId', 'clienteId', 'prospectoId',
+    'id', 'codigo', 'jornadaId', 'usuarioId', 'clienteId', 'prospectoId', 'clienteExternoId',
     'tipoVisita', 'estado', 'fechaProgramada', 'horaEstimada', 'checkInHora',
     'checkInLat', 'checkInLng', 'checkInPrecision', 'checkInDistanciaM',
     'checkInFoto', 'checkOutHora', 'checkOutLat', 'checkOutLng', 'duracionMin',
-    'motivoNoEfectiva', 'contactoAtendio', 'resultadoResumen', 'compromisos',
+    'motivoNoEfectiva', 'contactoAtendio', 'resultadoResumen', 'resultadoVisita',
+    'observaciones', 'actividadesRealizadas', 'hallazgos', 'compromisosAdquiridos',
+    'situacionesObservadas', 'recomendaciones', 'compromisos',
     'proximaVisita', 'firmaCliente', 'cotizacionId', 'ventaId', 'servicioId',
     'evidencias', 'createdAt'
   ],
@@ -291,26 +316,36 @@ const PRISMA_ALLOWED_FIELDS = {
   evaluacionComercialCampo: [
     'id', 'evaluadorId', 'usuarioId', 'periodo', 'fecha', 'grupoCargo',
     'calificacionGeneral', 'estadoCumplimiento', 'indicadoresDetalle',
-    'fortalezasGenerales', 'debilidadesGenerales', 'oportunidadesMejora',
-    'planAccionGeneral', 'fechaSeguimiento', 'aprobadoDelegado',
-    'observacionesGenerales', 'createdAt', 'updatedAt'
+    'fortalezasGenerales', 'debilidadesGenerales', 'recomendaciones', 'compromisos',
+    'accionesCorrectivas', 'oportunidadesMejora',
+    'planAccionGeneral', 'fechaSeguimiento', 'fechaProximaEvaluacion', 'aprobadoDelegado',
+    'observacionesGenerales', 'metadata', 'createdAt', 'updatedAt'
   ],
 
   clienteExternoCampo: [
     'id', 'codigo', 'nombre', 'nitDoc', 'contacto', 'telefono', 'correo',
-    'ciudad', 'direccion', 'sectorEconomico', 'origen', 'tipoRegistro',
+    'ciudad', 'direccion', 'sectorEconomico', 'clasificacion', 'origen', 'tipoRegistro',
     'etapaEmbudo', 'comercialId', 'notas', 'lat', 'lng', 'createdAt', 'updatedAt'
   ],
 
   cotizacionExternaCampo: [
     'id', 'codigo', 'clienteExternoId', 'comercialId', 'fecha', 'validezDias',
-    'estado', 'total', 'items', 'observaciones', 'seguimientos', 'historial',
+    'estado', 'desc', 'total', 'items', 'equipos', 'materiales',
+    'contacto', 'condiciones', 'tiempoEntrega', 'direccionEntrega', 'fechaEntrega', 'horaEntrega',
+    'garantia', 'tipoGarantia', 'tiempoGarantia', 'tiempoGarantiaDefecto',
+    'ivaTipo', 'customIva', 'iva', 'ivaValor', 'priceTier', 'cuentasBancarias',
+    'firmaAsesor', 'estadoAprobacion',
+    'observaciones', 'seguimientos', 'historial',
     'createdAt', 'updatedAt'
   ],
 
   ventaExternaCampo: [
     'id', 'codigo', 'clienteExternoId', 'comercialId', 'cotizacionId', 'fecha',
-    'valorVendido', 'metodoPago', 'observaciones', 'items', 'estado',
+    'desc', 'valorVendido', 'metodoPago', 'observaciones', 'items', 'equipos', 'materiales',
+    'contacto', 'condiciones', 'tiempoEntrega', 'direccionEntrega', 'fechaEntrega', 'horaEntrega',
+    'garantia', 'tipoGarantia', 'tiempoGarantia', 'tiempoGarantiaDefecto',
+    'ivaTipo', 'customIva', 'iva', 'ivaValor', 'priceTier', 'cuentasBancarias',
+    'firmaAsesor', 'estadoAprobacion', 'estado',
     'createdAt', 'updatedAt'
   ],
 
@@ -344,6 +379,7 @@ const TABLE_TO_MODEL = {
   inventario: 'inventario',
   venta: 'venta',
   ventas: 'venta',
+  pedidos: 'venta',
   cotizacion: 'cotizacion',
   cotizaciones: 'cotizacion',
   servicio: 'servicio',
@@ -558,18 +594,24 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.btu = cleaned.btu ? String(cleaned.btu) : 'N/A';
     cleaned.volt = cleaned.volt ? String(cleaned.volt) : '220V';
 
-    const extKeys = [
+    const extStringKeys = [
       'tipo_item', 'refrigerante', 'techClass', 'grupo', 'detalleTecnico',
       'cuenta', 'peso', 'pesoEmpaque', 'nombreEmpaque', 'unidadesEmpaque',
       'fabricante', 'presentacion', 'cuentaInventario', 'cuentaCosto',
-      'cuentaIngreso', 'cuentaDevolucion', 'categoriaImpuesto', 'porcentajeIva',
-      'kardexHistory'
+      'cuentaIngreso', 'cuentaDevolucion', 'categoriaImpuesto', 'porcentajeIva'
     ];
     let extData = (item.datosExt && typeof item.datosExt === 'object') ? { ...item.datosExt } : {};
-    for (const k of extKeys) {
-      if (item[k] !== undefined && item[k] !== null && item[k] !== '') {
-        extData[k] = item[k];
+    for (const k of extStringKeys) {
+      const val = item[k] !== undefined ? item[k] : extData[k];
+      if (val !== undefined && val !== null && val !== '') {
+        cleaned[k] = String(val);
+        extData[k] = String(val);
       }
+    }
+    const rawKardex = item.kardexHistory !== undefined ? item.kardexHistory : extData.kardexHistory;
+    if (rawKardex !== undefined && rawKardex !== null) {
+      cleaned.kardexHistory = safeJson(rawKardex, []);
+      extData.kardexHistory = cleaned.kardexHistory;
     }
     cleaned.datosExt = Object.keys(extData).length > 0 ? extData : (cleaned.datosExt || null);
   } else if (modelKey === 'venta') {
@@ -577,11 +619,24 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.fechaIso = safeDate(cleaned.fechaIso, cleaned.fecha || new Date());
     cleaned.venceGarantiaIso = safeDate(cleaned.venceGarantiaIso, new Date(Date.now() + 365 * 24 * 60 * 60 * 1000));
     cleaned.mesesGarantia = parseInt(cleaned.mesesGarantia) || 12;
+    cleaned.desc = cleaned.desc !== undefined && cleaned.desc !== null ? parseFloat(cleaned.desc) || 0 : 0;
     cleaned.total = parseFloat(cleaned.total) || 0;
     cleaned.metodoPago = cleaned.metodoPago ? String(cleaned.metodoPago) : 'Efectivo';
     cleaned.comisionistaPct = cleaned.comisionistaPct !== undefined && cleaned.comisionistaPct !== null ? parseFloat(cleaned.comisionistaPct) || null : null;
     cleaned.comisionistaValor = cleaned.comisionistaValor !== undefined && cleaned.comisionistaValor !== null ? parseFloat(cleaned.comisionistaValor) || null : null;
     cleaned.fechaComision = safeDate(cleaned.fechaComision, null);
+    cleaned.lockedAt = safeDate(cleaned.lockedAt, null);
+    cleaned.vigencia = cleaned.vigencia !== undefined && cleaned.vigencia !== null ? parseInt(cleaned.vigencia) || 10 : 10;
+    cleaned.customIva = cleaned.customIva !== undefined && cleaned.customIva !== null && cleaned.customIva !== '' ? parseFloat(cleaned.customIva) || 0 : null;
+    cleaned.iva = cleaned.iva !== undefined && cleaned.iva !== null && cleaned.iva !== '' ? parseFloat(cleaned.iva) || 0 : null;
+    cleaned.ivaValor = cleaned.ivaValor !== undefined && cleaned.ivaValor !== null && cleaned.ivaValor !== '' ? parseFloat(cleaned.ivaValor) || 0 : null;
+    if (cleaned.facturado !== undefined) {
+      cleaned.facturado = cleaned.facturado === true || cleaned.facturado === 'true';
+    }
+    cleaned.cuentasBancarias = safeJson(cleaned.cuentasBancarias, null);
+    if (!cleaned.cuentas && item.cuentasBancarias) {
+      cleaned.cuentas = typeof item.cuentasBancarias === 'string' ? item.cuentasBancarias : JSON.stringify(item.cuentasBancarias);
+    }
     cleaned.equipos = safeJson(cleaned.equipos, []);
     cleaned.materiales = safeJson(cleaned.materiales, []);
     cleaned.vendedorId = cleaned.vendedorId || item.vendedorId;
@@ -590,11 +645,18 @@ function sanitizeBackendForPrisma(tableName, item) {
     delete cleaned.comisionista;
   } else if (modelKey === 'cotizacion') {
     cleaned.fecha = safeDate(cleaned.fecha, new Date());
+    cleaned.fechaIso = safeDate(cleaned.fechaIso, cleaned.fecha || new Date());
+    cleaned.desc = cleaned.desc !== undefined && cleaned.desc !== null ? parseFloat(cleaned.desc) || 0 : 0;
     cleaned.total = parseFloat(cleaned.total) || 0;
     cleaned.vigencia = parseInt(cleaned.vigencia) || 10;
     cleaned.fechaSeguimiento = safeDate(cleaned.fechaSeguimiento, null);
+    cleaned.lockedAt = safeDate(cleaned.lockedAt, null);
     cleaned.comisionistaPct = cleaned.comisionistaPct !== undefined && cleaned.comisionistaPct !== null ? parseFloat(cleaned.comisionistaPct) || null : null;
     cleaned.comisionistaValor = cleaned.comisionistaValor !== undefined && cleaned.comisionistaValor !== null ? parseFloat(cleaned.comisionistaValor) || null : null;
+    cleaned.customIva = cleaned.customIva !== undefined && cleaned.customIva !== null && cleaned.customIva !== '' ? parseFloat(cleaned.customIva) || 0 : null;
+    cleaned.iva = cleaned.iva !== undefined && cleaned.iva !== null && cleaned.iva !== '' ? parseFloat(cleaned.iva) || 0 : null;
+    cleaned.ivaValor = cleaned.ivaValor !== undefined && cleaned.ivaValor !== null && cleaned.ivaValor !== '' ? parseFloat(cleaned.ivaValor) || 0 : null;
+    cleaned.cuentasBancarias = safeJson(cleaned.cuentasBancarias, null);
     cleaned.equipos = safeJson(cleaned.equipos, []);
     cleaned.materiales = safeJson(cleaned.materiales, []);
     cleaned.vendedorId = cleaned.vendedorId || item.vendedorId;
@@ -723,9 +785,16 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.tutorFirma = cleaned.tutorFirma ? String(cleaned.tutorFirma) : null;
     cleaned.tutor = cleaned.tutor ? String(cleaned.tutor) : null;
     cleaned.creadoEn = safeDate(cleaned.creadoEn, cleaned.fecha || new Date());
+    cleaned.duracionMinutos = cleaned.duracionMinutos !== undefined && cleaned.duracionMinutos !== null && cleaned.duracionMinutos !== '' ? parseInt(cleaned.duracionMinutos) || 0 : null;
+    cleaned.duracionSegundos = cleaned.duracionSegundos !== undefined && cleaned.duracionSegundos !== null && cleaned.duracionSegundos !== '' ? parseInt(cleaned.duracionSegundos) || 0 : null;
+    cleaned.musicaFondo = cleaned.musicaFondo ? String(cleaned.musicaFondo) : null;
+    cleaned.velocidadVoz = cleaned.velocidadVoz !== undefined && cleaned.velocidadVoz !== null && cleaned.velocidadVoz !== '' ? parseFloat(cleaned.velocidadVoz) || 1.0 : null;
+    if (cleaned.narracionActiva !== undefined) {
+      cleaned.narracionActiva = cleaned.narracionActiva === true || cleaned.narracionActiva === 'true';
+    }
+    cleaned.tipoVoz = cleaned.tipoVoz ? String(cleaned.tipoVoz) : null;
     delete cleaned.creador;
     delete cleaned.creadorNombre;
-    delete cleaned.duracionMinutos;
     cleaned.estado = cleaned.estado ? String(cleaned.estado) : 'Programada';
     cleaned.obligatoria = cleaned.obligatoria === true || cleaned.obligatoria === 'true';
     cleaned.materiales = safeJson(cleaned.materiales, []);
@@ -847,7 +916,6 @@ function sanitizeBackendForPrisma(tableName, item) {
     } else {
       delete cleaned.pass;
     }
-    // Fase 0 (seguridad): antes se asignaba el rol '1' (Administrador Master) por defecto.
     if (cleaned.roleId) {
       cleaned.roleId = String(cleaned.roleId);
     } else {
@@ -890,7 +958,6 @@ function validateSyncPayload(diff) {
     throw new Error('Estructura de payload de sincronización inválida');
   }
 
-  // Validación de entidades críticas con Zod (modo permisivo que no bloquea si faltan campos no esenciales)
   const checkCollection = (items, schema, name) => {
     if (Array.isArray(items)) {
       items.forEach((item, idx) => {
@@ -924,4 +991,3 @@ module.exports = {
   safeJson,
   PRISMA_ALLOWED_FIELDS
 };
-

@@ -181,26 +181,47 @@ model Cliente {
 
 // 4. Inventario (Productos)
 model Inventario {
-  id               String  @id
-  cod              String  @unique
-  ref              String
-  nom              String
-  marca            String
-  clasif           String
-  subclasif        String
-  tech             String
-  btu              String
-  volt             String
-  cant             Int
-  pedido           Int
-  precio           Float
-  precio_publico   Float?
-  precio_tecnico   Float?
-  precio_mayorista Float?
-  precio_costo     Float?
-  vendidas         Int     @default(0)
-  lockedBy         String?
-  datosExt         Json?
+  id                String  @id
+  cod               String  @unique
+  ref               String
+  nom               String
+  marca             String
+  clasif            String
+  subclasif         String
+  tech              String
+  btu               String
+  volt              String
+  cant              Int
+  pedido            Int
+  precio            Float
+  precio_publico    Float?
+  precio_tecnico    Float?
+  precio_mayorista  Float?
+  precio_costo      Float?
+  vendidas          Int     @default(0)
+  lockedBy          String?
+  datosExt          Json?
+
+  // Campos extendidos de ficha técnica, empaque y contabilidad (Paridad 1:1 con Frontend)
+  tipo_item         String? @default("EQUIPO")
+  refrigerante      String?
+  techClass         String?
+  grupo             String?
+  detalleTecnico    String? @db.Text
+  cuenta            String?
+  peso              String?
+  pesoEmpaque       String?
+  nombreEmpaque     String?
+  unidadesEmpaque   String?
+  fabricante        String?
+  presentacion      String?
+  cuentaInventario  String?
+  cuentaCosto       String?
+  cuentaIngreso     String?
+  cuentaDevolucion  String?
+  categoriaImpuesto String?
+  porcentajeIva     String?
+  kardexHistory     Json?
 
   // Relaciones inversas
   ventaItems      VentaItem[]
@@ -212,6 +233,9 @@ model Inventario {
 // 5. Ventas / Facturación
 model Venta {
   id               String   @id
+  numPedido        String?
+  numCotizacion    String?
+  cotizacionId     String?
   fecha            DateTime
   fechaIso         DateTime
   venceGarantiaIso DateTime
@@ -224,9 +248,20 @@ model Venta {
   clienteId String
   cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
 
+  // Snapshot del Cliente en el momento del pedido/venta
+  clienteNombre     String?
+  clienteNit        String?
+  clienteDireccion  String?
+  clienteCiudadDpto String?
+  clientePais       String?
+  clienteTelefono   String?
+  clienteMovil      String?
+  clienteEmail      String?
+
   // Relación a múltiples productos
   items VentaItem[]
 
+  desc               Float?        @default(0)
   metodoPago         String
   total              Float
   comisionistaId     String?
@@ -238,8 +273,41 @@ model Venta {
   fechaComision      DateTime?
   tipo_precio        String?
   lockedBy           String?
+  lockedAt           DateTime?
 
-  // Datos desnormalizados del vendedor (Mantenidos por ahora para retrocompatibilidad parcial)
+  // Datos comerciales, entrega, garantías, impuestos y facturación (Paridad 1:1 con Frontend)
+  contacto              String?
+  condiciones           String?
+  detallePagoMixto      String?
+  tiempoEntrega         String?
+  direccionEntrega      String?
+  fechaEntrega          String?
+  horaEntrega           String?
+  franjaHoraria         String?
+  diasEntrega           String?
+  cuentas               String?
+  cuentasBancarias      Json?
+  firmanteNombre        String?
+  firmanteCargo         String?
+  firmanteCorreo        String?
+  firmanteMovil         String?
+  garantia              String?
+  tipoGarantia          String?
+  tiempoGarantia        String?
+  tiempoGarantiaDefecto String?
+  observacion           String?   @db.Text
+  vigencia              Int?      @default(10)
+  ivaTipo               String?   @default("exento")
+  customIva             Float?
+  iva                   Float?
+  ivaValor              Float?
+  priceTier             String?
+  firmaAsesor           String?   @db.Text
+  estadoAprobacion      String?   @default("Aprobado")
+  estadoFacturacion     String?   @default("Pendiente")
+  facturado             Boolean?  @default(false)
+
+  // Datos desnormalizados del vendedor
   vendedorNombre       String?
   vendedorCargo        String?
   vendedorEmail        String?
@@ -433,9 +501,10 @@ model Anuncio {
 
 // 12. Cotizaciones
 model Cotizacion {
-  id            String   @id
+  id            String    @id
   numCotizacion String?
   fecha         DateTime
+  fechaIso      DateTime?
 
   vendedorId String
   vendedor   User   @relation("CotizacionVendedor", fields: [vendedorId], references: [id])
@@ -444,38 +513,65 @@ model Cotizacion {
   clienteId String
   cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
 
+  // Snapshot del Cliente en el momento de la cotización
+  clienteNombre     String?
+  clienteNit        String?
+  clienteDireccion  String?
+  clienteCiudadDpto String?
+  clientePais       String?
+  clienteTelefono   String?
+  clienteMovil      String?
+  clienteEmail      String?
+
   // Relación a múltiples productos
   items CotizacionItem[]
 
+  desc               Float?    @default(0)
   total              Float
   comisionistaId     String?
   comisionistaNombre String?
   comisionistaPct    Float?
   comisionistaValor  Float?
   lockedBy           String?
+  lockedAt           DateTime?
 
-  // Nuevos campos para soporte de múltiples ítems y propuesta
-  contacto          String?
-  condiciones       String?
-  tiempoEntrega     String?
-  direccionEntrega  String?
-  detallePagoMixto  String?
-  cuentas           String?
-  firmanteNombre    String?
-  firmanteCargo     String?
-  firmanteCorreo    String?
-  firmanteMovil     String?
-  garantia          String?
-  observacion       String?
-  vigencia          Int?      @default(10)
-  ivaTipo           String?   @default("exento")
-  equipos           Json? // JSON en vez de String
-  materiales        Json? // JSON en vez de String
-  tipo_precio       String?
-  fechaSeguimiento  DateTime?
-  estadoSeguimiento String?
-  motivoSeguimiento String?
-  motivoNoCompra    String?
+  // Nuevos campos para soporte de múltiples ítems y propuesta (Paridad 1:1 con Frontend)
+  contacto              String?
+  condiciones           String?
+  tiempoEntrega         String?
+  direccionEntrega      String?
+  fechaEntrega          String?
+  horaEntrega           String?
+  franjaHoraria         String?
+  diasEntrega           String?
+  detallePagoMixto      String?
+  cuentas               String?
+  cuentasBancarias      Json?
+  firmanteNombre        String?
+  firmanteCargo         String?
+  firmanteCorreo        String?
+  firmanteMovil         String?
+  garantia              String?
+  tipoGarantia          String?
+  tiempoGarantia        String?
+  tiempoGarantiaDefecto String?
+  observacion           String?   @db.Text
+  vigencia              Int?      @default(10)
+  ivaTipo               String?   @default("exento")
+  customIva             Float?
+  iva                   Float?
+  ivaValor              Float?
+  priceTier             String?
+  firmaAsesor           String?   @db.Text
+  estadoAprobacion      String?   @default("Aprobado")
+  equipos               Json? // JSON en vez de String
+  materiales            Json? // JSON en vez de String
+  tipo_precio           String?
+  fechaSeguimiento      DateTime?
+  estadoSeguimiento     String?
+  motivoSeguimiento     String?
+  motivoNoCompra        String?
+  noCompraronDetalle    String?   @db.Text
 
   // Nuevos campos para datos del vendedor
   vendedorNombre       String?
@@ -725,19 +821,25 @@ model Capacitacion {
   creadorId String
   creador   User   @relation("CapacitacionCreador", fields: [creadorId], references: [id])
 
-  videoLink     String?
-  videoFile     String?
-  videoFileName String?
-  plataforma    String?
-  enlaceReunion String?
-  tutorFirma    String?
-  tutor         String?
-  creadoEn      DateTime?
-  materiales    Json? // JSON para adjuntos
-  asistentes    Json? // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
-  evaluacion    Json? // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
-  estado        String  @default("Programada") // Programada, En Curso, Finalizada
-  lockedBy      String?
+  videoLink        String?
+  videoFile        String?
+  videoFileName    String?
+  plataforma       String?
+  enlaceReunion    String?
+  tutorFirma       String?
+  tutor            String?
+  creadoEn         DateTime?
+  duracionMinutos  Int?
+  duracionSegundos Int?
+  musicaFondo      String?
+  velocidadVoz     Float?
+  narracionActiva  Boolean? @default(false)
+  tipoVoz          String?
+  materiales       Json? // JSON para adjuntos
+  asistentes       Json? // JSON: [{ userId, nombre, cargo, asistio: bool, calificacion: float, feedback: text }]
+  evaluacion       Json? // JSON: { title: string, questions: [{ text, options: [{text, isCorrect}] }] }
+  estado           String  @default("Programada") // Programada, En Curso, Finalizada
+  lockedBy         String?
 }
 
 // =========================================================================
@@ -1220,25 +1322,46 @@ model ClienteExternoCampo {
 
 // 37. Cotizaciones Comerciales Externas de Campo
 model CotizacionExternaCampo {
-  id                 String              @id @default(uuid())
-  codigo             String              @unique
-  clienteExternoId   String
-  clienteExterno     ClienteExternoCampo @relation(fields: [clienteExternoId], references: [id])
-  comercialId        String
-  comercial          User                @relation("CotizacionExternaComercial", fields: [comercialId], references: [id])
-  fecha              DateTime            @default(now())
-  validezDias        Int                 @default(15)
-  estado             String              @default("Borrador") // "Borrador" | "Enviada" | "En Negociacion" | "Aprobada" | "Rechazada"
-  total              Float               @default(0)
-  items              Json                // [{ descripcion, cantidad, precioUnit, subtotal }]
-  observaciones      String?             @db.Text
-  seguimientos       Json?               // [{ fecha, usuario, accion, nota }]
-  historial          Json?               // [{ fecha, estadoAnterior, nuevoEstado, nota }]
+  id                    String              @id @default(uuid())
+  codigo                String              @unique
+  clienteExternoId      String
+  clienteExterno        ClienteExternoCampo @relation(fields: [clienteExternoId], references: [id])
+  comercialId           String
+  comercial             User                @relation("CotizacionExternaComercial", fields: [comercialId], references: [id])
+  fecha                 DateTime            @default(now())
+  validezDias           Int                 @default(15)
+  estado                String              @default("Borrador") // "Borrador" | "Enviada" | "En Negociacion" | "Aprobada" | "Rechazada"
+  desc                  Float?              @default(0)
+  total                 Float               @default(0)
+  items                 Json                // [{ descripcion, cantidad, precioUnit, subtotal }]
+  equipos               Json?
+  materiales            Json?
+  contacto              String?
+  condiciones           String?
+  tiempoEntrega         String?
+  direccionEntrega      String?
+  fechaEntrega          String?
+  horaEntrega           String?
+  garantia              String?
+  tipoGarantia          String?
+  tiempoGarantia        String?
+  tiempoGarantiaDefecto String?
+  ivaTipo               String?             @default("exento")
+  customIva             Float?
+  iva                   Float?
+  ivaValor              Float?
+  priceTier             String?
+  cuentasBancarias      Json?
+  firmaAsesor           String?             @db.Text
+  estadoAprobacion      String?             @default("Aprobado")
+  observaciones         String?             @db.Text
+  seguimientos          Json?               // [{ fecha, usuario, accion, nota }]
+  historial             Json?               // [{ fecha, estadoAnterior, nuevoEstado, nota }]
   
-  ventas             VentaExternaCampo[]
+  ventas                VentaExternaCampo[]
   
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
 
   @@index([comercialId])
   @@index([clienteExternoId])
@@ -1247,23 +1370,44 @@ model CotizacionExternaCampo {
 
 // 38. Ventas y Cierres Comerciales Externos de Campo
 model VentaExternaCampo {
-  id                 String                  @id @default(uuid())
-  codigo             String                  @unique
-  clienteExternoId   String
-  clienteExterno     ClienteExternoCampo     @relation(fields: [clienteExternoId], references: [id])
-  comercialId        String
-  comercial          User                    @relation("VentaExternaComercial", fields: [comercialId], references: [id])
-  cotizacionId       String?
-  cotizacion         CotizacionExternaCampo? @relation(fields: [cotizacionId], references: [id])
-  fecha              DateTime                @default(now())
-  valorVendido       Float                   @default(0)
-  metodoPago         String?                 @default("Contado") // "Contado" | "Credito 15d" | "Credito 30d" | "Transferencia"
-  observaciones      String?                 @db.Text
-  items              Json?                   // [{ descripcion, cantidad, precioUnit, subtotal }]
-  estado             String                  @default("Cerrada") // "Cerrada" | "Entregada" | "Cancelada"
+  id                    String                  @id @default(uuid())
+  codigo                String                  @unique
+  clienteExternoId      String
+  clienteExterno        ClienteExternoCampo     @relation(fields: [clienteExternoId], references: [id])
+  comercialId           String
+  comercial             User                    @relation("VentaExternaComercial", fields: [comercialId], references: [id])
+  cotizacionId          String?
+  cotizacion            CotizacionExternaCampo? @relation(fields: [cotizacionId], references: [id])
+  fecha                 DateTime                @default(now())
+  desc                  Float?                  @default(0)
+  valorVendido          Float                   @default(0)
+  metodoPago            String?                 @default("Contado") // "Contado" | "Credito 15d" | "Credito 30d" | "Transferencia"
+  observaciones         String?                 @db.Text
+  items                 Json?                   // [{ descripcion, cantidad, precioUnit, subtotal }]
+  equipos               Json?
+  materiales            Json?
+  contacto              String?
+  condiciones           String?
+  tiempoEntrega         String?
+  direccionEntrega      String?
+  fechaEntrega          String?
+  horaEntrega           String?
+  garantia              String?
+  tipoGarantia          String?
+  tiempoGarantia        String?
+  tiempoGarantiaDefecto String?
+  ivaTipo               String?                 @default("exento")
+  customIva             Float?
+  iva                   Float?
+  ivaValor              Float?
+  priceTier             String?
+  cuentasBancarias      Json?
+  firmaAsesor           String?                 @db.Text
+  estadoAprobacion      String?                 @default("Aprobado")
+  estado                String                  @default("Cerrada") // "Cerrada" | "Entregada" | "Cancelada"
   
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
 
   @@index([comercialId])
   @@index([clienteExternoId])
