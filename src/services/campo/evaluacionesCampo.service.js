@@ -659,16 +659,14 @@ class EvaluacionesCampoService {
     const hoyInicio = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 0, 0, 0);
     const hoyFin = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59);
 
-    // Obtener todos los comerciales de campo
+    // Obtener únicamente usuarios con el rol estricto de Operador en Campo (excluir Delegados de Gerencia y Administradores)
     const comerciales = await prisma.user.findMany({
       where: {
         isLocked: false,
-        OR: [
-          { esComercialCampo: true },
-          { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
-          { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
-          { cargo: { contains: 'ASESOR', mode: 'insensitive' } }
-        ]
+        esComercialCampo: true,
+        esDelegadoGerencia: false,
+        roleId: { not: '1' },
+        user: { notIn: ['admin', 'ADMIN'] }
       },
       include: { role: true },
       orderBy: { nombre: 'asc' }

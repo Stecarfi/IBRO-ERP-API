@@ -1000,6 +1000,16 @@ class CampoController {
     }
   }
 
+  getFiltroOperadoresCampo() {
+    return {
+      isLocked: false,
+      esComercialCampo: true,
+      esDelegadoGerencia: false,
+      roleId: { not: '1' },
+      user: { notIn: ['admin', 'ADMIN'] }
+    };
+  }
+
   async getComercialesEnCampo(req, res) {
     try {
       if (!this.esDelegado(req.user)) {
@@ -1024,17 +1034,7 @@ class CampoController {
       });
 
       const comerciales = await prisma.user.findMany({
-        where: {
-          isLocked: false,
-          OR: [
-            { esComercialCampo: true },
-            { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
-            { role: { name: { contains: 'VENTAS', mode: 'insensitive' } } },
-            { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
-            { cargo: { contains: 'VENTAS', mode: 'insensitive' } },
-            { cargo: { contains: 'ASESOR', mode: 'insensitive' } }
-          ]
-        },
+        where: this.getFiltroOperadoresCampo(),
         select: {
           id: true,
           nombre: true,
@@ -2325,19 +2325,9 @@ class CampoController {
         presenciaMap.set(String(p.id), p);
       });
 
-      // 1. Obtener todos los comerciales de campo
+      // 1. Obtener únicamente los operadores en campo (nunca Delegados de Gerencia ni Administradores)
       const comerciales = await prisma.user.findMany({
-        where: {
-          isLocked: false,
-          OR: [
-            { esComercialCampo: true },
-            { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
-            { role: { name: { contains: 'VENTAS', mode: 'insensitive' } } },
-            { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
-            { cargo: { contains: 'VENTAS', mode: 'insensitive' } },
-            { cargo: { contains: 'ASESOR', mode: 'insensitive' } }
-          ]
-        },
+        where: this.getFiltroOperadoresCampo(),
         select: {
           id: true,
           nombre: true,
@@ -3725,23 +3715,9 @@ class CampoController {
       const { fecha, usuarioId, busqueda } = req.query;
       const esDel = this.esDelegado(req.user);
 
-      // 1. Obtener lista de usuarios que pertenecen a la operación comercial de campo
+      // 1. Obtener lista estricta de usuarios que tienen el rol de Operador en Campo (excluir Delegados de Gerencia)
       const whereUsers = {
-        OR: [
-          { esComercialCampo: true },
-          { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
-          { role: { name: { contains: 'VENTAS', mode: 'insensitive' } } },
-          { role: { name: { contains: 'EXTERNO', mode: 'insensitive' } } },
-          { role: { name: { contains: 'EJECUTIVO', mode: 'insensitive' } } },
-          { role: { name: { contains: 'ASESOR', mode: 'insensitive' } } },
-          { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
-          { cargo: { contains: 'VENTAS', mode: 'insensitive' } },
-          { cargo: { contains: 'ASESOR', mode: 'insensitive' } },
-          { cargo: { contains: 'EXTERNO', mode: 'insensitive' } },
-          { cargo: { contains: 'EJECUTIVO', mode: 'insensitive' } },
-          { cargo: { contains: 'CAMPO', mode: 'insensitive' } },
-          { cargo: { contains: 'VENDEDOR', mode: 'insensitive' } }
-        ]
+        ...this.getFiltroOperadoresCampo()
       };
 
       if (!esDel && req.user?.id) {
@@ -4243,7 +4219,33 @@ class CampoController {
         fechaStr = 'TODOS';
       }
 
-      // 1. Obtener todas las visitas en el filtro
+      // 1. Obtener la lista estricta de Operadores en Campo (nunca Delegados de Gerencia ni Administradores)
+      const usuariosCampo = await prisma.user.findMany({
+        where: this.getFiltroOperadoresCampo(),
+        select: {
+          id: true,
+          nombre: true,
+          apellido: true,
+          user: true,
+          cargo: true,
+          foto: true,
+          telefono: true,
+          isOnline: true,
+          lat: true,
+          lng: true,
+          lastLocationUpdate: true,
+          esComercialCampo: true,
+          esDelegadoGerencia: true
+        },
+        orderBy: { nombre: 'asc' }
+      });
+
+      const usuariosCampoIds = usuariosCampo.map(u => u.id);
+      if (!targetUserId) {
+        where.usuarioId = { in: usuariosCampoIds };
+      }
+
+      // 2. Obtener todas las visitas en el filtro
       const items = await prisma.visitaCampo.findMany({
         where,
         include: {
@@ -4260,41 +4262,41 @@ class CampoController {
         ]
       });
 
-      // 2. Obtener la lista completa de asesores de campo registrados en el sistema
-      const usuariosCampo = await prisma.user.findMany({
-        where: {
-          OR: [
-            { cargo: { contains: 'Comercial', mode: 'insensitive' } },
-            { cargo: { contains: 'Asesor', mode: 'insensitive' } },
-            { cargo: { contains: 'Campo', mode: 'insensitive' } },
-            { cargo: { contains: 'Ventas', mode: 'insensitive' } },
-            { visitasCampo: { some: {} } },
-            { jornadas: { some: {} } }
-          ]
-        },
-        select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true, telefono: true, isOnline: true }
-      });
-
-      // 3. Asignar un color fijo/determinístico a cada asesor
+      // 3. Asignar un color fijo/determinístico a cada operador
       const advisorColorMap = {};
       usuariosCampo.forEach((u, i) => {
         advisorColorMap[u.id] = i % 8;
       });
 
-      // 4. Obtener jornadas de campo activas o recientes (estrictamente filtradas por fecha válida de hoy)
+      // 4. Obtener jornadas de campo activas o recientes de hoy y últimos pings GPS
       const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
-      const jornadas = await prisma.jornadaLaboral.findMany({
-        where: {
-          ...(targetUserId ? { usuarioId: targetUserId } : {}),
-          horaInicio: { gte: startOfToday, lte: endOfToday }
-        },
-        orderBy: { horaInicio: 'desc' },
-        take: 50
-      });
+      const [jornadas, ultimosPings] = await Promise.all([
+        prisma.jornadaLaboral.findMany({
+          where: {
+            usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
+            horaInicio: { gte: startOfToday, lte: endOfToday }
+          },
+          orderBy: { horaInicio: 'desc' },
+          take: 50
+        }),
+        prisma.rastreoUbicacion.findMany({
+          where: {
+            usuarioId: { in: usuariosCampoIds }
+          },
+          orderBy: { timestamp: 'desc' },
+          take: 100
+        })
+      ]);
       const jornadasPorUsuario = new Map();
       jornadas.forEach(j => {
         if (!jornadasPorUsuario.has(j.usuarioId)) {
           jornadasPorUsuario.set(j.usuarioId, j);
+        }
+      });
+      const pingPorUsuario = new Map();
+      ultimosPings.forEach(p => {
+        if (!pingPorUsuario.has(p.usuarioId)) {
+          pingPorUsuario.set(p.usuarioId, p);
         }
       });
 
@@ -4493,23 +4495,62 @@ class CampoController {
         const anomaliasAsesor = anomaliasGlobales.filter(a => a.usuarioId === u.id);
 
         const ultimaParada = uMovs.length > 0 ? uMovs[uMovs.length - 1] : null;
+        const pingGps = pingPorUsuario.get(u.id);
+
+        // Resolver coordenadas en tiempo real del operador (parada activa > último ping / ubicación en vivo del usuario > inicio de turno > última parada)
+        let latReal = null;
+        let lngReal = null;
+        if (paradaActiva?.checkInLat && paradaActiva?.checkInLng) {
+          latReal = Number(paradaActiva.checkInLat);
+          lngReal = Number(paradaActiva.checkInLng);
+        } else if (u.lat != null && u.lng != null) {
+          latReal = Number(u.lat);
+          lngReal = Number(u.lng);
+        } else if (pingGps?.lat != null && pingGps?.lng != null) {
+          latReal = Number(pingGps.lat);
+          lngReal = Number(pingGps.lng);
+        } else if (j?.latInicio != null && j?.lngInicio != null) {
+          latReal = Number(j.latInicio);
+          lngReal = Number(j.lngInicio);
+        } else if (ultimaParada && (ultimaParada.checkInLat || ultimaParada.checkOutLat)) {
+          latReal = Number(ultimaParada.checkInLat || ultimaParada.checkOutLat);
+          lngReal = Number(ultimaParada.checkInLng || ultimaParada.checkOutLng);
+        }
+
+        const coordsObj = (latReal != null && lngReal != null && !isNaN(latReal) && !isNaN(lngReal))
+          ? { lat: latReal, lng: lngReal }
+          : null;
+
+        let textoUbicacion = 'Sin reporte GPS';
+        if (paradaActiva) {
+          textoUbicacion = `En visita: ${paradaActiva.lugar}`;
+        } else if (ultimaParada) {
+          textoUbicacion = `Última parada: ${ultimaParada.lugar}`;
+        } else if (coordsObj) {
+          textoUbicacion = `GPS en tiempo real (${coordsObj.lat.toFixed(4)}, ${coordsObj.lng.toFixed(4)})`;
+        }
 
         return {
           id: u.id,
           nombre: `${u.nombre} ${u.apellido || ''}`.trim() || u.user,
           user: u.user,
-          cargo: u.cargo || 'Asesor Comercial',
+          cargo: u.cargo || 'Operador en Campo',
           foto: u.foto || null,
           telefono: u.telefono || null,
+          esComercialCampo: true,
+          esDelegadoGerencia: false,
           isOnline: isOnlineReal,
           primerIngreso: pres?.primerIngreso || (j ? j.horaInicio : null),
           colorIndex: advisorColorMap[u.id] !== undefined ? advisorColorMap[u.id] : 0,
           estado: estadoOperativo,
           estadoColor,
           horaInicio: j?.horaInicio ? formatHoraColombia(j.horaInicio) : (uMovs.length > 0 && uMovs[0].checkInHora ? formatHoraColombia(uMovs[0].checkInHora) : '--:--'),
-          ubicacionActual: paradaActiva ? paradaActiva.lugar : (ultimaParada ? ultimaParada.lugar : 'Sin ubicación reciente'),
+          ubicacionActual: textoUbicacion,
           direccionActual: paradaActiva ? paradaActiva.direccion : (ultimaParada ? ultimaParada.direccion : ''),
-          coordenadasActuales: paradaActiva ? { lat: paradaActiva.checkInLat, lng: paradaActiva.checkInLng } : (ultimaParada ? { lat: ultimaParada.checkInLat || ultimaParada.checkOutLat, lng: ultimaParada.checkInLng || ultimaParada.checkOutLng } : null),
+          coordenadasActuales: coordsObj,
+          lat: coordsObj ? coordsObj.lat : null,
+          lng: coordsObj ? coordsObj.lng : null,
+          lastLocationUpdate: pingGps?.timestamp || (u.lastLocationUpdate ? new Date(Number(u.lastLocationUpdate)).toISOString() : null),
           totalVisitas: uMovs.length,
           totalParadas: uMovs.length,
           visitasCompletadas: completadas,

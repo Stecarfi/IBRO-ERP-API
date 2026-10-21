@@ -220,17 +220,7 @@ class TrackingService {
     startOfDay.setHours(0, 0, 0, 0);
 
     const users = await prisma.user.findMany({
-      where: {
-        esComercialCampo: true,
-        esDelegadoGerencia: false,
-        user: { not: 'admin' },
-        roleId: { not: '1' },
-        NOT: [
-          { cargo: { contains: 'director', mode: 'insensitive' } },
-          { cargo: { contains: 'delegad', mode: 'insensitive' } },
-          { cargo: { contains: 'gerent', mode: 'insensitive' } }
-        ]
-      },
+      where: { isLocked: false, esComercialCampo: true, esDelegadoGerencia: false, user: { not: 'admin' }, roleId: { not: '1' } },
       select: {
         id: true,
         user: true,

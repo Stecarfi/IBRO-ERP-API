@@ -3,8 +3,9 @@ const prisma = require('../prisma');
 class LocationController {
     async updateLocation(req, res) {
         const user = req.body.user || req.user?.user;
-        const { lat, lng } = req.body;
-        if (!user || lat === undefined || lng === undefined) {
+        const targetId = req.body.id || req.user?.id;
+        const { lat, lng, bateria, velocidad } = req.body;
+        if ((!user && !targetId) || lat === undefined || lng === undefined) {
             return res.status(400).json({ error: 'Faltan datos de ubicación' });
         }
 
@@ -15,25 +16,38 @@ class LocationController {
         }
 
         try {
-                const now = Date.now();
-                await prisma.user.updateMany({
-                    where: { user: { equals: user, mode: 'insensitive' } },
-                    data: {
-                        lat: parsedLat,
-                        lng: parsedLng,
-                        lastLocationUpdate: now // Float/BigInt numérico
-                    }
-                });
-                const io = req.app?.get('io');
-                if (io) {
-                    io.emit('LOCATION_UPDATE', {
-                        user,
-                        lat: parsedLat,
-                        lng: parsedLng,
-                        lastLocationUpdate: now
-                    });
+            const now = Date.now();
+            const whereOr = [];
+            if (targetId) whereOr.push({ id: String(targetId) });
+            if (user) whereOr.push({ user: { equals: String(user), mode: 'insensitive' } });
+
+            await prisma.user.updateMany({
+                where: { OR: whereOr },
+                data: {
+                    isOnline: true,
+                    lat: parsedLat,
+                    lng: parsedLng,
+                    lastLocationUpdate: now
                 }
-                res.json({ success: true, lat: parsedLat, lng: parsedLng });
+            });
+            const io = req.app?.get('io');
+            if (io) {
+                const payload = {
+                    id: targetId,
+                    usuarioId: targetId,
+                    user,
+                    lat: parsedLat,
+                    lng: parsedLng,
+                    bateria: bateria != null ? Number(bateria) : null,
+                    velocidad: velocidad != null ? Number(velocidad) : 0,
+                    isOnline: true,
+                    enVivo: true,
+                    lastLocationUpdate: now
+                };
+                io.emit('LOCATION_UPDATE', payload);
+                io.emit('CAMPO_TELEMETRIA_UPDATE', payload);
+            }
+            res.json({ success: true, lat: parsedLat, lng: parsedLng, lastLocationUpdate: now });
         } catch (error) {
             console.error('Error actualizando ubicación:', error);
             res.status(500).json({ error: 'Error del servidor', details: error.message });
@@ -53,7 +67,9 @@ class LocationController {
                     foto: true,
                     lat: true,
                     lng: true,
-                    lastLocationUpdate: true
+                    lastLocationUpdate: true,
+                    esComercialCampo: true,
+                    esDelegadoGerencia: true
                 },
                 where: {
                     lat: { not: null },
