@@ -49,10 +49,10 @@ class EvidenciasService {
       orderBy: { fechaHora: 'desc' },
       include: {
         usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
-        visita: { select: { id: true, codigo: true, clienteId: true, prospectoId: true } },
+        visita: { select: { id: true, codigo: true, clienteId: true, prospectoId: true, resultadoResumen: true } },
         actividad: { select: { id: true, codigo: true, titulo: true } }
       },
-      take: 100
+      take: 150
     });
 
     return { success: true, evidencias };
@@ -132,13 +132,19 @@ class EvidenciasService {
     const where = {};
     if (personalId && isAdminOrSupervisor) {
       where.usuarioId = personalId;
-    } else if (query.usuarioId && isAdminOrSupervisor) {
+    } else if (query.usuarioId && isAdminOrSupervisor && query.usuarioId !== 'TODOS') {
       where.usuarioId = query.usuarioId;
     } else if (!isAdminOrSupervisor) {
       where.usuarioId = usuarioId;
     }
 
-    if (clienteId) where.clienteId = clienteId;
+    if (clienteId) {
+      where.OR = [
+        { clienteId },
+        { clienteExternoId: clienteId }
+      ];
+    }
+    if (query.clienteExternoId) where.clienteExternoId = query.clienteExternoId;
     if (prospectoId) where.prospectoId = prospectoId;
 
     const seguimientos = await prisma.seguimientoCampo.findMany({
@@ -146,11 +152,12 @@ class EvidenciasService {
       orderBy: { fechaHora: 'desc' },
       include: {
         usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
-        visita: { select: { id: true, codigo: true, tipoVisita: true, duracionMin: true } },
+        visita: { select: { id: true, codigo: true, tipoVisita: true, duracionMin: true, resultadoResumen: true } },
         cliente: { select: { id: true, nom: true, tel: true, direccion: true } },
+        clienteExterno: { select: { id: true, nombre: true, nit: true, telefono: true, direccion: true, ciudad: true, etapaEmbudo: true } },
         prospecto: { select: { id: true, nombreComercial: true, direccion: true } }
       },
-      take: 150
+      take: 250
     });
 
     return { success: true, seguimientos };

@@ -80,6 +80,8 @@ router.post('/evidencias', (req, res) => campoController.registrarEvidencia(req,
 // 9. Historial y Seguimiento Continuo
 router.get('/seguimientos', (req, res) => campoController.getSeguimientos(req, res));
 router.post('/seguimientos', (req, res) => campoController.crearSeguimiento(req, res));
+router.put('/seguimientos/:id', (req, res) => campoController.actualizarSeguimiento(req, res));
+router.delete('/seguimientos/:id', (req, res) => campoController.eliminarSeguimiento(req, res));
 
 // 10. Reportes Consolidados de Personal en Campo
 router.get('/reportes', (req, res) => campoController.getReportes(req, res));
@@ -165,6 +167,3 @@ router.delete('/movimientos', (req, res) => campoController.eliminarMovimientosD
 router.delete('/movimientos/:id', (req, res) => campoController.eliminarMovimiento(req, res));
 
 module.exports = router;
-
-
-

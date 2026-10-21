@@ -39,7 +39,7 @@ const INDICADORES_COORDINADOR = [
   { id: 'IND_COO_03', nombre: 'Oportunidades identificadas', tipo: 'auto', unidad: 'oportunidades', metaDefecto: 25 },
   { id: 'IND_COO_04', nombre: 'Visitas comerciales', tipo: 'auto', unidad: 'visitas', metaDefecto: 45 },
   { id: 'IND_COO_05', nombre: 'Reuniones realizadas', tipo: 'auto', unidad: 'reuniones', metaDefecto: 30 },
-  { id: 'IND_COO_06', nombre: 'Presentaciones realizadas', tipo: 'manual', unidad: 'presentaciones', metaDefecto: 15 },
+  { id: 'IND_COO_06', nombre: 'Presentaciones realizadas', tipo: 'auto', unidad: 'presentaciones', metaDefecto: 15 },
   { id: 'IND_COO_07', nombre: 'Cotizaciones elaboradas', tipo: 'auto', unidad: 'cotizaciones', metaDefecto: 25 },
   { id: 'IND_COO_08', nombre: 'Cotizaciones enviadas', tipo: 'auto', unidad: 'cotizaciones', metaDefecto: 25 },
   { id: 'IND_COO_09', nombre: 'Seguimiento de cotizaciones', tipo: 'auto', unidad: 'seguimientos', metaDefecto: 40 },
@@ -144,7 +144,7 @@ class EvaluacionesCampoService {
   }
 
   /**
-   * Calcula automáticamente todos los indicadores conectando con las tablas reales del módulo
+   * Calcula automáticamente todos los indicadores conectando 100% con datos reales de la BD (0% simulación)
    */
   async calcularIndicadoresComercial(usuarioId, periodo = null) {
     const ahora = new Date();
@@ -181,7 +181,15 @@ class EvaluacionesCampoService {
 
     try {
       // Lote 1: Operaciones de campo principales
-      visitas = await safeQuery(() => prisma.visitaCampo.findMany({ where: { usuarioId, fechaProgramada: { gte: fechaInicio, lte: fechaFin } } }));
+      visitas = await safeQuery(() => prisma.visitaCampo.findMany({
+        where: {
+          usuarioId,
+          OR: [
+            { checkInHora: { gte: fechaInicio, lte: fechaFin } },
+            { fechaProgramada: { gte: fechaInicio, lte: fechaFin } }
+          ]
+        }
+      }));
       prospectosLegacy = await safeQuery(() => prisma.prospectoCampo.findMany({ where: { creadoPorId: usuarioId, fechaCreacion: { gte: fechaInicio, lte: fechaFin } } }));
       clientesExternos = await safeQuery(() => prisma.clienteExternoCampo.findMany({ where: { comercialId: usuarioId, createdAt: { gte: fechaInicio, lte: fechaFin } } }));
       cotizacionesLegacy = await safeQuery(() => prisma.cotizacion.findMany({ where: { vendedorId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
@@ -190,12 +198,24 @@ class EvaluacionesCampoService {
       // Lote 2: Ventas y jornadas
       ventasLegacy = await safeQuery(() => prisma.venta.findMany({ where: { vendedorId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
       ventasExternas = await safeQuery(() => prisma.ventaExternaCampo.findMany({ where: { comercialId: usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
-      jornadas = await safeQuery(() => prisma.jornadaLaboral.findMany({ where: { usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
+      jornadas = await safeQuery(() => prisma.jornadaLaboral.findMany({ where: { usuarioId, horaInicio: { gte: fechaInicio, lte: fechaFin } } }));
       seguimientos = await safeQuery(() => prisma.seguimientoCampo.findMany({ where: { usuarioId, fechaHora: { gte: fechaInicio, lte: fechaFin } } }));
 
       // Lote 3: Actividades, rutas, novedades y evaluaciones
-      actividades = await safeQuery(() => prisma.actividadCampo.findMany({ where: { usuarioId, fechaProgramada: { gte: fechaInicio, lte: fechaFin } } }));
-      rutas = await safeQuery(() => prisma.actividadCampo.findMany({ where: { usuarioId, titulo: { startsWith: 'Ruta:' }, fechaProgramada: { gte: fechaInicio, lte: fechaFin } } }));
+      actividades = await safeQuery(() => prisma.actividadCampo.findMany({
+        where: {
+          usuarioId,
+          NOT: { OR: [{ codigo: { startsWith: 'RUT-' } }, { titulo: { startsWith: 'Ruta:' } }] },
+          fechaProgramada: { gte: fechaInicio, lte: fechaFin }
+        }
+      }));
+      rutas = await safeQuery(() => prisma.actividadCampo.findMany({
+        where: {
+          usuarioId,
+          OR: [{ codigo: { startsWith: 'RUT-' } }, { titulo: { startsWith: 'Ruta:' } }],
+          fechaProgramada: { gte: fechaInicio, lte: fechaFin }
+        }
+      }));
       evidencias = await safeQuery(() => prisma.evidenciaCampo.findMany({ where: { usuarioId, fechaHora: { gte: fechaInicio, lte: fechaFin } } }));
       novedades = await safeQuery(() => prisma.novedadDelegadoCampo.findMany({ where: { usuarioId, fecha: { gte: fechaInicio, lte: fechaFin } } }));
       ultimaEval = await safeQuery(() => prisma.evaluacionComercialCampo.findFirst({ where: { usuarioId, periodo: periodoActual }, orderBy: { createdAt: 'desc' } }), null);
@@ -204,21 +224,29 @@ class EvaluacionesCampoService {
       console.warn('[Evaluaciones Campo Fallback]:', err.message);
     }
 
-    // Métricas calculadas integrando Operación Externa de Campo
+    // Métricas reales auditables de Operación Externa de Campo
     const totalProspectos = prospectosLegacy.length + clientesExternos.filter(c => c.tipoRegistro === 'Prospecto' || c.etapaEmbudo === 'Prospecto').length;
     const prospectosGanados = prospectosLegacy.filter(p => p.etapa === 'Cerrado Ganado').length + clientesExternos.filter(c => c.etapaEmbudo === 'Venta' || c.etapaEmbudo === 'Fidelizacion').length;
-    const clientesGestionados = clientesExternos.length + visitas.filter(v => v.clienteExternoId || v.clienteId).length;
+    const clientesUnicosVisitados = new Set(visitas.map(v => v.clienteExternoId || v.clienteId || v.resultadoResumen).filter(Boolean)).size;
+    const clientesGestionados = clientesExternos.length + clientesUnicosVisitados;
 
     const totalVisitas = visitas.length;
-    const visitasRealizadas = visitas.filter(v => v.estado === 'Realizada' || v.horaCheckOut != null).length;
-    const visitasConCierre = visitas.filter(v => (v.resultadoVisita || '').toLowerCase().includes('venta')).length;
-    const visitasConCotiz = visitas.filter(v => (v.resultadoVisita || '').toLowerCase().includes('cotiz')).length;
-    const efectividadVisitas = totalVisitas > 0 ? Math.round(((visitasConCierre + visitasConCotiz) / totalVisitas) * 100) : 0;
-    
+    const visitasRealizadas = visitas.filter(v => v.estado === 'Realizada' || v.checkOutHora != null).length;
+    const visitasReunion = visitas.filter(v => {
+      const texto = `${v.tipoVisita || ''} ${v.resultadoVisita || ''} ${v.actividadesRealizadas || ''} ${v.observaciones || ''}`.toLowerCase();
+      return texto.includes('reuni') || texto.includes('negociac') || texto.includes('comercial') || v.estado === 'Realizada';
+    }).length;
+    const visitasConCierre = visitas.filter(v => (v.resultadoVisita || '').toLowerCase().includes('venta') || (v.resultadoVisita || '').toLowerCase().includes('pedido')).length;
+    const visitasConCotiz = visitas.filter(v => {
+      const texto = `${v.tipoVisita || ''} ${v.resultadoVisita || ''} ${v.actividadesRealizadas || ''}`.toLowerCase();
+      return texto.includes('cotiz') || texto.includes('propuesta') || texto.includes('presentac');
+    }).length;
+    const efectividadVisitas = totalVisitas > 0 ? Math.round((visitasRealizadas / totalVisitas) * 100) : 0;
+
     const totalCotizaciones = cotizacionesLegacy.length + cotizacionesExternas.length;
     const cotizacionesEnviadas = cotizacionesLegacy.filter(c => c.estado !== 'Borrador').length + cotizacionesExternas.filter(c => c.estado !== 'Borrador').length;
-    const totalVentasCerradas = ventasLegacy.length + ventasExternas.length + prospectosGanados;
-    
+    const totalVentasCerradas = ventasLegacy.length + ventasExternas.length;
+
     const valorVendidoLegacy = ventasLegacy.reduce((acc, v) => acc + (parseFloat(v.total) || 0), 0);
     const valorVendidoExterno = ventasExternas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
     const valorVendido = valorVendidoLegacy + valorVendidoExterno;
@@ -230,33 +258,33 @@ class EvaluacionesCampoService {
     const superacionPresupuestoPct = Math.max(0, cumplimientoPresupuestoPct - 100);
     const cumplimientoMetasPct = metaUnidades > 0 ? Math.min(150, Math.round((totalVentasCerradas / metaUnidades) * 100)) : 0;
 
-    // Seguimientos y compromisos
+    // Seguimientos y compromisos (0% cuando no hay registros, sin regalar 100%)
     const totalSeguimientos = seguimientos.length;
-    const seguimientosEfectivos = seguimientos.filter(s => s.proximaActividad || s.compromisos).length;
+    const seguimientosEfectivos = seguimientos.filter(s => s.proximaActividad || s.compromisos || (s.resultado && !s.resultado.toLowerCase().includes('pendiente'))).length;
     const compromisosTotales = novedades.filter(n => n.tipo === 'Compromiso').length + seguimientos.filter(s => s.compromisos).length;
-    const compromisosResueltos = novedades.filter(n => n.tipo === 'Compromiso' && n.estado === 'Resuelto').length;
-    const cumplimientoCompromisosPct = compromisosTotales > 0 ? Math.round((compromisosResueltos / compromisosTotales) * 100) : 100;
+    const compromisosResueltos = novedades.filter(n => n.tipo === 'Compromiso' && n.estado === 'Resuelto').length + seguimientosEfectivos;
+    const cumplimientoCompromisosPct = compromisosTotales > 0 ? Math.min(100, Math.round((compromisosResueltos / compromisosTotales) * 100)) : 0;
 
-    // Actividades y Rutas
+    // Actividades y Rutas (0% cuando no hay registros, sin regalar 100%)
     const totalActividades = actividades.length;
-    const actividadesFinalizadas = actividades.filter(a => a.estado === 'Finalizada').length;
-    const cumplimientoActividadesPct = totalActividades > 0 ? Math.round((actividadesFinalizadas / totalActividades) * 100) : 100;
+    const actividadesFinalizadas = actividades.filter(a => ['Finalizada', 'Completada', 'Aprobada'].includes(a.estado)).length;
+    const cumplimientoActividadesPct = totalActividades > 0 ? Math.round((actividadesFinalizadas / totalActividades) * 100) : 0;
 
     const totalRutas = rutas.length;
-    const rutasCompletadas = rutas.filter(r => r.estado === 'Completada').length;
-    const cumplimientoRutasPct = totalRutas > 0 ? Math.round((rutasCompletadas / totalRutas) * 100) : 100;
+    const rutasCompletadas = rutas.filter(r => ['Completada', 'Finalizada', 'Aprobada'].includes(r.estado)).length;
+    const cumplimientoRutasPct = totalRutas > 0 ? Math.round((rutasCompletadas / totalRutas) * 100) : 0;
 
-    // Jornada laboral y productividad diaria
+    // Jornada laboral y productividad diaria real
     const diasJornada = jornadas.length;
     const productividadDiaria = diasJornada > 0 ? Number((visitasRealizadas / diasJornada).toFixed(1)) : (visitasRealizadas > 0 ? visitasRealizadas : 0);
     const totalHorasTrabajadas = Math.round(jornadas.reduce((acc, j) => acc + (j.tiempoTotalMin || 0), 0) / 60);
     const totalRetrasosMin = jornadas.reduce((acc, j) => acc + (j.retrasoMin || 0), 0);
 
-    // Evidencias y calidad de registros
+    // Evidencias y calidad de registros reales (0% cuando no hay visitas, nunca 100% ni 90% gratis)
     const visitasConEvidencias = visitas.filter(v => (v.evidencias && Array.isArray(v.evidencias) && v.evidencias.length > 0) || v.firmaCliente).length;
-    const calidadEvidenciasPct = totalVisitas > 0 ? Math.round((visitasConEvidencias / totalVisitas) * 100) : 100;
-    const visitasConNotasDetalladas = visitas.filter(v => (v.observaciones || '').length > 20).length;
-    const calidadRegistrosPts = totalVisitas > 0 ? Math.round((visitasConNotasDetalladas / totalVisitas) * 100) : 90;
+    const calidadEvidenciasPct = totalVisitas > 0 ? Math.round((visitasConEvidencias / totalVisitas) * 100) : 0;
+    const visitasConNotasDetalladas = visitas.filter(v => ((v.observaciones || '').length + (v.actividadesRealizadas || '').length) > 15).length;
+    const calidadRegistrosPts = totalVisitas > 0 ? Math.round((visitasConNotasDetalladas / totalVisitas) * 100) : 0;
 
     // Mapeo de evaluación previa si existe
     const evalDetalleMap = {};
@@ -266,37 +294,38 @@ class EvaluacionesCampoService {
       });
     }
 
-    // Procesar cada indicador normativo de la matriz correspondiente con los 5 campos cualitativos individuales
+    // Procesar cada indicador normativo de la matriz correspondiente con datos 100% reales
     const indicadoresProcesados = indicadoresBase.map(ind => {
       let resultadoCalculado = 0;
       let metaFinal = ind.metaDefecto;
-
-      // Asociación inteligente por palabras clave según las 3 matrices oficiales
+      const evalPrevia = evalDetalleMap[ind.id] || {};
       const n = ind.nombre.toLowerCase();
 
       if (n.includes('prospectación') || n.includes('prospectados')) {
         resultadoCalculado = totalProspectos;
       } else if (n.includes('captados') || n.includes('apertura de nuevas cuentas')) {
         resultadoCalculado = prospectosGanados;
-      } else if (n.includes('cantidad de visitas') || n.includes('visitas realizadas')) {
+      } else if (n.includes('incremento de clientes activos')) {
+        resultadoCalculado = clientesExternos.length;
+      } else if (n.includes('cantidad de visitas') || n.includes('visitas realizadas') || n.includes('visitas comerciales')) {
         resultadoCalculado = visitasRealizadas;
       } else if (n.includes('reuniones')) {
-        resultadoCalculado = Math.round(visitasRealizadas * 0.7);
-      } else if (n.includes('presentaciones comerciales')) {
-        resultadoCalculado = Math.max(visitasConCotiz, 3);
+        resultadoCalculado = visitasReunion;
+      } else if (n.includes('presentaciones')) {
+        resultadoCalculado = visitasConCotiz + totalCotizaciones;
       } else if (n.includes('cotizaciones elaboradas') || n.includes('cotizaciones generadas')) {
         resultadoCalculado = totalCotizaciones;
       } else if (n.includes('cotizaciones enviadas')) {
         resultadoCalculado = cotizacionesEnviadas;
-      } else if (n.includes('seguimiento a cotizaciones') || n.includes('seguimiento efectivo a oportunidades')) {
+      } else if (n.includes('seguimiento a cotizaciones') || n.includes('seguimiento de cotizaciones') || n.includes('seguimiento de oportunidades')) {
         resultadoCalculado = totalSeguimientos;
       } else if (n.includes('negocios cerrados') || n.includes('ventas cerradas')) {
         resultadoCalculado = totalVentasCerradas;
         metaFinal = metaUnidades;
-      } else if (n.includes('valor vendido') || n.includes('valor total vendido') || n.includes('incremento de la facturación')) {
+      } else if (n.includes('valor vendido') || n.includes('valor total vendido') || n.includes('incremento de facturación') || n.includes('incremento de ventas')) {
         resultadoCalculado = valorVendido;
         metaFinal = metaPresupuesto;
-      } else if (n.includes('cumplimiento del presupuesto') || n.includes('cumplimiento presupuestal')) {
+      } else if (n.includes('cumplimiento del presupuesto') || n.includes('cumplimiento de presupuesto') || n.includes('cumplimiento presupuestal')) {
         resultadoCalculado = cumplimientoPresupuestoPct;
         metaFinal = 100;
       } else if (n.includes('superación de metas')) {
@@ -305,9 +334,9 @@ class EvaluacionesCampoService {
       } else if (n.includes('cumplimiento de metas')) {
         resultadoCalculado = cumplimientoMetasPct;
         metaFinal = 100;
-      } else if (n.includes('seguimientos realizados')) {
+      } else if (n.includes('seguimientos realizados') || n.includes('seguimiento a pedidos')) {
         resultadoCalculado = totalSeguimientos;
-      } else if (n.includes('seguimientos efectivos')) {
+      } else if (n.includes('seguimientos efectivos') || n.includes('seguimiento a entregas')) {
         resultadoCalculado = seguimientosEfectivos;
       } else if (n.includes('efectividad de visitas')) {
         resultadoCalculado = efectividadVisitas;
@@ -317,45 +346,47 @@ class EvaluacionesCampoService {
         resultadoCalculado = calidadRegistrosPts;
       } else if (n.includes('productividad diaria')) {
         resultadoCalculado = productividadDiaria;
-      } else if (n.includes('actividades asignadas')) {
+      } else if (n.includes('actividades')) {
         resultadoCalculado = cumplimientoActividadesPct;
         metaFinal = 100;
-      } else if (n.includes('rutas asignadas')) {
+      } else if (n.includes('rutas')) {
         resultadoCalculado = cumplimientoRutasPct;
         metaFinal = 100;
       } else if (n.includes('compromisos')) {
         resultadoCalculado = cumplimientoCompromisosPct;
         metaFinal = 100;
-      } else if (n.includes('cierres comerciales de alto valor')) {
+      } else if (n.includes('cierres de alto valor') || n.includes('cierres comerciales de alto valor')) {
         resultadoCalculado = ventasAltoValor;
       } else if (n.includes('información de mercado recopilada') || n.includes('informes entregados')) {
-        resultadoCalculado = evidencias.length + Math.min(diasJornada, 4);
-      } else if (n.includes('oportunidades comerciales') || n.includes('oportunidades registradas')) {
+        resultadoCalculado = evidencias.length + visitasConEvidencias;
+      } else if (n.includes('oportunidades')) {
         resultadoCalculado = totalProspectos + totalCotizaciones;
       } else if (n.includes('actualización de clientes') || n.includes('actualización de información')) {
-        resultadoCalculado = Math.min(totalVisitas + clientesExternos.length, 15);
+        resultadoCalculado = clientesExternos.length + clientesUnicosVisitados;
+      } else if (n.includes('solicitudes')) {
+        resultadoCalculado = actividadesFinalizadas;
+      } else if (n.includes('reclamos')) {
+        resultadoCalculado = compromisosResueltos;
       } else {
-        // Indicadores cualitativos o manuales: usar valor previamente guardado o meta por defecto
-        resultadoCalculado = evalDetalleMap[ind.id]?.resultado !== undefined 
-          ? evalDetalleMap[ind.id].resultado 
-          : ind.metaDefecto;
+        // Indicadores cualitativos o manuales: SOLO usar valor si el Delegado ya lo calificó; si no, es 0 (NUNCA regalar metaDefecto)
+        resultadoCalculado = evalPrevia.resultado !== undefined ? Number(evalPrevia.resultado) : 0;
       }
 
-      const evalPrevia = evalDetalleMap[ind.id] || {};
       const metaAplicada = evalPrevia.meta !== undefined ? Number(evalPrevia.meta) : Number(metaFinal);
       const resultadoFinal = evalPrevia.resultado !== undefined ? Number(evalPrevia.resultado) : Number(resultadoCalculado);
 
-      let cumplimientoPct = 100;
+      let cumplimientoPct = 0;
       if (metaAplicada > 0) {
         cumplimientoPct = Math.min(150, Math.round((resultadoFinal / metaAplicada) * 100));
       }
 
-      // La calificación en escala 0 - 100
       const calificacion = evalPrevia.calificacion !== undefined
         ? Number(evalPrevia.calificacion)
         : Math.min(100, Math.max(0, cumplimientoPct));
 
-      const estado = this.calcularEstado(calificacion);
+      const estado = (ind.tipo === 'manual' && evalPrevia.calificacion === undefined && evalPrevia.resultado === undefined)
+        ? 'Pendiente por Calificar'
+        : this.calcularEstado(calificacion);
 
       return {
         id: ind.id,
@@ -387,7 +418,7 @@ class EvaluacionesCampoService {
     const expediente = {
       informacionGeneral: {
         id: usuario.id,
-        nombreCompleto: `${usuario.nombre} ${usuario.apellido}`,
+        nombreCompleto: `${usuario.nombre} ${usuario.apellido || ''}`.trim(),
         user: usuario.user,
         correo: usuario.correo,
         telefono: usuario.telefono || 'No registrado',
@@ -428,7 +459,7 @@ class EvaluacionesCampoService {
     return {
       usuario: {
         id: usuario.id,
-        nombre: `${usuario.nombre} ${usuario.apellido}`,
+        nombre: `${usuario.nombre} ${usuario.apellido || ''}`.trim(),
         user: usuario.user,
         cargo: usuario.cargo,
         roleId: usuario.roleId,
@@ -498,7 +529,7 @@ class EvaluacionesCampoService {
         superaMeta: indicadoresProcesados.filter(i => i.estado === 'Supera la Meta').length,
         cumple: indicadoresProcesados.filter(i => i.estado === 'Cumple').length,
         cumplimientoParcial: indicadoresProcesados.filter(i => i.estado === 'Cumplimiento Parcial').length,
-        noCumple: indicadoresProcesados.filter(i => i.estado === 'No Cumple').length
+        noCumple: indicadoresProcesados.filter(i => i.estado === 'No Cumple' || i.estado === 'Pendiente por Calificar').length
       },
       indicadores: indicadoresProcesados
     };
@@ -631,7 +662,13 @@ class EvaluacionesCampoService {
     // Obtener todos los comerciales de campo
     const comerciales = await prisma.user.findMany({
       where: {
-        esComercialCampo: true
+        isLocked: false,
+        OR: [
+          { esComercialCampo: true },
+          { role: { name: { contains: 'COMERCIAL', mode: 'insensitive' } } },
+          { cargo: { contains: 'COMERCIAL', mode: 'insensitive' } },
+          { cargo: { contains: 'ASESOR', mode: 'insensitive' } }
+        ]
       },
       include: { role: true },
       orderBy: { nombre: 'asc' }
@@ -640,12 +677,15 @@ class EvaluacionesCampoService {
     // Jornadas de hoy para validar quién está en calle
     const jornadasHoy = await prisma.jornadaLaboral.findMany({
       where: {
-        fecha: { gte: hoyInicio, lte: hoyFin }
-      }
+        horaInicio: { gte: hoyInicio, lte: hoyFin }
+      },
+      orderBy: { horaInicio: 'desc' }
     });
     const jornadaPorUsuario = {};
     jornadasHoy.forEach(j => {
-      jornadaPorUsuario[j.usuarioId] = j;
+      if (!jornadaPorUsuario[j.usuarioId]) {
+        jornadaPorUsuario[j.usuarioId] = j;
+      }
     });
 
     // Tareas vencidas, pendientes y operaciones de hoy
@@ -662,11 +702,11 @@ class EvaluacionesCampoService {
       totalVentasExternas
     ] = await Promise.all([
       prisma.actividadCampo.count({
-        where: { estado: { in: ['Pendiente', 'En ejecucion'] } }
+        where: { estado: { in: ['Pendiente', 'En ejecucion', 'En Curso'] } }
       }),
       prisma.actividadCampo.count({
         where: {
-          estado: { in: ['Pendiente', 'En ejecucion'] },
+          estado: { in: ['Pendiente', 'En ejecucion', 'En Curso'] },
           fechaProgramada: { lt: hoyInicio }
         }
       }),
@@ -675,8 +715,10 @@ class EvaluacionesCampoService {
       }),
       prisma.visitaCampo.count({
         where: {
-          fechaProgramada: { gte: hoyInicio, lte: hoyFin },
-          estado: 'Realizada'
+          OR: [
+            { checkInHora: { gte: hoyInicio, lte: hoyFin } },
+            { fechaProgramada: { gte: hoyInicio, lte: hoyFin }, estado: 'Realizada' }
+          ]
         }
       }),
       prisma.venta.findMany({
@@ -723,7 +765,7 @@ class EvaluacionesCampoService {
       sumaCalificaciones += dataInd.calificacionGeneral;
 
       const jHoy = jornadaPorUsuario[c.id];
-      const enJornada = jHoy && jHoy.estado === 'En jornada';
+      const enJornada = Boolean(jHoy && ['Iniciada', 'En Ruta', 'Activa', 'En Pausa', 'En jornada'].includes(jHoy.estado));
       const sinIniciar = !jHoy || jHoy.estado === 'No iniciada';
       if (enJornada) enJornadaCount++;
       if (sinIniciar) sinIniciarCount++;
@@ -733,35 +775,35 @@ class EvaluacionesCampoService {
         evalsPendientesCount++;
       }
 
-      // Alertas Inteligentes
+      // Alertas Inteligentes basadas en operación real
       if (sinIniciar) {
         alertas.push({
           tipo: 'Turno Sin Iniciar',
           nivel: 'warning',
-          usuario: `${c.nombre} ${c.apellido}`,
-          mensaje: `${c.nombre} ${c.apellido} no ha registrado inicio de jornada hoy.`
+          usuario: `${c.nombre} ${c.apellido || ''}`.trim(),
+          mensaje: `${c.nombre} ${c.apellido || ''} no ha registrado inicio de jornada hoy.`
         });
       }
       if (enJornada && resOp.visitasRealizadas === 0) {
         alertas.push({
           tipo: 'Baja Actividad',
           nivel: 'warning',
-          usuario: `${c.nombre} ${c.apellido}`,
-          mensaje: `${c.nombre} ${c.apellido} está en jornada activa pero no registra visitas aún hoy.`
+          usuario: `${c.nombre} ${c.apellido || ''}`.trim(),
+          mensaje: `${c.nombre} ${c.apellido || ''} está en jornada activa pero no registra paradas cerradas aún.`
         });
       }
-      if (dataInd.calificacionGeneral < 60) {
+      if (tieneEval && dataInd.calificacionGeneral < 60) {
         alertas.push({
           tipo: 'Incumplimiento Crítico',
           nivel: 'danger',
-          usuario: `${c.nombre} ${c.apellido}`,
-          mensaje: `${c.nombre} ${c.apellido} registra calificación de ${dataInd.calificacionGeneral}/100 (${dataInd.estadoCumplimiento}). Requiere plan de mejora.`
+          usuario: `${c.nombre} ${c.apellido || ''}`.trim(),
+          mensaje: `${c.nombre} ${c.apellido || ''} registra calificación evaluada de ${dataInd.calificacionGeneral}/100 (${dataInd.estadoCumplimiento}).`
         });
       }
 
       resumenEquipo.push({
         usuarioId: c.id,
-        nombreCompleto: `${c.nombre} ${c.apellido}`,
+        nombreCompleto: `${c.nombre} ${c.apellido || ''}`.trim(),
         user: c.user,
         cargo: c.cargo,
         roleId: c.roleId,
@@ -857,7 +899,7 @@ class EvaluacionesCampoService {
     const {
       usuarioId: reqUsuarioId,
       comercialId,
-      tipo, // 'Observacion' | 'Compromiso' | 'Incumplimiento' | 'Reconocimiento' | 'LlamadoAtencion' | 'Comentario' | 'SolicitudSeguimiento' | 'Objetivo' | 'Instrucción Operativa' | 'Felicitación' | 'Llamado de Atención' | 'Novedad de Campo'
+      tipo,
       titulo,
       descripcion,
       gravedad,
@@ -1017,7 +1059,7 @@ class EvaluacionesCampoService {
     return {
       usuario: {
         id: usuario.id,
-        nombre: `${usuario.nombre} ${usuario.apellido}`,
+        nombre: `${usuario.nombre} ${usuario.apellido || ''}`.trim(),
         user: usuario.user,
         cargo: usuario.cargo,
         roleId: usuario.roleId,
