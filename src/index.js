@@ -4710,12 +4710,6 @@ io.on('connection', (socket) => {
   // Enviar lista actual al nuevo cliente
   socket.emit('online_users', Array.from(new Set(onlineUsers.values())));
 
-  socket.on('disconnect', () => {
-    onlineUsers.delete(socket.id);
-    broadcastOnlineUsers();
-    console.log(`[Socket.io] Client disconnected: ${socket.id}`);
-  });
-
   socket.on('join_chat', async () => {
     // La sala personal es SIEMPRE la del usuario autenticado (se ignora el usuario enviado por el cliente)
     const uStr = socket.data.authUser.user.trim();
@@ -4890,7 +4884,7 @@ io.on('connection', (socket) => {
         broadcastOnlineUsers();
         
         // Comprobar si el usuario tiene otras conexiones activas
-        const isStillOnline = Array.from(onlineUsers.values()).includes(username);
+        const isStillOnline = Array.from(onlineUsers.values()).some(u => u && u.toLowerCase() === username.toLowerCase());
         if (!isStillOnline) {
             try {
                 // Si el usuario tiene una jornada laboral activa en campo, permanece operativo (no apagar isOnline)
@@ -4901,10 +4895,27 @@ io.on('connection', (socket) => {
                     }
                 });
                 if (!activeJornada) {
+                    const uObj = await prisma.user.findFirst({
+                        where: { user: { equals: username, mode: 'insensitive' } },
+                        select: { id: true }
+                    });
                     await prisma.user.updateMany({
                         where: { user: { equals: username, mode: 'insensitive' } },
                         data: { isOnline: false }
                     });
+                    if (uObj) {
+                        await prisma.auditoriaSesion.updateMany({
+                            where: {
+                                userId: uObj.id,
+                                estado: { in: ['EN_LINEA', 'INACTIVO'] }
+                            },
+                            data: {
+                                estado: 'DESCONECTADO',
+                                fechaFin: new Date(),
+                                tabStatus: 'DESCONECTADO'
+                            }
+                        }).catch(() => {});
+                    }
                     broadcastUpdate('DB_UPDATE');
                 }
             } catch (err) {
@@ -4915,7 +4926,55 @@ io.on('connection', (socket) => {
   });
 });
 
+// Reconciliador periódico de presencia y sesiones reales (evita usuarios fantasmas "en línea")
+async function reconcileOnlineStatus() {
+  try {
+    const activeSocketUsers = Array.from(new Set(Array.from(onlineUsers.values()).map(u => String(u || '').toLowerCase().trim()))).filter(Boolean);
+    const staleUsers = await prisma.user.findMany({
+      where: {
+        isOnline: true,
+        user: { notIn: activeSocketUsers }
+      },
+      select: { id: true, user: true }
+    });
+
+    for (const u of staleUsers) {
+      const activeJornada = await prisma.jornadaLaboral.findFirst({
+        where: {
+          usuarioId: u.id,
+          estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
+        }
+      });
+      if (activeJornada) continue;
+
+      await prisma.user.update({
+        where: { id: u.id },
+        data: { isOnline: false }
+      });
+      await prisma.auditoriaSesion.updateMany({
+        where: {
+          userId: u.id,
+          estado: { in: ['EN_LINEA', 'INACTIVO'] }
+        },
+        data: {
+          estado: 'DESCONECTADO',
+          fechaFin: new Date(),
+          tabStatus: 'DESCONECTADO'
+        }
+      }).catch(() => {});
+    }
+    if (staleUsers.length > 0) {
+      broadcastUpdate('DB_UPDATE');
+    }
+  } catch (e) {
+    console.warn('[RECONCILE] Error reconciliando presencia:', e?.message);
+  }
+}
+
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   verifySmtpConnection();
+  // Ejecutar limpieza inicial y programar cada 2 minutos
+  reconcileOnlineStatus();
+  setInterval(reconcileOnlineStatus, 120000);
 });

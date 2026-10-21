@@ -6,7 +6,7 @@ const { sendResetEmail } = require('../emailService');
 const JWT_SECRET = process.env.JWT_SECRET || 'ibro_fallback_secret_2026';
 
 class AuthService {
-    async login(user, pass) {
+    async login(user, pass, req = null) {
         let dbUser = await prisma.user.findFirst({
             where: { user: { equals: user, mode: 'insensitive' } }
         });
@@ -122,8 +122,8 @@ class AuthService {
                 'LOGIN',
                 'Autenticación',
                 'Inicio de sesión exitoso',
-                '127.0.0.1',
-                'Sistema ERP Web'
+                req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.socket?.remoteAddress || req?.ip || '127.0.0.1',
+                req?.headers?.['user-agent'] || 'Sistema ERP Web'
             );
         } catch (e) {
             console.warn('[LOGIN] Advertencia registrando sesión de auditoría:', e?.message);
@@ -132,7 +132,7 @@ class AuthService {
         return { token, refreshToken, user: updatedUser };
     }
 
-    async logout(refreshToken) {
+    async logout(refreshToken, req = null) {
         if (!refreshToken) return;
         try {
             const decoded = jwt.verify(refreshToken, JWT_SECRET, { clockTolerance: 60 });
@@ -150,7 +150,7 @@ class AuthService {
                     where: { id: decoded.id },
                     data: { 
                         refreshToken: activeTokens.length > 0 ? JSON.stringify(activeTokens) : null,
-                        isOnline: activeTokens.length > 0
+                        isOnline: false
                     }
                 });
 
@@ -162,8 +162,8 @@ class AuthService {
                         'LOGOUT',
                         'Autenticación',
                         'Cierre de sesión de usuario',
-                        '127.0.0.1',
-                        'Sistema ERP Web'
+                        req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.socket?.remoteAddress || req?.ip || '127.0.0.1',
+                        req?.headers?.['user-agent'] || 'Sistema ERP Web'
                     );
                 } catch (e) {}
             }

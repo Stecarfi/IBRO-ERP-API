@@ -19,7 +19,7 @@ class AuthController {
         console.log(`[LOGIN ATTEMPT] User: "${user}"`);
 
         try {
-            const { token, refreshToken, user: dbUser } = await authService.login(user, pass);
+            const { token, refreshToken, user: dbUser } = await authService.login(user, pass, req);
             
             // Update clients
             broadcastUpdate('DB_UPDATE');
@@ -70,7 +70,7 @@ class AuthController {
         const authHeader = req.headers['authorization'];
         const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
 
-        await authService.logout(refreshToken || bearerToken);
+        await authService.logout(refreshToken || bearerToken, req);
 
         const isHttps = Boolean(req.secure || req.headers['x-forwarded-proto'] === 'https');
         const cookieOpts = { httpOnly: true, secure: isHttps, sameSite: isHttps ? 'none' : 'lax', path: '/' };

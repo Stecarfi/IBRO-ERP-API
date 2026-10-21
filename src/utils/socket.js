@@ -174,7 +174,7 @@ function initSocket(server) {
                         });
                         if (!activeJornada) {
                             await prisma.user.updateMany({
-                                where: { user: username },
+                                where: { user: { equals: username, mode: 'insensitive' } },
                                 data: { isOnline: false }
                             });
                             broadcastUpdate('DB_UPDATE');
