@@ -115,13 +115,13 @@ const PRISMA_ALLOWED_FIELDS = {
     'clienteId', 'metodoPago', 'total', 'comisionistaId', 'comisionistaNombre',
     'comisionistaPct', 'comisionistaValor', 'estadoComision', 'fechaComision',
     'tipo_precio', 'lockedBy', 'vendedorNombre', 'vendedorCargo', 'vendedorEmail',
-    'vendedorMovil', 'vendedorCodigoAsesor', 'equipos', 'materiales'
+    'vendedorMovil', 'vendedorCodigoAsesor', 'cotizacionId', 'numCotizacion', 'equipos', 'materiales'
   ],
 
   cotizacion: [
     'id', 'numCotizacion', 'fecha', 'vendedorId', 'clienteId', 'total',
     'comisionistaId', 'comisionistaNombre', 'comisionistaPct', 'comisionistaValor',
-    'lockedBy', 'contacto', 'condiciones', 'tiempoEntrega', 'direccionEntrega',
+    'lockedBy', 'contacto', 'condiciones', 'tiempoEntrega', 'franjaHoraria', 'diasEntrega', 'customIva', 'iva', 'ivaValor', 'direccionEntrega',
     'detallePagoMixto', 'cuentas', 'firmanteNombre', 'firmanteCargo', 'firmanteCorreo',
     'firmanteMovil', 'garantia', 'observacion', 'vigencia', 'ivaTipo', 'equipos',
     'materiales', 'tipo_precio', 'fechaSeguimiento', 'estadoSeguimiento',
@@ -200,7 +200,7 @@ const PRISMA_ALLOWED_FIELDS = {
   ],
 
   notificacion: [
-    'id', 'paraId', 'titulo', 'mensaje', 'de', 'tipo', 'fecha', 'leida', 'targetModule'
+    'id', 'paraId', 'titulo', 'mensaje', 'de', 'tipo', 'fecha', 'leida', 'targetModule', 'chatTarget'
   ],
 
   role: [
@@ -847,7 +847,12 @@ function sanitizeBackendForPrisma(tableName, item) {
     } else {
       delete cleaned.pass;
     }
-    cleaned.roleId = cleaned.roleId ? String(cleaned.roleId) : '1';
+    // Fase 0 (seguridad): antes se asignaba el rol '1' (Administrador Master) por defecto.
+    if (cleaned.roleId) {
+      cleaned.roleId = String(cleaned.roleId);
+    } else {
+      delete cleaned.roleId;
+    }
     if (cleaned.esComercialCampo !== undefined) {
       cleaned.esComercialCampo = cleaned.esComercialCampo === true || String(cleaned.esComercialCampo).toLowerCase() === 'true' || String(cleaned.esComercialCampo).toLowerCase() === 'si';
     }

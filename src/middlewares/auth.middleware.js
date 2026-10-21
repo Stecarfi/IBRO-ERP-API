@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const prisma = require('../prisma');
+const { JWT_SECRET } = require('../config/jwtSecret');
 
 // Nota de Auditoría: Se eliminó la simulación automática de presencia en backend (trackUserLiveActivity).
 // La única fuente oficial de presencia es el frontend mediante eventos reales y heartbeat auditable.
@@ -13,7 +14,7 @@ const authenticateToken = async (req, res, next) => {
 
     for (const token of candidateTokens) {
         try {
-            const user = jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+            const user = jwt.verify(token, JWT_SECRET, { clockTolerance: 60 });
             if (user && user.id) {
                 authenticatedUser = user;
                 break;
@@ -39,44 +40,16 @@ const authenticateToken = async (req, res, next) => {
         return next();
     }
 
-    const tryFallback = async () => {
-        const fallbackUserId = req.headers['x-user-id'];
-        const fallbackUsername = req.headers['x-user'];
-        if (fallbackUserId || fallbackUsername) {
-            try {
-                const orConditions = [];
-                if (fallbackUserId) orConditions.push({ id: String(fallbackUserId) });
-                if (fallbackUsername) orConditions.push({ user: { equals: String(fallbackUsername), mode: 'insensitive' } });
-                const dbU = await prisma.user.findFirst({
-                    where: { OR: orConditions },
-                    include: { role: true }
-                });
-                if (dbU && !dbU.isLocked) {
-                    req.user = {
-                        id: dbU.id,
-                        user: dbU.user,
-                        nombre: dbU.nombre,
-                        roleId: dbU.roleId,
-                        cargo: dbU.cargo,
-                        esComercialCampo: Boolean(dbU.esComercialCampo),
-                        esDelegadoGerencia: Boolean(dbU.esDelegadoGerencia),
-                        role: dbU.role
-                    };
-                    return next();
-                }
-            } catch (e) {}
-        }
-        return res.status(401).json({ error: 'Acceso denegado. Sesión no autenticada o token expirado.', code: 'UNAUTHORIZED' });
-    };
-
-    return tryFallback();
+    // Fase 0 (seguridad): se eliminó el fallback por cabeceras 'x-user-id' / 'x-user'.
+    // Permitía autenticarse como cualquier usuario sin token. Solo se acepta un JWT válido.
+    return res.status(401).json({ error: 'Acceso denegado. Sesión no autenticada o token expirado.', code: 'UNAUTHORIZED' });
 };
 
 const optionalAuthenticateToken = (req, res, next) => {
     const token = req.cookies?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
     if (!token) return next();
 
-    jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', async (err, user) => {
+    jwt.verify(token, JWT_SECRET, async (err, user) => {
         if (!err && user) {
             req.user = user;
             if (user.id && (user.esDelegadoGerencia === undefined || user.esComercialCampo === undefined)) {

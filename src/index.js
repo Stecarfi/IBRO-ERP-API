@@ -26,6 +26,32 @@ const driveService = require('./services/drive.service');
 const videoStreamService = require('./services/video-stream.service');
 const pushNotificationService = require('./services/pushNotification.service');
 const auditoriaService = require('./services/auditoria.service');
+const { JWT_SECRET } = require('./config/jwtSecret');
+const { isAdminUser, requireAdmin } = require('./middlewares/rbac.middleware');
+
+// Fase 0 (seguridad): campos que jamás deben viajar en broadcasts de Socket.io
+const sanitizeDiffForBroadcast = (diff) => {
+  if (!diff || typeof diff !== 'object') return null;
+  const out = {};
+  for (const key of Object.keys(diff)) {
+    if (key === 'pendingResets') continue;
+    if (key === 'users' && diff.users && typeof diff.users === 'object') {
+      out.users = {
+        ...diff.users,
+        upserted: (diff.users.upserted || []).map((u) => {
+          if (!u || typeof u !== 'object') return u;
+          const { pass, refreshToken, ...safe } = u;
+          return safe;
+        })
+      };
+      continue;
+    }
+    out[key] = diff[key];
+  }
+  return out;
+};
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const path = require('path');
 const app = express();
@@ -51,7 +77,7 @@ const authenticateToken = async (req, res, next) => {
 
   for (const token of candidateTokens) {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      const decoded = jwt.verify(token, JWT_SECRET, { clockTolerance: 60 });
       if (decoded && decoded.id) {
         authenticatedUser = decoded;
         break; // Éxito con este token
@@ -66,38 +92,8 @@ const authenticateToken = async (req, res, next) => {
     return next();
   }
 
-  // Fallback por x-user-id / x-user (Resiliencia para conexiones intermitentes o renovación concurrente)
-  const fallbackUserId = req.headers['x-user-id'];
-  const fallbackUsername = req.headers['x-user'];
-
-  if (fallbackUserId || fallbackUsername) {
-    try {
-      const orConditions = [];
-      if (fallbackUserId) orConditions.push({ id: String(fallbackUserId) });
-      if (fallbackUsername) orConditions.push({ user: { equals: String(fallbackUsername), mode: 'insensitive' } });
-
-      const dbU = await prisma.user.findFirst({
-        where: { OR: orConditions },
-        include: { role: true }
-      });
-
-      if (dbU && !dbU.isLocked) {
-        req.user = {
-          id: dbU.id,
-          user: dbU.user,
-          nombre: dbU.nombre,
-          roleId: dbU.roleId,
-          cargo: dbU.cargo,
-          esComercialCampo: Boolean(dbU.esComercialCampo),
-          esDelegadoGerencia: Boolean(dbU.esDelegadoGerencia),
-          role: dbU.role
-        };
-        return next();
-      }
-    } catch (e) {
-      console.warn('[AUTH FALLBACK WARNING]:', e.message);
-    }
-  }
+  // Fase 0 (seguridad): se eliminó el fallback por cabeceras 'x-user-id' / 'x-user'.
+  // Permitía autenticarse como cualquier usuario (incluido el administrador) sin token.
 
   console.error(`[AUTH ERROR] Unauthorized request to: ${req.originalUrl}. Auth header: ${authHeader ? 'PRESENT' : 'MISSING'}, Cookies: ${cookieToken ? 'PRESENT' : 'MISSING'}`);
   return res.status(401).json({ error: 'Acceso denegado. Sesión no autenticada o token expirado.', code: 'UNAUTHORIZED' });
@@ -111,7 +107,7 @@ const optionalAuthenticateToken = async (req, res, next) => {
 
   for (const token of candidateTokens) {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      const decoded = jwt.verify(token, JWT_SECRET, { clockTolerance: 60 });
       if (decoded) {
         req.user = decoded;
         break;
@@ -972,12 +968,13 @@ app.get('/api/push/public-key', (req, res) => {
   res.json({ publicKey: pushNotificationService.getPublicKey() });
 });
 
-app.post('/api/push/subscribe', (req, res) => {
-  const { subscription, userId, username, userAgent } = req.body;
+app.post('/api/push/subscribe', authenticateToken, (req, res) => {
+  const { subscription, userAgent } = req.body;
   if (!subscription || !subscription.endpoint) {
     return res.status(400).json({ error: 'Suscripción inválida o incompleta' });
   }
-  const ok = pushNotificationService.saveSubscription(userId, username, subscription, userAgent);
+  // La suscripción se vincula SIEMPRE al usuario autenticado (no al que diga el body)
+  const ok = pushNotificationService.saveSubscription(req.user.id, req.user.user, subscription, userAgent);
   res.json({ success: ok, message: 'Suscripción push registrada correctamente' });
 });
 
@@ -987,7 +984,7 @@ app.post('/api/push/unsubscribe', (req, res) => {
   res.json({ success: true, message: 'Suscripción push eliminada' });
 });
 
-app.post('/api/push/test', async (req, res) => {
+app.post('/api/push/test', authenticateToken, async (req, res) => {
   const { username, title, body } = req.body;
   const payload = {
     title: title || 'G-IBRO ERP - Notificación Push',
@@ -1016,7 +1013,7 @@ app.post('/api/push/test', async (req, res) => {
   });
 });
 
-app.post('/api/push/send-notification', async (req, res) => {
+app.post('/api/push/send-notification', authenticateToken, async (req, res) => {
   try {
     const { target, userIds, title, body, url, tag } = req.body;
     const payload = {
@@ -1045,9 +1042,10 @@ app.post('/api/push/send-notification', async (req, res) => {
 });
 
 // Endpoint para Periodic Background Sync: consultar novedades en segundo plano
-app.get('/api/push/unread-summary', async (req, res) => {
+app.get('/api/push/unread-summary', optionalAuthenticateToken, async (req, res) => {
   try {
-    const username = (req.query.username || '').trim().toLowerCase();
+    // Solo se consulta el resumen del usuario autenticado (antes: cualquier ?username=)
+    const username = String(req.user?.user || '').trim().toLowerCase();
     let unreadCount = 0;
     let latestMessage = null;
 
@@ -1116,17 +1114,17 @@ app.post('/api/push/mark-read', async (req, res) => {
   }
 });
 
-// GET /api/emergency-unlock/:user - Ruta temporal de emergencia para desbloquear la cuenta
-app.get('/api/emergency-unlock/:user', async (req, res) => {
+// GET /api/emergency-unlock/:user - Desbloqueo de cuenta (Fase 0: SOLO administradores autenticados)
+app.get('/api/emergency-unlock/:user', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { user } = req.params;
     await prisma.user.updateMany({
       where: { user: { equals: user, mode: 'insensitive' } },
       data: { isLocked: false, failedLoginAttempts: 0 }
     });
-    res.send(`<h1>Cuenta de ${user} desbloqueada con éxito!</h1><p>Ya puedes intentar iniciar sesión de nuevo.</p>`);
+    res.send(`<h1>Cuenta de ${escapeHtml(user)} desbloqueada con éxito!</h1><p>Ya puede intentar iniciar sesión de nuevo.</p>`);
   } catch (error) {
-    res.status(500).send(`Error al desbloquear: ${error.message}`);
+    res.status(500).send('Error al desbloquear la cuenta.');
   }
 });
 
@@ -1199,13 +1197,13 @@ app.post('/api/login', loginLimiter, async (req, res) => {
           esComercialCampo: Boolean(dbUser.esComercialCampo),
           esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
         },
-        process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+        JWT_SECRET,
         { expiresIn: '8h' } // 8 horas para accessToken (Jornada laboral completa)
       );
 
       const refreshToken = jwt.sign(
         { id: dbUser.id, user: dbUser.user },
-        process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+        JWT_SECRET,
         { expiresIn: '30d' } // 30 días para refreshToken
       );
 
@@ -1221,7 +1219,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       }
       activeTokens = activeTokens.filter(t => {
         try {
-          jwt.verify(t, process.env.JWT_SECRET || 'ibro_fallback_secret_2026');
+          jwt.verify(t, JWT_SECRET);
           return true;
         } catch {
           return false;
@@ -1327,14 +1325,14 @@ app.all('/api/logout', async (req, res) => {
 
   if (refreshToken) {
     try {
-      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      const decoded = jwt.verify(refreshToken, JWT_SECRET, { clockTolerance: 60 });
       targetUserId = decoded.id;
     } catch (e) {}
   }
 
   if (!targetUserId && tokenCandidate) {
     try {
-      const decoded = jwt.verify(tokenCandidate, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+      const decoded = jwt.verify(tokenCandidate, JWT_SECRET, { clockTolerance: 60 });
       targetUserId = decoded.id;
     } catch (e) {}
   }
@@ -1389,7 +1387,7 @@ app.post('/api/refresh', async (req, res) => {
   if (!refreshToken) return res.status(401).json({ error: 'No refresh token provided' });
 
   try {
-    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'ibro_fallback_secret_2026', { clockTolerance: 60 });
+    const decoded = jwt.verify(refreshToken, JWT_SECRET, { clockTolerance: 60 });
     
     // Verificar si el usuario sigue existiendo y no está bloqueado
     const dbUser = await prisma.user.findUnique({ where: { id: decoded.id } });
@@ -1430,14 +1428,14 @@ app.post('/api/refresh', async (req, res) => {
         esComercialCampo: Boolean(dbUser.esComercialCampo),
         esDelegadoGerencia: Boolean(dbUser.esDelegadoGerencia)
       },
-      process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+      JWT_SECRET,
       { expiresIn: '8h' }
     );
 
     // Renovar también el refresh token (30d) para rotación segura
     const newRefreshToken = jwt.sign(
       { id: dbUser.id, user: dbUser.user },
-      process.env.JWT_SECRET || 'ibro_fallback_secret_2026',
+      JWT_SECRET,
       { expiresIn: '30d' }
     );
 
@@ -2269,7 +2267,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       lockedBy: c.lockedBy || null
     }));
 
-    const pendingResets = await prisma.pendingReset.findMany({ orderBy: { id: 'asc' } });
+    // Fase 0 (seguridad): los tokens de restablecimiento de contraseña NUNCA se exponen al cliente.
 
     // Cotizaciones Externas (Ventas Externas de Campo)
     const cotizacionesExternasRaw = await prisma.cotizacionExternaCampo.findMany({
@@ -2429,7 +2427,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       config: appConfig,
       informesConfig: appConfig.informes,
       whatsappConfig,
-      pendingResets,
       cotizaciones_externas,
       pedidos_externos,
       clientes_externos
@@ -3161,8 +3158,16 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
   }
 
   // 🛡️ RBAC: Verificación estricta de privilegios para mutaciones críticas
-  const callerRoleId = String(req.user?.roleId || '');
-  const isMasterOrAdmin = callerRoleId === '1' || (req.user?.cargo && /admin/i.test(req.user.cargo));
+  // Fase 0: el rol se valida en servidor con la misma regla del front (rol 1 o módulo 'admin').
+  let isMasterOrAdmin = false;
+  try {
+    isMasterOrAdmin = await isAdminUser(req.user);
+  } catch (e) {
+    isMasterOrAdmin = false;
+  }
+
+  // Fase 0: los tokens de restablecimiento jamás se aceptan desde el cliente
+  if (diff.pendingResets) delete diff.pendingResets;
 
   if (!isMasterOrAdmin) {
     if (diff.roles && ((diff.roles.upserted && diff.roles.upserted.length > 0) || (diff.roles.deleted && diff.roles.deleted.length > 0))) {
@@ -3170,6 +3175,29 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
     }
     if (diff.users && diff.users.deleted && diff.users.deleted.length > 0) {
       return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de Administrador para eliminar usuarios.' });
+    }
+    // Un usuario no administrador NO puede crear usuarios, cambiar roles, bloqueos, username,
+    // banderas operativas ni la contraseña de otra persona (antes: escalada total de privilegios).
+    if (diff.users && Array.isArray(diff.users.upserted) && diff.users.upserted.length > 0) {
+      const PROTECTED_FIELDS = ['roleId', 'isLocked', 'failedLoginAttempts', 'user', 'esComercialCampo', 'esDelegadoGerencia'];
+      const ids = diff.users.upserted.map(u => (u && u.id ? String(u.id) : null)).filter(Boolean);
+      const existingUsers = ids.length > 0 ? await prisma.user.findMany({ where: { id: { in: ids } } }) : [];
+      const byId = new Map(existingUsers.map(u => [String(u.id), u]));
+      const safeUsers = [];
+      for (const u of diff.users.upserted) {
+        if (!u) continue;
+        const current = byId.get(String(u.id));
+        if (!current) {
+          return res.status(403).json({ error: 'Acceso denegado: solo un Administrador puede crear usuarios.' });
+        }
+        const isSelf = String(current.id) === String(req.user?.id);
+        const safe = { ...u };
+        for (const f of PROTECTED_FIELDS) safe[f] = current[f];
+        delete safe.refreshToken;
+        if (!isSelf) delete safe.pass;
+        safeUsers.push(safe);
+      }
+      diff.users.upserted = safeUsers;
     }
   }
 
@@ -3477,6 +3505,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             }
           }
 
+          if (!cleaned.roleId) {
+            const alreadyExists = await tx.user.findUnique({ where: { id: cleaned.id }, select: { id: true } });
+            if (!alreadyExists) {
+              throw new Error(`El usuario '${cleaned.user}' no tiene rol asignado (roleId es obligatorio).`);
+            }
+          }
           const createData = cleaned.pass ? cleaned : { ...cleaned, pass: bcrypt.hashSync('Ibro2026*', 10) };
 
           await tx.user.upsert({
@@ -4165,11 +4199,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         }
       }
 
-      // 19. PendingResets
-      if (diff.pendingResets) {
-        await flatUpsert('pendingReset', diff.pendingResets.upserted || []);
-        await flatDelete('pendingReset', diff.pendingResets.deleted || []);
-      }
+      // 19. PendingResets: Fase 0 - ya no se aceptan desde el cliente (se descartan antes de la transacción).
 
       // 20. Configuración Global (WhatsApp e Informes)
       const configVal = (diff.config && diff.config.value) 
@@ -4431,7 +4461,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
       updateType = 'CHAT_UPDATE';
     }
 
-    broadcastUpdate(updateType, diff);
+    broadcastUpdate(updateType, sanitizeDiffForBroadcast(diff));
     // 🛡️ Trazabilidad de Auditoría
     // NOTA: Se deshabilita el log genérico del backend porque el frontend 
     // ya genera logs específicos (logAudit) mucho más descriptivos.
@@ -4468,8 +4498,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
     console.error("SYNC ERROR:", error);
     res.status(500).json({
       success: false,
-      message: error.message,
-      stack: error.stack
+      message: error.message
     });
   }
 });
@@ -4503,6 +4532,41 @@ io = new Server(server, {
 });
 app.set('io', io);
 
+// Fase 0 (seguridad): handshake de Socket.io autenticado con JWT.
+// Antes cualquier cliente sin sesión podía conectarse, unirse a la sala de otro usuario y leer sus mensajes.
+io.use((socket, next) => {
+  try {
+    const hs = socket.handshake || {};
+    let token = (hs.auth && hs.auth.token) || null;
+    const authHeader = hs.headers && hs.headers.authorization;
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) token = authHeader.split(' ')[1];
+    if (!token && hs.headers && hs.headers.cookie) {
+      const m = hs.headers.cookie.match(/(?:^|;\s*)token=([^;]+)/);
+      if (m) token = decodeURIComponent(m[1]);
+    }
+    if (!token) return next(new Error('UNAUTHORIZED'));
+    const decoded = jwt.verify(token, JWT_SECRET, { clockTolerance: 60 });
+    if (!decoded || !decoded.id || !decoded.user) return next(new Error('UNAUTHORIZED'));
+    socket.data.authUser = { id: String(decoded.id), user: String(decoded.user) };
+    return next();
+  } catch (e) {
+    return next(new Error('UNAUTHORIZED'));
+  }
+});
+
+const isGroupMember = (group, authUser) => {
+  if (!group || !authUser) return false;
+  const uLower = authUser.user.toLowerCase();
+  if (group.createdById && String(group.createdById) === authUser.id) return true;
+  const members = Array.isArray(group.integrantes) ? group.integrantes : [];
+  return members.some((item) => {
+    const ref = typeof item === 'string' ? item : (item && (item.user || item.username || item.id));
+    if (!ref) return false;
+    const r = String(ref).trim();
+    return r.toLowerCase() === uLower || r === authUser.id;
+  });
+};
+
 function broadcastUpdate(type = 'DB_UPDATE', diff = null) {
   io.emit('db_update', { type, diff, timestamp: Date.now() });
 }
@@ -4526,28 +4590,37 @@ io.on('connection', (socket) => {
     console.log(`[Socket.io] Client disconnected: ${socket.id}`);
   });
 
-  socket.on('join_chat', async (data) => {
-    if (data && data.user) {
-      const uStr = String(data.user).trim();
-      socket.join(uStr);
-      socket.join(uStr.toLowerCase());
-      onlineUsers.set(socket.id, uStr);
-      broadcastOnlineUsers();
-      console.log(`User ${uStr} joined personal room`);
-    }
+  socket.on('join_chat', async () => {
+    // La sala personal es SIEMPRE la del usuario autenticado (se ignora el usuario enviado por el cliente)
+    const uStr = socket.data.authUser.user.trim();
+    socket.join(uStr);
+    socket.join(uStr.toLowerCase());
+    onlineUsers.set(socket.id, uStr);
+    broadcastOnlineUsers();
+    console.log(`User ${uStr} joined personal room`);
   });
 
-  socket.on('join_group', (groupId) => {
-    if (groupId) {
-      const gStr = String(groupId).trim();
-      socket.join(gStr);
-      socket.join(gStr.toLowerCase());
-      console.log(`Socket joined group ${gStr}`);
+  socket.on('join_group', async (groupId) => {
+    if (!groupId) return;
+    const gStr = String(groupId).trim();
+    try {
+      const group = await prisma.chatGroup.findFirst({ where: { id: gStr } });
+      // Si el grupo ya existe, solo sus integrantes pueden unirse a la sala
+      if (group && !isGroupMember(group, socket.data.authUser)) {
+        console.warn(`[Socket.io] join_group denegado: ${socket.data.authUser.user} no pertenece a ${gStr}`);
+        return;
+      }
+    } catch (e) {
+      return;
     }
+    socket.join(gStr);
+    socket.join(gStr.toLowerCase());
+    console.log(`Socket joined group ${gStr}`);
   });
 
   socket.on('send_message', async (messageData) => {
     if (!messageData || !messageData.to) return;
+    messageData.user = socket.data.authUser.user; // anti-suplantación del remitente
     const toTarget = String(messageData.to).trim();
     let group = null;
 
@@ -4626,6 +4699,7 @@ io.on('connection', (socket) => {
 
   socket.on('send_nudge', async (data) => {
     if (!data || !data.to) return;
+    data.user = socket.data.authUser.user; // anti-suplantación del remitente
     const toTarget = String(data.to).trim();
     if (toTarget.toLowerCase() === 'todos') {
       socket.broadcast.emit('receive_nudge', data);
@@ -4666,12 +4740,15 @@ io.on('connection', (socket) => {
   });
 
   socket.on('typing', (data) => {
-     if (data.to) {
+     if (data && data.to) {
+         data.user = socket.data.authUser.user;
          socket.to(data.to).emit('typing', data);
      }
   });
 
   socket.on('message_reaction', (data) => {
+     if (!data) return;
+     data.user = socket.data.authUser.user;
      if (data.to === 'Todos') {
          socket.broadcast.emit('message_reaction', data);
      } else if (data.to) {
