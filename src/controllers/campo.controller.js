@@ -4357,8 +4357,12 @@ class CampoController {
         }
 
         // Anomalía 3: Tiempo muerto prolongado entre paradas (> 60 min de brecha)
+        let tiempoTransitoAntesMin = 0;
         if (item.checkInHora && ultimoCheckOutPorUsuario[keyGrupo]) {
           const minutosDesdeUltimaSalida = Math.round((new Date(item.checkInHora) - new Date(ultimoCheckOutPorUsuario[keyGrupo])) / 60000);
+          if (minutosDesdeUltimaSalida > 0) {
+            tiempoTransitoAntesMin = minutosDesdeUltimaSalida;
+          }
           if (minutosDesdeUltimaSalida > 60) {
             anomaliasParada.push({
               tipo: 'TIEMPO_MUERTO',
@@ -4431,6 +4435,9 @@ class CampoController {
           checkOutLng: item.checkOutLng,
           duracionMin,
           duracionTexto: duracionMin >= 60 ? `${Math.floor(duracionMin / 60)}h ${duracionMin % 60}m` : `${duracionMin} min`,
+          tiempoTransitoAntesMin,
+          tiempoTransitoAntesTexto: tiempoTransitoAntesMin > 0 ? `${tiempoTransitoAntesMin} min traslado` : null,
+          firmaCliente: item.firmaCliente || null,
           estado: item.checkOutHora ? 'Realizada' : (item.checkInHora ? 'En Curso' : (item.estado || 'Pendiente')),
           actividadesRealizadas: item.actividadesRealizadas || '',
           observaciones: item.observaciones || '',
