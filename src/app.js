@@ -14,13 +14,18 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Middlewares base
-app.use(cookieParser());
-app.use(cors({
+const corsOptions = {
     origin: function(origin, callback) {
         callback(null, true);
     },
-    credentials: true
-}));
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-user', 'x-role', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control', 'Pragma'],
+    optionsSuccessStatus: 200
+};
+app.use(cookieParser());
+app.use(cors(corsOptions));
+app.options('*any', cors(corsOptions));
 
 // Payload Limits
 app.use(express.json({ limit: '50mb' }));

@@ -2,7 +2,8 @@ const rateLimit = require('express-rate-limit');
 
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 500, // límite de 500 peticiones por IP
+    max: 5000, // límite amplio para telemetría y operaciones concurrentes
+    skip: (req) => req.method === 'OPTIONS',
     message: { error: 'Demasiadas peticiones detectadas (Anti-DDoS). Intente más tarde.' }
 });
 
