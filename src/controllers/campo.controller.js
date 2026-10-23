@@ -775,9 +775,9 @@ class CampoController {
         return res.status(403).json({ error: 'Operación denegada: Solo el Delegado de Gerencia tiene facultades para calificar y emitir evaluaciones.' });
       }
 
-      const usuarioIdEvaluado = req.body.usuarioId || req.body.comercialId;
+      const usuarioIdEvaluado = req.body.usuarioId || req.body.comercialId || req.body.evaluadoId;
       if (!usuarioIdEvaluado) {
-        return res.status(400).json({ error: 'Debe especificar el usuario a evaluar (usuarioId o comercialId).' });
+        return res.status(400).json({ error: 'Debe especificar el usuario a evaluar (usuarioId, comercialId o evaluadoId).' });
       }
 
       const evaluacion = await evaluacionesCampoService.guardarEvaluacion(req.user.id, {
@@ -1302,7 +1302,7 @@ class CampoController {
         include: {
           usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
           cliente: { select: { id: true, nom: true, tel: true, direccion: true } },
-          clienteExterno: { select: { id: true, nombre: true, nit: true, telefono: true, direccion: true, ciudad: true, etapaEmbudo: true } },
+          clienteExterno: { select: { id: true, nombre: true, nitDoc: true, telefono: true, direccion: true, ciudad: true, etapaEmbudo: true } },
           prospecto: { select: { id: true, nombreComercial: true, direccion: true } }
         }
       });
@@ -2589,7 +2589,7 @@ class CampoController {
       const actCumplidasCount = actividadesHoy.filter(a => a.estado === 'Finalizada' || a.estado === 'Completada').length;
       const pctCumplimiento = actAsignadasCount > 0
         ? Math.round((actCumplidasCount / actAsignadasCount) * 100)
-        : (totalVisitasHoy > 0 ? Math.round((realizadasHoy / totalVisitasHoy) * 100) : 100);
+        : (totalVisitasHoy > 0 ? Math.round((realizadasHoy / totalVisitasHoy) * 100) : 0);
 
       res.json({
         success: true,
@@ -2863,7 +2863,35 @@ class CampoController {
     try {
       const data = await operacionExternaService.actualizarCotizacionExterna(req.params.id, req.user.id, req.body);
       await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_COTIZACION_EXTERNA', { id: data.id, codigo: data.codigo, total: data.total }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_UPDATE', timestamp: Date.now() });
       res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarCotizacionExterna(req, res) {
+    try {
+      await operacionExternaService.eliminarCotizacionExterna(req.params.id);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_COTIZACION_EXTERNA', { id: req.params.id }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_DELETE', timestamp: Date.now() });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarTodasCotizacionesExternas(req, res) {
+    try {
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? (req.query.usuarioId || null) : req.user.id;
+      const result = await operacionExternaService.eliminarTodasCotizacionesExternas(targetUserId);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_TODAS_COTIZACIONES_EXTERNAS', { count: result.count }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_CLEAR', timestamp: Date.now() });
+      res.json({ success: true, eliminadas: result.count });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -2912,7 +2940,47 @@ class CampoController {
     try {
       const data = await operacionExternaService.registrarVentaExterna(req.user.id, req.body);
       await this.registrarAuditoria(req.user.id, 'REGISTRAR_VENTA_EXTERNA', { id: data.id, codigo: data.codigo, valor: data.valorVendido }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_VENTA_EXTERNA_CREATE', timestamp: Date.now() });
       res.status(201).json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async actualizarVentaExterna(req, res) {
+    try {
+      const data = await operacionExternaService.actualizarVentaExterna(req.params.id, req.user.id, req.body);
+      await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_VENTA_EXTERNA', { id: data.id, codigo: data.codigo, valor: data.valorVendido }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_VENTA_EXTERNA_UPDATE', timestamp: Date.now() });
+      res.json(data);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarVentaExterna(req, res) {
+    try {
+      await operacionExternaService.eliminarVentaExterna(req.params.id);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_VENTA_EXTERNA', { id: req.params.id }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_VENTA_EXTERNA_DELETE', timestamp: Date.now() });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async eliminarTodasVentasExternas(req, res) {
+    try {
+      const esDel = this.esDelegado(req.user);
+      const targetUserId = esDel ? (req.query.usuarioId || null) : req.user.id;
+      const result = await operacionExternaService.eliminarTodasVentasExternas(targetUserId);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_TODAS_VENTAS_EXTERNAS', { count: result.count }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_VENTA_EXTERNA_CLEAR', timestamp: Date.now() });
+      res.json({ success: true, eliminadas: result.count });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -3045,10 +3113,10 @@ class CampoController {
           ...comWhere,
           fecha: { gte: inicio, lte: fin }
         },
-        select: { id: true, valorVendido: true, total: true }
+        select: { id: true, valorVendido: true }
       });
       const totalVentas = ventas.length;
-      const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido || v.total) || 0), 0);
+      const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
 
       // 5. Tareas/Actividades
       const actividades = await prisma.actividadCampo.findMany({
@@ -3149,7 +3217,7 @@ class CampoController {
         if (checkOutDate > ahora) {
           duracionMin = Math.max(1, Math.round((checkOutDate - ahora) / 60000));
         } else {
-          duracionMin = 15;
+          duracionMin = 0;
         }
         estadoVisita = 'Realizada';
       }
@@ -3445,7 +3513,7 @@ class CampoController {
             where: { codigo: codigoRuta, estado: { notIn: ['Aprobada'] } },
             data: {
               estado: todasRealizadas ? 'Completada' : (algunaIniciada ? 'En Curso' : 'Pendiente'),
-              ...(todasRealizadas ? { fechaCumplimiento: checkOutHora } : {})
+              ...(todasRealizadas ? { fechaFinalizacion: checkOutHora } : {})
             }
           }).catch(() => {});
         }

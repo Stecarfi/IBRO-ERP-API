@@ -157,15 +157,39 @@ class OperacionExternaService {
   }
 
   /**
-   * Modifica los datos de un cliente externo
+   * Modifica los datos de un cliente externo (sanitizando campos permitidos en Prisma)
    */
-  async actualizarClienteExterno(id, data) {
+  async actualizarClienteExterno(id, data = {}) {
+    const cleanData = {};
+    const stringFields = [
+      'nombre', 'nitDoc', 'contacto', 'telefono', 'correo',
+      'direccion', 'ciudad', 'sectorEconomico', 'tipoRegistro',
+      'clasificacion', 'etapaEmbudo', 'origen', 'notas', 'comercialId'
+    ];
+    for (const f of stringFields) {
+      if (data[f] !== undefined) {
+        cleanData[f] = data[f] !== null ? String(data[f]) : null;
+      }
+    }
+    if (data.nit !== undefined && cleanData.nitDoc === undefined) {
+      cleanData.nitDoc = data.nit ? String(data.nit) : null;
+    }
+    if (data.sectorActividad !== undefined && cleanData.sectorEconomico === undefined) {
+      cleanData.sectorEconomico = data.sectorActividad ? String(data.sectorActividad) : null;
+    }
+    if (data.lat !== undefined) {
+      const pLat = parseFloat(data.lat);
+      cleanData.lat = !Number.isNaN(pLat) ? pLat : null;
+    }
+    if (data.lng !== undefined) {
+      const pLng = parseFloat(data.lng);
+      cleanData.lng = !Number.isNaN(pLng) ? pLng : null;
+    }
+    cleanData.updatedAt = new Date();
+
     return prisma.clienteExternoCampo.update({
       where: { id },
-      data: {
-        ...data,
-        updatedAt: new Date()
-      },
+      data: cleanData,
       include: {
         comercial: { select: { id: true, nombre: true, apellido: true } }
       }
@@ -311,6 +335,69 @@ class OperacionExternaService {
     });
 
     return nuevaCotizacion;
+  }
+
+  /**
+   * Actualiza los datos completos de una cotización externa (ítems, total, estado, observaciones, cliente)
+   */
+  async actualizarCotizacionExterna(id, usuarioId, data = {}) {
+    const cotiz = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
+    if (!cotiz) throw new Error('Cotización externa no encontrada');
+
+    const items = Array.isArray(data.items) ? data.items : cotiz.items;
+    const calculatedTotal = Array.isArray(items) && items.length > 0
+      ? items.reduce((acc, it) => acc + (parseFloat(it.subtotal ?? it.tot) || (parseFloat(it.cantidad ?? it.cant ?? 1) * parseFloat(it.precioUnit ?? it.precio ?? 0))), 0)
+      : cotiz.total;
+    const total = data.total !== undefined && !Number.isNaN(parseFloat(data.total))
+      ? parseFloat(data.total)
+      : calculatedTotal;
+
+    const nuevoEstado = data.estado || cotiz.estado;
+    const historialPrevio = Array.isArray(cotiz.historial) ? cotiz.historial : [];
+
+    const actualizado = await prisma.cotizacionExternaCampo.update({
+      where: { id },
+      data: {
+        ...(data.clienteExternoId ? { clienteExternoId: data.clienteExternoId } : {}),
+        ...(data.validezDias !== undefined ? { validezDias: parseInt(data.validezDias) || 15 } : {}),
+        estado: nuevoEstado,
+        total,
+        items,
+        observaciones: data.observaciones !== undefined ? data.observaciones : (data.notas !== undefined ? data.notas : cotiz.observaciones),
+        historial: [
+          ...historialPrevio,
+          {
+            fecha: new Date(),
+            evento: 'Actualización de Cotización',
+            estadoAnterior: cotiz.estado,
+            nuevoEstado,
+            total
+          }
+        ],
+        updatedAt: new Date()
+      },
+      include: {
+        clienteExterno: true,
+        comercial: { select: { id: true, user: true, nombre: true, apellido: true, cargo: true, telefono: true, correo: true, codigoAsesor: true, firma: true } }
+      }
+    });
+
+    return actualizado;
+  }
+
+  /**
+   * Elimina una cotización externa por ID
+   */
+  async eliminarCotizacionExterna(id) {
+    return prisma.cotizacionExternaCampo.delete({ where: { id } });
+  }
+
+  /**
+   * Elimina todas las cotizaciones externas (opcionalmente filtradas por comercial)
+   */
+  async eliminarTodasCotizacionesExternas(comercialId = null) {
+    const where = comercialId && comercialId !== 'TODOS' ? { comercialId } : {};
+    return prisma.cotizacionExternaCampo.deleteMany({ where });
   }
 
   /**
@@ -498,6 +585,59 @@ class OperacionExternaService {
     });
 
     return nuevaVenta;
+  }
+
+  /**
+   * Actualiza los datos completos de una venta/pedido externo
+   */
+  async actualizarVentaExterna(id, usuarioId, data = {}) {
+    const venta = await prisma.ventaExternaCampo.findUnique({ where: { id } });
+    if (!venta) throw new Error('Venta externa no encontrada');
+
+    const items = Array.isArray(data.items) ? data.items : venta.items;
+    const calculatedTotal = Array.isArray(items) && items.length > 0
+      ? items.reduce((acc, it) => acc + (parseFloat(it.subtotal ?? it.tot) || (parseFloat(it.cantidad ?? it.cant ?? 1) * parseFloat(it.precioUnit ?? it.precio ?? 0))), 0)
+      : venta.valorVendido;
+    const rawValor = data.valorVendido !== undefined ? data.valorVendido : data.total;
+    const valorVendido = rawValor !== undefined && !Number.isNaN(parseFloat(rawValor))
+      ? parseFloat(rawValor)
+      : calculatedTotal;
+
+    const actualizado = await prisma.ventaExternaCampo.update({
+      where: { id },
+      data: {
+        ...(data.clienteExternoId ? { clienteExternoId: data.clienteExternoId } : {}),
+        ...(data.cotizacionId !== undefined ? { cotizacionId: data.cotizacionId || null } : {}),
+        ...(data.metodoPago ? { metodoPago: data.metodoPago } : {}),
+        ...(data.estado ? { estado: data.estado } : {}),
+        valorVendido,
+        items,
+        observaciones: data.observaciones !== undefined ? data.observaciones : (data.notas !== undefined ? data.notas : venta.observaciones),
+        updatedAt: new Date()
+      },
+      include: {
+        clienteExterno: true,
+        cotizacion: true,
+        comercial: { select: { id: true, user: true, nombre: true, apellido: true, cargo: true, telefono: true, correo: true, codigoAsesor: true, firma: true } }
+      }
+    });
+
+    return actualizado;
+  }
+
+  /**
+   * Elimina una venta externa por ID
+   */
+  async eliminarVentaExterna(id) {
+    return prisma.ventaExternaCampo.delete({ where: { id } });
+  }
+
+  /**
+   * Elimina todas las ventas externas (opcionalmente filtradas por comercial)
+   */
+  async eliminarTodasVentasExternas(comercialId = null) {
+    const where = comercialId && comercialId !== 'TODOS' ? { comercialId } : {};
+    return prisma.ventaExternaCampo.deleteMany({ where });
   }
 
   // =================================================================

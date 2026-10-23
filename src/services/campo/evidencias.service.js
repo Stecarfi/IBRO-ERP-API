@@ -154,7 +154,7 @@ class EvidenciasService {
         usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
         visita: { select: { id: true, codigo: true, tipoVisita: true, duracionMin: true, resultadoResumen: true } },
         cliente: { select: { id: true, nom: true, tel: true, direccion: true } },
-        clienteExterno: { select: { id: true, nombre: true, nit: true, telefono: true, direccion: true, ciudad: true, etapaEmbudo: true } },
+        clienteExterno: { select: { id: true, nombre: true, nitDoc: true, telefono: true, direccion: true, ciudad: true, etapaEmbudo: true } },
         prospecto: { select: { id: true, nombreComercial: true, direccion: true } }
       },
       take: 250

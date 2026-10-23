@@ -141,9 +141,14 @@ router.post('/externo/cotizaciones', (req, res) => campoController.crearCotizaci
 router.put('/externo/cotizaciones/:id', (req, res) => campoController.actualizarCotizacionExterna(req, res));
 router.put('/externo/cotizaciones/:id/estado', (req, res) => campoController.cambiarEstadoCotizacion(req, res));
 router.post('/externo/cotizaciones/:id/seguimiento', (req, res) => campoController.agregarSeguimientoCotizacion(req, res));
+router.delete('/externo/cotizaciones/:id', (req, res) => campoController.eliminarCotizacionExterna(req, res));
+router.delete('/externo/cotizaciones', (req, res) => campoController.eliminarTodasCotizacionesExternas(req, res));
 
 router.get('/externo/ventas', (req, res) => campoController.getVentasExternas(req, res));
 router.post('/externo/ventas', (req, res) => campoController.registrarVentaExterna(req, res));
+router.put('/externo/ventas/:id', (req, res) => campoController.actualizarVentaExterna(req, res));
+router.delete('/externo/ventas/:id', (req, res) => campoController.eliminarVentaExterna(req, res));
+router.delete('/externo/ventas', (req, res) => campoController.eliminarTodasVentasExternas(req, res));
 
 router.get('/externo/embudo', (req, res) => campoController.getMetricasEmbudo(req, res));
 

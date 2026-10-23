@@ -9,9 +9,9 @@ const iniciarJornadaSchema = z.preprocess((val) => {
   }
   return val;
 }, z.object({
-  lat: z.coerce.number().min(-90).max(90).optional().default(10.9685),
-  lng: z.coerce.number().min(-180).max(180).optional().default(-74.7813),
-  precision: z.coerce.number().optional().default(10),
+  lat: z.coerce.number().min(-90).max(90).optional().nullable(),
+  lng: z.coerce.number().min(-180).max(180).optional().nullable(),
+  precision: z.coerce.number().optional().nullable(),
   direccionInicio: z.string().optional().nullable(),
   fotoInicio: z.string().optional().nullable(),
   odometroInicio: z.coerce.number().optional().nullable(),
@@ -43,8 +43,8 @@ const finalizarJornadaSchema = z.preprocess((val) => {
   return val;
 }, z.object({
   jornadaId: z.string().optional().nullable(),
-  lat: z.coerce.number().min(-90).max(90).optional().default(10.9685),
-  lng: z.coerce.number().min(-180).max(180).optional().default(-74.7813),
+  lat: z.coerce.number().min(-90).max(90).optional().nullable(),
+  lng: z.coerce.number().min(-180).max(180).optional().nullable(),
   direccionFin: z.string().optional().nullable(),
   fotoFin: z.string().optional().nullable(),
   odometroFin: z.coerce.number().optional().nullable(),

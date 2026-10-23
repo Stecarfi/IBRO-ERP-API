@@ -354,6 +354,7 @@ class VisitasService {
         data: {
           visitaId,
           clienteId: visita.clienteId,
+          clienteExternoId: visita.clienteExternoId,
           prospectoId: visita.prospectoId,
           usuarioId,
           resultado: resultadoFinal,
@@ -376,6 +377,7 @@ class VisitasService {
           codigo: `VIS-${String(count + 1).padStart(5, '0')}`,
           usuarioId,
           clienteId: visita.clienteId,
+          clienteExternoId: visita.clienteExternoId,
           prospectoId: visita.prospectoId,
           tipoVisita: 'Comercial Seguimiento',
           estado: 'Programada',

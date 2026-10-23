@@ -65,15 +65,19 @@ class JornadaService {
     const minDesdeMedianoche = ahora.getHours() * 60 + ahora.getMinutes();
     const retrasoMin = minDesdeMedianoche > 480 ? minDesdeMedianoche - 480 : 0; // 08:00 AM
 
+    const parsedLat = lat !== null && lat !== undefined && lat !== '' ? parseFloat(lat) : NaN;
+    const parsedLng = lng !== null && lng !== undefined && lng !== '' ? parseFloat(lng) : NaN;
+    const hasValidGps = !Number.isNaN(parsedLat) && !Number.isNaN(parsedLng) && (parsedLat !== 0 || parsedLng !== 0);
+
     const nuevaJornada = await prisma.jornadaLaboral.create({
       data: {
         usuarioId,
-        latInicio: parseFloat(lat),
-        lngInicio: parseFloat(lng),
-        direccionInicio,
+        latInicio: hasValidGps ? parsedLat : 0,
+        lngInicio: hasValidGps ? parsedLng : 0,
+        direccionInicio: direccionInicio || (hasValidGps ? '' : 'Sin señal GPS al iniciar'),
         fotoInicio,
         odometroInicio: odometroInicio ? parseFloat(odometroInicio) : null,
-        bateriaInicio: bateriaInicio ? parseInt(bateriaInicio) : null,
+        bateriaInicio: bateriaInicio !== null && bateriaInicio !== undefined && bateriaInicio !== '' ? parseInt(bateriaInicio) : null,
         dispositivo,
         estado: 'Iniciada',
         horaInicio: ahora,
@@ -83,17 +87,19 @@ class JornadaService {
       }
     });
 
-    // Registrar primer breadcrumb
-    await prisma.rastreoUbicacion.create({
-      data: {
-        usuarioId,
-        jornadaId: nuevaJornada.id,
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
-        bateria: bateriaInicio ? parseInt(bateriaInicio) : null,
-        timestamp: new Date()
-      }
-    });
+    // Registrar primer breadcrumb únicamente si existen coordenadas GPS reales
+    if (hasValidGps) {
+      await prisma.rastreoUbicacion.create({
+        data: {
+          usuarioId,
+          jornadaId: nuevaJornada.id,
+          lat: parsedLat,
+          lng: parsedLng,
+          bateria: bateriaInicio !== null && bateriaInicio !== undefined && bateriaInicio !== '' ? parseInt(bateriaInicio) : null,
+          timestamp: new Date()
+        }
+      });
+    }
 
     return { success: true, jornada: nuevaJornada };
   }
@@ -225,8 +231,8 @@ class JornadaService {
   async finalizarJornada(usuarioId, data) {
     let {
       jornadaId,
-      lat = 10.9685,
-      lng = -74.7813,
+      lat = null,
+      lng = null,
       direccionFin = '',
       fotoFin = null,
       odometroFin = null,
@@ -328,16 +334,20 @@ class JornadaService {
     const tiempoTrabajadoNeto = Math.max(0, tiempoTotalMin - (jornada.retrasoMin || 0));
     const cumplimientoHorarioPct = Math.min(100, Math.max(0, Math.round((tiempoTrabajadoNeto / 480) * 100)));
 
+    const parsedLatFin = lat !== null && lat !== undefined && lat !== '' ? parseFloat(lat) : NaN;
+    const parsedLngFin = lng !== null && lng !== undefined && lng !== '' ? parseFloat(lng) : NaN;
+    const hasValidGpsFin = !Number.isNaN(parsedLatFin) && !Number.isNaN(parsedLngFin) && (parsedLatFin !== 0 || parsedLngFin !== 0);
+
     const jornadaCerrada = await prisma.jornadaLaboral.update({
       where: { id: jornada.id },
       data: {
         horaFin,
-        latFin: parseFloat(lat),
-        lngFin: parseFloat(lng),
+        latFin: hasValidGpsFin ? parsedLatFin : null,
+        lngFin: hasValidGpsFin ? parsedLngFin : null,
         direccionFin,
         fotoFin,
         odometroFin: odometroFin ? parseFloat(odometroFin) : null,
-        bateriaFin: bateriaFin ? parseInt(bateriaFin) : null,
+        bateriaFin: bateriaFin !== null && bateriaFin !== undefined && bateriaFin !== '' ? parseInt(bateriaFin) : null,
         estado: 'Finalizada',
         tiempoTotalMin,
         tiempoEfectivoMin,
