@@ -3250,12 +3250,18 @@ class CampoController {
         });
 
         if (paradaAbierta) {
-          const duracionMinAuto = Math.max(1, Math.round((ahora - new Date(paradaAbierta.checkInHora)) / 60000));
+          const checkInPrevio = new Date(paradaAbierta.checkInHora);
+          const diffMinRaw = Math.max(1, Math.round((ahora - checkInPrevio) / 60000));
+          const esMismoDia = getFechaColombia(ahora) === getFechaColombia(checkInPrevio);
+          const duracionMinAuto = (esMismoDia && diffMinRaw <= 240) ? diffMinRaw : 30;
+          const checkOutAuto = (esMismoDia && diffMinRaw <= 240)
+            ? ahora
+            : new Date(checkInPrevio.getTime() + duracionMinAuto * 60000);
           await prisma.visitaCampo.update({
             where: { id: paradaAbierta.id },
             data: {
               estado: 'Realizada',
-              checkOutHora: ahora,
+              checkOutHora: checkOutAuto,
               checkOutLat: numLat ?? paradaAbierta.checkInLat,
               checkOutLng: numLng ?? paradaAbierta.checkInLng,
               duracionMin: duracionMinAuto,
@@ -4243,48 +4249,34 @@ class CampoController {
       if (modoPeriodo === 'hoy') {
         const startOfDay = new Date(`${hoyColombia}T00:00:00-05:00`);
         const endOfDay = new Date(`${hoyColombia}T23:59:59.999-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay, lte: endOfDay };
         fechaStr = hoyColombia;
       } else if (modoPeriodo === 'semana') {
         const sevenDaysAgo = new Date(ahora.getTime() - 7 * 24 * 3600 * 1000);
         const startStr = getFechaColombia(sevenDaysAgo);
         const startOfDay = new Date(`${startStr}T00:00:00-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay } },
-          { checkInHora: null, fechaProgramada: { gte: startOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay };
         fechaStr = 'SEMANA_ACTUAL';
       } else if (modoPeriodo === 'mes') {
         const thirtyDaysAgo = new Date(ahora.getTime() - 30 * 24 * 3600 * 1000);
         const startStr = getFechaColombia(thirtyDaysAgo);
         const startOfDay = new Date(`${startStr}T00:00:00-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay } },
-          { checkInHora: null, fechaProgramada: { gte: startOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay };
         fechaStr = 'MES_ACTUAL';
       } else if (modoPeriodo === 'rango' && desde && hasta) {
         const startOfDay = new Date(`${desde}T00:00:00-05:00`);
         const endOfDay = new Date(`${hasta}T23:59:59.999-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay, lte: endOfDay };
         fechaStr = `${desde} a ${hasta}`;
       } else if (modoPeriodo === 'dia' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
         const startOfDay = new Date(`${fecha}T00:00:00-05:00`);
         const endOfDay = new Date(`${fecha}T23:59:59.999-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { checkInHora: null, fechaProgramada: { gte: startOfDay, lte: endOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay, lte: endOfDay };
         fechaStr = fecha;
       } else {
         modoPeriodo = 'todos';
         fechaStr = 'TODOS';
+        where.checkInHora = { not: null };
       }
 
       // 1. Obtener la lista estricta de Operadores en Campo (nunca Delegados de Gerencia ni Administradores)
@@ -4386,9 +4378,10 @@ class CampoController {
         paradasPorUsuarioYFecha[keyGrupo] += 1;
         const paradaNum = paradasPorUsuarioYFecha[keyGrupo];
 
-        let duracionMin = item.duracionMin || 0;
+        let duracionMin = Math.min(480, Math.max(0, item.duracionMin || 0));
         if (item.checkInHora && !item.checkOutHora) {
-          duracionMin = Math.max(1, Math.round((ahora - new Date(item.checkInHora)) / 60000));
+          const rawOpenMin = Math.max(1, Math.round((ahora - new Date(item.checkInHora)) / 60000));
+          duracionMin = Math.min(240, rawOpenMin);
         }
         tiempoEfectivoTotalMin += duracionMin;
 
@@ -4403,57 +4396,25 @@ class CampoController {
 
         const nombreAsesor = `${item.usuario?.nombre || ''} ${item.usuario?.apellido || ''}`.trim() || item.usuario?.user || 'Asesor';
 
-        // --- MOTOR DE DETECCIÓN DE ANOMALÍAS ---
+        // --- VERIFICACIÓN DE PARADAS ABIERTAS SIN SALIDA E INTERVALOS DE TRÁNSITO ---
         const anomaliasParada = [];
 
-        // Anomalía 1: Permanencia excesiva (> 90 minutos)
-        if (duracionMin > 90) {
-          anomaliasParada.push({
-            tipo: 'PERMANENCIA_EXCESIVA',
-            label: 'Permanencia Excesiva',
-            motivo: `Permanencia de ${duracionMin} min supera el umbral máximo de 90 min en sitio.`,
-            severidad: 'warning'
-          });
-        }
-
-        // Anomalía 2: Check-in sin salida (Check-Out) con más de 3 horas
-        if (item.checkInHora && !item.checkOutHora && duracionMin > 180) {
+        if (item.checkInHora && !item.checkOutHora && duracionMin >= 180) {
           anomaliasParada.push({
             tipo: 'CHECKIN_SIN_SALIDA',
-            label: 'Check-In Inconcluso',
-            motivo: `Visita iniciada hace más de ${Math.round(duracionMin / 60)} horas sin registro oficial de salida.`,
+            label: 'Check-In Abierto sin Salida',
+            motivo: `Visita iniciada sin registro de salida (>3h).`,
             severidad: 'danger'
           });
         }
 
-        // Anomalía 3: Tiempo muerto prolongado entre paradas (> 60 min de brecha)
         let tiempoTransitoAntesMin = 0;
         if (item.checkInHora && ultimoCheckOutPorUsuario[keyGrupo]) {
           const minutosDesdeUltimaSalida = Math.round((new Date(item.checkInHora) - new Date(ultimoCheckOutPorUsuario[keyGrupo])) / 60000);
-          if (minutosDesdeUltimaSalida > 0) {
+          if (minutosDesdeUltimaSalida > 0 && minutosDesdeUltimaSalida <= 240) {
             tiempoTransitoAntesMin = minutosDesdeUltimaSalida;
-          }
-          if (minutosDesdeUltimaSalida > 60) {
-            anomaliasParada.push({
-              tipo: 'TIEMPO_MUERTO',
-              label: 'Tiempo Muerto en Ruta',
-              motivo: `Brecha de ${minutosDesdeUltimaSalida} min sin actividad ni paradas desde la visita anterior.`,
-              severidad: 'warning'
-            });
-            tiempoTransitoEstimadoMin += minutosDesdeUltimaSalida;
-          } else if (minutosDesdeUltimaSalida > 0) {
             tiempoTransitoEstimadoMin += minutosDesdeUltimaSalida;
           }
-        }
-
-        // Anomalía 4: Parada sospechosamente corta (< 3 min marcada realizada)
-        if (duracionMin < 3 && item.checkOutHora) {
-          anomaliasParada.push({
-            tipo: 'ACTIVIDAD_SOSPECHOSA',
-            label: 'Parada Ultrasumaria (<3 min)',
-            motivo: `Parada de apenas ${duracionMin} min registrada como completada sin permanencia real.`,
-            severidad: 'warning'
-          });
         }
 
         // Actualizar último checkout para la siguiente comparación
@@ -4532,7 +4493,7 @@ class CampoController {
         const j = jornadasPorUsuario.get(u.id);
         const pres = presenciaMap.get(String(u.id));
         const isOnlineReal = Boolean(pres?.isOnline || (pres?.estadoPresencia === 'EN_LINEA'));
-        const paradaActiva = uMovs.find(m => m.estado === 'En Curso' || !m.checkOutHora);
+        const paradaActiva = uMovs.find(m => (m.estado === 'En Curso' || (m.checkInHora && !m.checkOutHora)) && m.fecha === hoyColombia);
 
         let estadoOperativo = 'Sin actividad';
         let estadoColor = 'slate';
