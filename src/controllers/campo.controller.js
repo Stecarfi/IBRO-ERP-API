@@ -4217,7 +4217,8 @@ class CampoController {
 
       const { fecha, periodo, usuarioId, desde, hasta } = req.query;
       const esDel = this.esDelegado(req.user);
-      const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
+      const esGerencial = req.query.modulo === 'control_gerencial' || req.headers['x-modulo'] === 'control_gerencial' || esDel;
+      const targetUserId = esGerencial ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : (usuarioId && usuarioId !== 'TODOS' ? usuarioId : req.user?.id);
 
       const ahora = new Date();
       const hoyColombia = getFechaColombia(ahora);
@@ -4249,34 +4250,54 @@ class CampoController {
       if (modoPeriodo === 'hoy') {
         const startOfDay = new Date(`${hoyColombia}T00:00:00-05:00`);
         const endOfDay = new Date(`${hoyColombia}T23:59:59.999-05:00`);
-        where.checkInHora = { gte: startOfDay, lte: endOfDay };
+        where.OR = [
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
+          { createdAt: { gte: startOfDay, lte: endOfDay } }
+        ];
         fechaStr = hoyColombia;
       } else if (modoPeriodo === 'semana') {
         const sevenDaysAgo = new Date(ahora.getTime() - 7 * 24 * 3600 * 1000);
         const startStr = getFechaColombia(sevenDaysAgo);
         const startOfDay = new Date(`${startStr}T00:00:00-05:00`);
-        where.checkInHora = { gte: startOfDay };
+        where.OR = [
+          { checkInHora: { gte: startOfDay } },
+          { fechaProgramada: { gte: startOfDay } },
+          { createdAt: { gte: startOfDay } }
+        ];
         fechaStr = 'SEMANA_ACTUAL';
       } else if (modoPeriodo === 'mes') {
         const thirtyDaysAgo = new Date(ahora.getTime() - 30 * 24 * 3600 * 1000);
         const startStr = getFechaColombia(thirtyDaysAgo);
         const startOfDay = new Date(`${startStr}T00:00:00-05:00`);
-        where.checkInHora = { gte: startOfDay };
+        where.OR = [
+          { checkInHora: { gte: startOfDay } },
+          { fechaProgramada: { gte: startOfDay } },
+          { createdAt: { gte: startOfDay } }
+        ];
         fechaStr = 'MES_ACTUAL';
       } else if (modoPeriodo === 'rango' && desde && hasta) {
         const startOfDay = new Date(`${desde}T00:00:00-05:00`);
         const endOfDay = new Date(`${hasta}T23:59:59.999-05:00`);
-        where.checkInHora = { gte: startOfDay, lte: endOfDay };
+        where.OR = [
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
+          { createdAt: { gte: startOfDay, lte: endOfDay } }
+        ];
         fechaStr = `${desde} a ${hasta}`;
       } else if (modoPeriodo === 'dia' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
         const startOfDay = new Date(`${fecha}T00:00:00-05:00`);
         const endOfDay = new Date(`${fecha}T23:59:59.999-05:00`);
-        where.checkInHora = { gte: startOfDay, lte: endOfDay };
+        where.OR = [
+          { checkInHora: { gte: startOfDay, lte: endOfDay } },
+          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
+          { createdAt: { gte: startOfDay, lte: endOfDay } }
+        ];
         fechaStr = fecha;
       } else {
         modoPeriodo = 'todos';
         fechaStr = 'TODOS';
-        where.checkInHora = { not: null };
+        // Sin restricción: devuelve el 100% de los registros almacenados en la base de datos
       }
 
       // 1. Obtener la lista estricta de Operadores en Campo (nunca Delegados de Gerencia ni Administradores)
@@ -4301,8 +4322,8 @@ class CampoController {
       });
 
       const usuariosCampoIds = usuariosCampo.map(u => u.id);
-      if (!targetUserId) {
-        where.usuarioId = { in: usuariosCampoIds };
+      if (targetUserId) {
+        where.usuarioId = targetUserId;
       }
 
       // 2. Obtener todas las visitas en el filtro
