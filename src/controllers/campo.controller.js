@@ -3037,7 +3037,7 @@ class CampoController {
     }
   }
 
-  // --- RESUMEN CONSOLIDADO DE GESTIÓN POR PERÍODO (DIARIO / SEMANAL / MENSUAL) ---
+  // --- RESUMEN CONSOLIDADO DE GESTIÓN POR PERÍODO (DIARIO / SEMANAL / MENSUAL / HISTÓRICO) ---
   async getResumenPeriodoComercial(req, res) {
     try {
       const esDel = this.esDelegado(req.user);
@@ -3050,7 +3050,10 @@ class CampoController {
       let fin = new Date(ahora);
       fin.setHours(23, 59, 59, 999);
 
-      if (periodo === 'semana') {
+      if (periodo === 'todos') {
+        inicio = new Date('2020-01-01T00:00:00.000Z');
+        fin = new Date('2030-12-31T23:59:59.999Z');
+      } else if (periodo === 'semana') {
         const diaSemana = ahora.getDay();
         const diffDias = diaSemana === 0 ? 6 : diaSemana - 1; // Lunes
         inicio.setDate(ahora.getDate() - diffDias);
@@ -3070,50 +3073,110 @@ class CampoController {
       const userWhere = targetUserId ? { usuarioId: targetUserId } : {};
       const comWhere = targetUserId ? { comercialId: targetUserId } : {};
 
+      // 0. Datos del Asesor
+      let asesorInfo = null;
+      if (targetUserId && targetUserId !== 'TODOS') {
+        asesorInfo = await prisma.user.findUnique({
+          where: { id: targetUserId },
+          select: { id: true, nombre: true, apellido: true, cargo: true, telefono: true, correo: true }
+        });
+      }
+
       // 1. Jornadas
       const jornadas = await prisma.jornadaLaboral.findMany({
         where: {
           ...userWhere,
           horaInicio: { gte: inicio, lte: fin }
         },
-        select: { id: true, estado: true, tiempoTotalMin: true, distanciaKm: true, totalVisitas: true }
+        select: {
+          id: true,
+          estado: true,
+          horaInicio: true,
+          horaFin: true,
+          latInicio: true,
+          lngInicio: true,
+          direccionInicio: true,
+          bateriaInicio: true,
+          tiempoTotalMin: true,
+          distanciaKm: true,
+          totalVisitas: true,
+          dispositivo: true,
+          observaciones: true
+        },
+        orderBy: { horaInicio: 'desc' }
       });
 
       const totalJornadas = jornadas.length;
-      const minutosTotales = jornadas.reduce((acc, j) => acc + (j.tiempoTotalMin || 0), 0);
+      let minutosTotales = 0;
+      jornadas.forEach(j => {
+        if (j.estado === 'Iniciada' && !j.horaFin && j.horaInicio) {
+          const elapsedMin = Math.max(0, Math.round((ahora.getTime() - new Date(j.horaInicio).getTime()) / 60000));
+          minutosTotales += elapsedMin;
+        } else {
+          minutosTotales += (j.tiempoTotalMin || 0);
+        }
+      });
       const horasTotales = Number((minutosTotales / 60).toFixed(1));
       const kmTotales = Number(jornadas.reduce((acc, j) => acc + (j.distanciaKm || 0), 0).toFixed(1));
 
-      // 2. Visitas
+      // 2. Visitas Detalladas
+      const visitasWhere = {
+        ...userWhere,
+        ...(periodo !== 'todos' ? {
+          OR: [
+            { fechaProgramada: { gte: inicio, lte: fin } },
+            { checkInHora: { gte: inicio, lte: fin } },
+            { createdAt: { gte: inicio, lte: fin } }
+          ]
+        } : {})
+      };
+
       const visitas = await prisma.visitaCampo.findMany({
-        where: {
-          ...userWhere,
-          fechaProgramada: { gte: inicio, lte: fin }
+        where: visitasWhere,
+        include: {
+          cliente: { select: { id: true, nom: true, direccion: true, tel: true, ciudad: true } },
+          clienteExterno: { select: { id: true, nombre: true, direccion: true, telefono: true, ciudad: true } },
+          prospecto: { select: { id: true, nombre: true, direccion: true, telefono: true } },
+          evidenciasRelacionadas: { select: { id: true, url: true, tipo: true, descripcion: true } }
         },
-        select: { id: true, estado: true, resultadoVisita: true, duracionMin: true }
+        orderBy: [
+          { checkInHora: 'desc' },
+          { fechaProgramada: 'asc' },
+          { createdAt: 'desc' }
+        ]
       });
+
       const totalVisitas = visitas.length;
-      const visitasEfectivas = visitas.filter(v => v.estado === 'Realizada' || v.resultadoVisita === 'Venta Cerrada' || v.resultadoVisita === 'Cotización Solicitada').length;
+      const visitasEfectivas = visitas.filter(v => v.estado === 'Realizada' || v.resultadoVisita === 'Venta Cerrada' || v.resultadoVisita === 'Cotización Solicitada' || v.resultadoVisita === 'Visita Exitosa').length;
+      const visitasProgramadas = visitas.filter(v => v.estado === 'Programada' || v.estado === 'En Curso').length;
       const efectividadPct = totalVisitas > 0 ? Math.round((visitasEfectivas / totalVisitas) * 100) : 0;
 
       // 3. Cotizaciones
+      const cotizacionesWhere = {
+        ...comWhere,
+        ...(periodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+      };
       const cotizaciones = await prisma.cotizacionExternaCampo.findMany({
-        where: {
-          ...comWhere,
-          fecha: { gte: inicio, lte: fin }
+        where: cotizacionesWhere,
+        include: {
+          clienteExterno: { select: { id: true, nombre: true } }
         },
-        select: { id: true, total: true, estado: true }
+        orderBy: { fecha: 'desc' }
       });
       const totalCotizaciones = cotizaciones.length;
       const montoCotizado = cotizaciones.reduce((acc, c) => acc + (c.total || 0), 0);
 
       // 4. Ventas
+      const ventasWhere = {
+        ...comWhere,
+        ...(periodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+      };
       const ventas = await prisma.ventaExternaCampo.findMany({
-        where: {
-          ...comWhere,
-          fecha: { gte: inicio, lte: fin }
+        where: ventasWhere,
+        include: {
+          clienteExterno: { select: { id: true, nombre: true } }
         },
-        select: { id: true, valorVendido: true }
+        orderBy: { fecha: 'desc' }
       });
       const totalVentas = ventas.length;
       const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
@@ -3122,24 +3185,35 @@ class CampoController {
       const actividades = await prisma.actividadCampo.findMany({
         where: {
           ...userWhere,
-          fechaProgramada: { gte: inicio, lte: fin }
+          ...(periodo !== 'todos' ? { fechaProgramada: { gte: inicio, lte: fin } } : {})
         },
-        select: { id: true, estado: true }
+        select: { id: true, titulo: true, estado: true, prioridad: true, fechaProgramada: true }
       });
       const totalTareas = actividades.length;
       const tareasCumplidas = actividades.filter(a => a.estado === 'Completada').length;
+
+      // 6. Jornada Activa Hoy (si existe)
+      const jornadaActivaHoy = jornadas.find(j => j.estado === 'Iniciada' && !j.horaFin) || null;
 
       res.json({
         periodo,
         fechaInicio: inicio.toISOString(),
         fechaFin: fin.toISOString(),
         usuarioId: targetUserId || 'TODOS',
+        asesor: asesorInfo,
+        jornadaActiva: jornadaActivaHoy,
+        jornadas,
+        visitas,
+        cotizaciones,
+        ventas,
+        actividades,
         kpis: {
           totalJornadas,
           horasTotales,
           kmTotales,
           totalVisitas,
           visitasEfectivas,
+          visitasProgramadas,
           efectividadPct,
           totalCotizaciones,
           montoCotizado,
