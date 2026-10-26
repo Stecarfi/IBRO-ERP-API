@@ -3042,7 +3042,7 @@ class CampoController {
     try {
       const esDel = this.esDelegado(req.user);
       const { usuarioId, periodo = 'hoy', fechaDesde, fechaHasta } = req.query;
-      const targetUserId = esDel ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : req.user.id;
+      const targetUserId = usuarioId && usuarioId !== 'TODOS' ? usuarioId : (esDel ? null : req.user.id);
 
       const ahora = new Date();
       let inicio = new Date(ahora);
@@ -3136,8 +3136,8 @@ class CampoController {
         include: {
           cliente: { select: { id: true, nom: true, direccion: true, tel: true, ciudad: true } },
           clienteExterno: { select: { id: true, nombre: true, direccion: true, telefono: true, ciudad: true } },
-          prospecto: { select: { id: true, nombre: true, direccion: true, telefono: true } },
-          evidenciasRelacionadas: { select: { id: true, url: true, tipo: true, descripcion: true } }
+          prospecto: { select: { id: true, nombreComercial: true, razonSocial: true, ciudad: true, contactoTelefono: true } },
+          evidenciasRelacionadas: { select: { id: true, url: true, tipo: true, observaciones: true } }
         },
         orderBy: [
           { checkInHora: 'desc' },
