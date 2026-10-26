@@ -20,7 +20,7 @@ const corsOptions = {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-user', 'x-role', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control', 'Pragma'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-user', 'x-role', 'x-client-role', 'x-module', 'x-refresh-token', 'Accept', 'Origin', 'X-Requested-With', 'Cache-Control', 'Pragma'],
     optionsSuccessStatus: 200
 };
 app.use(cookieParser());

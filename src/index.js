@@ -134,6 +134,8 @@ app.use(cors({
         'x-user',
         'x-client-role',
         'x-module',
+        'x-refresh-token',
+        'x-role',
         'Range',
         'Cache-Control',
         'Pragma',
