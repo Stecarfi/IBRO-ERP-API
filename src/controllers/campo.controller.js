@@ -1713,7 +1713,7 @@ class CampoController {
           comentarios: [
             {
               fecha: new Date(),
-              usuario: `${req.user.nombre} ${req.user.apellido}`,
+              usuario: (`${req.user?.nombre || ''} ${req.user?.apellido || ''}`.trim()) || req.user?.username || req.user?.email || 'Delegado de Gerencia',
               texto: `Ruta programada por el Delegado de Gerencia.`
             }
           ]
