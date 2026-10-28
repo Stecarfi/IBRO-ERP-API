@@ -374,11 +374,7 @@ class AuditoriaService {
       const hasAuditsToday = auditsToday.length > 0;
       const loginAudits = auditsToday.filter(a => a.action === 'LOGIN');
 
-      // Validar si u.lastLogin ocurrió hoy
-      const lastLoginDate = u.lastLogin ? new Date(u.lastLogin) : null;
-      const lastLoginIsToday = Boolean(lastLoginDate && !isNaN(lastLoginDate.getTime()) && lastLoginDate >= startOfDay && lastLoginDate <= endOfDay);
-
-      // Primer ingreso: HORA REAL DE LOGIN O PRIMER EVENTO
+      // Primer ingreso: HORA REAL DE LOGIN O PRIMER EVENTO VERIFICABLE
       let primerIngreso = null;
       if (loginAudits.length > 0) {
         primerIngreso = loginAudits[0].fecha;
@@ -386,19 +382,14 @@ class AuditoriaService {
         primerIngreso = auditsToday[0].fecha;
       } else if (jornadaToday?.horaInicio) {
         primerIngreso = jornadaToday.horaInicio;
-      } else if (lastLoginIsToday) {
-        primerIngreso = lastLoginDate;
-      }
-
-      // Si lastLogin fue antes que el primer evento registrado hoy, considerar el login
-      if (lastLoginIsToday && (!primerIngreso || lastLoginDate < new Date(primerIngreso))) {
-        primerIngreso = lastLoginDate;
+      } else if (sessionToday?.fechaInicio && sessionToday?.ultimoEventoTipo === 'LOGIN') {
+        primerIngreso = sessionToday.fechaInicio;
       }
 
       // Último evento real registrado hoy
       const lastAuditToday = hasAuditsToday ? auditsToday[auditsToday.length - 1] : null;
 
-      // Última actividad: HORA REAL DEL ÚLTIMO EVENTO FRONTEND O LOGIN (JAMÁS inventar `now`!)
+      // Última actividad: HORA REAL DEL ÚLTIMO EVENTO FRONTEND O LOGIN
       let ultimoAccesoHoy = null;
       if (lastAuditToday) {
         ultimoAccesoHoy = lastAuditToday.fecha;
@@ -406,12 +397,8 @@ class AuditoriaService {
         ultimoAccesoHoy = sessionToday.ultimaActividad;
       } else if (jornadaToday?.horaFin) {
         ultimoAccesoHoy = jornadaToday.horaFin;
-      } else if (lastLoginIsToday) {
-        ultimoAccesoHoy = lastLoginDate;
-      }
-
-      if (lastLoginIsToday && (!ultimoAccesoHoy || lastLoginDate > new Date(ultimoAccesoHoy))) {
-        ultimoAccesoHoy = lastLoginDate;
+      } else if (loginAudits.length > 0) {
+        ultimoAccesoHoy = loginAudits[loginAudits.length - 1].fecha;
       }
 
       // Último acceso histórico si no entró hoy (Reconciliar con la fecha más reciente entre auditoría y lastLogin)
@@ -421,6 +408,7 @@ class AuditoriaService {
           where: { userId: u.id },
           orderBy: { fecha: 'desc' }
         });
+        const lastLoginDate = u.lastLogin ? new Date(u.lastLogin) : null;
         const auditTime = lastHistoricAudit ? new Date(lastHistoricAudit.fecha).getTime() : 0;
         const loginTime = lastLoginDate ? lastLoginDate.getTime() : 0;
         const maxTime = Math.max(auditTime, loginTime);
@@ -438,7 +426,7 @@ class AuditoriaService {
         const diffMs = now.getTime() - new Date(ultimoAccesoHoy).getTime();
         minutesSinceLast = Math.max(0, Math.floor(diffMs / 60000));
 
-        const lastAction = (lastAuditToday?.action || sessionToday?.ultimoEventoTipo || (lastLoginIsToday && !lastAuditToday ? 'LOGIN' : '')).toUpperCase();
+        const lastAction = (lastAuditToday?.action || sessionToday?.ultimoEventoTipo || (loginAudits.length > 0 ? 'LOGIN' : '')).toUpperCase();
         const tabIsHidden = lastAuditToday?.tabStatus === 'MINIMIZADA' || sessionToday?.tabStatus === 'MINIMIZADA';
         const isClosedSession = lastAction === 'LOGOUT' || lastAction === 'BEFORE_UNLOAD' || sessionToday?.estado === 'DESCONECTADO';
 
