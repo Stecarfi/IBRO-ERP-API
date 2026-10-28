@@ -322,9 +322,13 @@ class AuditoriaService {
     const { startOfDay, endOfDay } = getColombiaDayBounds(now);
     const tresDiasMs = 3 * 24 * 3600 * 1000;
 
-    // Obtener todos los colaboradores habilitados en el sistema
+    // Obtener todos los colaboradores habilitados en el sistema (excluyendo usuario técnico de pruebas 'admin')
     const allUsers = await prisma.user.findMany({
-      where: { isLocked: false },
+      where: {
+        isLocked: false,
+        user: { notIn: ['admin', 'ADMIN'] },
+        id: { not: '1' }
+      },
       include: { role: { select: { id: true, name: true } } },
       orderBy: { nombre: 'asc' }
     });
