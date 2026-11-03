@@ -15,6 +15,8 @@ const { initCronJobs } = require('./cron.service');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
+const { createOriginChecker } = require('./config/cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -117,11 +119,20 @@ const optionalAuthenticateToken = async (req, res, next) => {
   next();
 };
 
-// 🔒 CORS
+// 🪖 Cabeceras de seguridad HTTP (helmet).
+// - CSP deshabilitada: la API también sirve la PWA/estáticos y una CSP estricta los rompería.
+// - CORP 'cross-origin': el frontend (otro dominio) debe poder cargar imágenes/streams de la API.
+app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
+}));
+
+// 🔒 CORS: lista blanca desde ALLOWED_ORIGINS (ver src/config/cors.js)
+const corsOriginChecker = createOriginChecker();
 app.use(cors({
-    origin: function(origin, callback) {
-        callback(null, true);
-    },
+    origin: corsOriginChecker.origin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: [
@@ -146,9 +157,11 @@ app.use(cors({
 // 🛡️ Rate Limiting Global (Anti-DDoS) - Excluye video streaming para evitar HTTP 429 durante la reproducción
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 500, // límite de 500 peticiones por IP
+  max: parseInt(process.env.API_RATE_LIMIT_MAX, 10) || 1000, // límite generoso por IP
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: 'Demasiadas peticiones detectadas (Anti-DDoS). Intente más tarde.' },
-  skip: (req) => req.path.startsWith('/drive-stream/') || req.path.startsWith('/media/')
+  skip: (req) => req.path.startsWith('/drive-stream/') || req.path.startsWith('/media/') || req.path === '/health'
 });
 app.use('/api/', apiLimiter);
 
@@ -156,7 +169,25 @@ app.use('/api/', apiLimiter);
 const loginLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutos
   max: 10, // máximo 10 intentos
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: 'Demasiados intentos de inicio de sesión. Espere 5 minutos.' }
+});
+
+// 🛡️ Rate Limiting Estricto para recuperación / restablecimiento de contraseña (anti enumeración y fuerza bruta del código)
+const recoverLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes de recuperación. Intente de nuevo en 15 minutos.' }
+});
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos de restablecimiento. Intente de nuevo en 15 minutos.' }
 });
 // Incrementar límite de tamaño para soportar imágenes en Base64 en solicitudes/PQRS
 app.use(express.json({ limit: '50mb' }));
@@ -1541,7 +1572,7 @@ app.post('/api/gemini/chat', authenticateToken, async (req, res) => {
 });
 
 // POST /api/auth/recover: Iniciar flujo de recuperación de contraseña enviando correo
-app.post('/api/auth/recover', async (req, res) => {
+app.post('/api/auth/recover', recoverLimiter, async (req, res) => {
   const { user, origin } = req.body;
   if (!user) {
     return res.status(400).json({ error: 'Usuario requerido' });
@@ -1604,7 +1635,7 @@ app.post('/api/auth/recover', async (req, res) => {
 });
 
 // POST /api/auth/reset-password: Validar token y cambiar contraseña
-app.post('/api/auth/reset-password', async (req, res) => {
+app.post('/api/auth/reset-password', resetPasswordLimiter, async (req, res) => {
   const { user, token, newPassword } = req.body;
   if (!user || !token || !newPassword) {
     return res.status(400).json({ error: 'Todos los campos son requeridos' });
@@ -4654,9 +4685,7 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 io = new Server(server, {
   cors: {
-    origin: function(origin, callback) {
-        callback(null, true);
-    },
+    origin: corsOriginChecker.origin,
     credentials: true,
     methods: ["GET", "POST"]
   }
