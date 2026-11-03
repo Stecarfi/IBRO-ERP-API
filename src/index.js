@@ -3578,7 +3578,10 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
               throw new Error(`El usuario '${cleaned.user}' no tiene rol asignado (roleId es obligatorio).`);
             }
           }
-          const createData = cleaned.pass ? cleaned : { ...cleaned, pass: bcrypt.hashSync('Ibro2026*', 10) };
+          // Seguridad: sin contraseña por defecto conocida. Si el admin no define una, se usa
+          // DEFAULT_USER_PASSWORD (si existe) o una aleatoria; el usuario usará "recuperar contraseña".
+          const initialPass = process.env.DEFAULT_USER_PASSWORD || crypto.randomBytes(24).toString('base64url');
+          const createData = cleaned.pass ? cleaned : { ...cleaned, pass: bcrypt.hashSync(initialPass, 10) };
 
           await tx.user.upsert({
             where: { id: cleaned.id },

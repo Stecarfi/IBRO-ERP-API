@@ -109,8 +109,13 @@ async function sendRecoveryEmail(email, name, resetLink) {
     return { sent: true };
   }
 
-  console.log(`[EMAIL SERVICE MOCK] No email credentials configured. Link: ${resetLink}`);
-  return { sent: false, mockMode: true, resetLink };
+  // Seguridad: el enlace (contiene el código de restablecimiento) solo se imprime fuera de producción
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[EMAIL SERVICE MOCK] No email credentials configured. Link: ${resetLink}`);
+  } else {
+    console.warn('[EMAIL SERVICE MOCK] No hay credenciales de correo configuradas: no se pudo enviar el correo de recuperación.');
+  }
+  return { sent: false, mockMode: true };
 }
 
 async function verifySmtpConnection() {
@@ -207,8 +212,12 @@ async function sendLockoutEmail(email, name, unlockLink) {
     }
   }
 
-  console.log(`[EMAIL SERVICE MOCK] Lockout Email to ${email}. Link: ${unlockLink}`);
-  return { sent: false, mockMode: true, unlockLink };
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[EMAIL SERVICE MOCK] Lockout Email to ${email}. Link: ${unlockLink}`);
+  } else {
+    console.warn('[EMAIL SERVICE MOCK] No hay credenciales de correo configuradas: no se pudo enviar el correo de bloqueo.');
+  }
+  return { sent: false, mockMode: true };
 }
 
 function formatColombiaDateTime(date, timeZone = 'America/Bogota') {

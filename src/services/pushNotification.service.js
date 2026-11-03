@@ -2,16 +2,25 @@ const fs = require('fs');
 const path = require('path');
 const webpush = require('web-push');
 
-// Configuración VAPID para IBRO ERP
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "BBTPzc_5DWtTh6KjQyeboDU-m1CPg8eSN2BymJ5_J75AWutqLVYX3ZqQkvkkZKyEjB0MunfsIBVw5tg8NP5_MfM";
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "ezNB94zddPln8NhUWM_l_ni36JnfnDkKIaMZc-JIvpA";
-const VAPID_EMAIL = process.env.VAPID_EMAIL || "mailto:soporte@ibrosas.com";
+// Configuración VAPID para IBRO ERP.
+// Seguridad: las claves se leen EXCLUSIVAMENTE de variables de entorno (las anteriores
+// quedaron expuestas en Git y deben considerarse comprometidas). Si faltan, el envío
+// de notificaciones push se deshabilita con una advertencia en lugar de tumbar el servidor.
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_EMAIL = process.env.VAPID_EMAIL || 'mailto:soporte@ibrosas.com';
 
-webpush.setVapidDetails(
-  VAPID_EMAIL,
-  VAPID_PUBLIC_KEY,
-  VAPID_PRIVATE_KEY
-);
+let pushEnabled = false;
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  try {
+    webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    pushEnabled = true;
+  } catch (err) {
+    console.warn('[PushService] Claves VAPID inválidas; notificaciones push deshabilitadas:', err.message);
+  }
+} else {
+  console.warn('[PushService] VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY no definidas: notificaciones push deshabilitadas.');
+}
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
 const SUBS_FILE = path.join(DATA_DIR, 'push_subscriptions.json');
@@ -102,6 +111,7 @@ class PushNotificationService {
   }
 
   async sendToSubscription(subRecord, payload) {
+    if (!pushEnabled) return false;
     try {
       if (!subRecord?.subscription?.endpoint || !subRecord?.subscription?.keys?.p256dh) {
         if (subRecord?.subscription?.endpoint) this.removeSubscription(subRecord.subscription.endpoint);
