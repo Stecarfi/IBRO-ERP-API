@@ -1,5 +1,5 @@
-require('dotenv').config();
-const prisma = require('./prisma');
+require('./_guard'); // Aborta en produccion salvo --force
+const prisma = require('../../src/prisma');
 
 async function fixPhotos() {
   const users = await prisma.user.findMany();

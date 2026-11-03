@@ -1,3 +1,4 @@
+require('./_guard'); // Aborta en produccion salvo --force
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
@@ -238,8 +239,13 @@ async function cleanTestData() {
   }
 
   // 13. Asegurar Usuario Administrador Master Raíz ('admin')
-  console.log('13. Asegurando Usuario Administrador Master raíz (admin / admin)...');
-  const hashedAdminPass = bcrypt.hashSync('admin', 10);
+  console.log('13. Asegurando Usuario Administrador Master raíz (admin)...');
+  // La contrasena del admin se toma de SEED_ADMIN_PASSWORD (nunca un valor por defecto)
+  const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (!seedAdminPassword || seedAdminPassword.length < 10) {
+    throw new Error('SEED_ADMIN_PASSWORD no esta definida o tiene menos de 10 caracteres.');
+  }
+  const hashedAdminPass = bcrypt.hashSync(seedAdminPassword, 10);
   await prisma.user.upsert({
     where: { user: 'admin' },
     update: {

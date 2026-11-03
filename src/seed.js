@@ -1,5 +1,13 @@
+require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+
+// La contrasena del administrador raiz se toma SIEMPRE de SEED_ADMIN_PASSWORD (sin valor por defecto)
+const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD;
+if (!SEED_ADMIN_PASSWORD || SEED_ADMIN_PASSWORD.length < 10) {
+  console.error('[SEED] Defina SEED_ADMIN_PASSWORD (minimo 10 caracteres) antes de ejecutar el seed. Abortando.');
+  process.exit(1);
+}
 const bcrypt = require('bcryptjs');
 
 const sysModules = [
@@ -62,7 +70,7 @@ async function main() {
   }
 
   // Encriptar la contraseña por defecto del administrador
-  const hashedPassword = bcrypt.hashSync('admin', 10);
+  const hashedPassword = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
 
   // 2. Crear el Usuario Administrador Raíz
   const rootUser = await prisma.user.upsert({
@@ -75,7 +83,6 @@ async function main() {
       correo: 'admin@ibro.com',
       cargo: 'Dirección Comercial',
       observaciones: 'Usuario raíz',
-      pass: hashedPassword,
       roleId: '1',
     },
     create: {
@@ -92,7 +99,7 @@ async function main() {
     },
   });
 
-  console.log('User seeded:', rootUser);
+  console.log('User seeded:', { id: rootUser.id, user: rootUser.user, roleId: rootUser.roleId });
   console.log('Seeding completed successfully!');
 }
 

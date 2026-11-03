@@ -1,5 +1,5 @@
-require('dotenv').config();
-const prisma = require('./prisma');
+require('./_guard'); // Aborta en produccion salvo --force
+const prisma = require('../../src/prisma');
 
 function fixUrl(url) {
   if (typeof url === 'string' && url.includes('uc?export=view&id=')) {

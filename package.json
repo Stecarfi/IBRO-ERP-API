@@ -9,8 +9,7 @@
     "dev": "nodemon src/index.js",
     "seed": "node src/seed.js",
     "migrate": "npx prisma generate && npx prisma db push",
-    "build": "prisma generate",
-    "sync:mobile": "node sync-mobile.js"
+    "build": "prisma generate"
   },
   "keywords": [
     "erp",
