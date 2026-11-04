@@ -4547,6 +4547,7 @@ class CampoController {
         }).catch(() => []),
         prisma.pausaJornada.findMany({
           where: {
+            ...(modoPeriodo !== 'todos' && where.checkInHora ? { horaInicio: where.checkInHora } : {}),
             jornada: {
               usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds }
             }
@@ -4604,10 +4605,7 @@ class CampoController {
           p.jornada?.estado === 'En Pausa'
         );
 
-        let finDate = p.horaFin ? new Date(p.horaFin) : null;
-        if (!finDate && !jornadaSigueEnPausaHoy && p.jornada?.horaFin) {
-          finDate = new Date(p.jornada.horaFin);
-        }
+        const finDate = p.horaFin ? new Date(p.horaFin) : null;
 
         const enCurso = jornadaSigueEnPausaHoy && !finDate;
         let duracionMin = p.duracionMin != null ? Number(p.duracionMin) : 0;
