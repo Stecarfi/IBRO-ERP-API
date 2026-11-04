@@ -1326,6 +1326,10 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 días
       });
 
+      // Asegurar que el usuario devuelto incluya el lastLogin en UTC universal
+      dbUser.lastLogin = nowIso;
+      dbUser.isOnline = true;
+
       return res.json({ success: true, user: sanitizeUser(dbUser), token, refreshToken });
     } else {
       // Incrementar intentos fallidos
