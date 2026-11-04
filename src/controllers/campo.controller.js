@@ -4863,12 +4863,12 @@ class CampoController {
         const recorridoHoy = [];
         pingsDeHoy.forEach(p => {
           if (p.lat && p.lng && (p.lat !== 0 || p.lng !== 0)) {
-            recorridoHoy.push([Number(p.lat), Number(p.lng)]);
+            recorridoHoy.push({ lat: Number(p.lat), lng: Number(p.lng) });
           }
         });
         uMovsHoy.forEach(m => {
           if (m.checkInLat && m.checkInLng) {
-            recorridoHoy.push([Number(m.checkInLat), Number(m.checkInLng)]);
+            recorridoHoy.push({ lat: Number(m.checkInLat), lng: Number(m.checkInLng) });
           }
         });
 
