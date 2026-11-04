@@ -29,7 +29,16 @@ const videoStreamService = require('./services/video-stream.service');
 const pushNotificationService = require('./services/pushNotification.service');
 const auditoriaService = require('./services/auditoria.service');
 const { JWT_SECRET } = require('./config/jwtSecret');
-const { isAdminUser, requireAdmin } = require('./middlewares/rbac.middleware');
+const { isAdminUser, requireAdmin, requireModuleAccess, getAccessContext } = require('./middlewares/rbac.middleware');
+const {
+  sanitizeUser,
+  sanitizeOtherUser,
+  canWriteCollection,
+  PROTECTED_USER_FIELDS,
+  BUDGET_USER_FIELDS,
+  INFORMES_CALENDAR_FIELDS,
+  pick
+} = require('./security/permissions');
 
 // Fase 0 (seguridad): campos que jamás deben viajar en broadcasts de Socket.io
 const sanitizeDiffForBroadcast = (diff) => {
@@ -40,11 +49,7 @@ const sanitizeDiffForBroadcast = (diff) => {
     if (key === 'users' && diff.users && typeof diff.users === 'object') {
       out.users = {
         ...diff.users,
-        upserted: (diff.users.upserted || []).map((u) => {
-          if (!u || typeof u !== 'object') return u;
-          const { pass, refreshToken, ...safe } = u;
-          return safe;
-        })
+        upserted: (diff.users.upserted || []).map((u) => sanitizeUser(u))
       };
       continue;
     }
@@ -205,6 +210,7 @@ if (!fs.existsSync(uploadsDir)) {
 const storage = multer.memoryStorage(); // Cambiado a memory storage para subir a Google Drive
 const upload = multer({ 
     storage: storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB máximo
     fileFilter: function (req, file, cb) {
         if (file.mimetype.startsWith('image/')) {
             cb(null, true);
@@ -219,6 +225,11 @@ app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async
         const username = req.body.username || req.user?.user;
         if (!username) return res.status(400).json({ error: 'Username required' });
         if (!req.file) return res.status(400).json({ error: 'No avatar file provided' });
+
+        const isAdmin = await isAdminUser(req.user);
+        if (username.toLowerCase() !== req.user?.user?.toLowerCase() && !isAdmin) {
+            return res.status(403).json({ error: 'No autorizado para modificar el avatar de otro usuario.' });
+        }
         
         if (!driveService.isAvailable()) {
             return res.status(503).json({ error: 'El servicio de Google Drive no está disponible para almacenar avatares.' });
@@ -259,6 +270,7 @@ app.post('/api/upload-avatar', authenticateToken, upload.single('avatar'), async
 
 const uploadEvidence = multer({ 
     storage: storage,
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25MB máximo
     fileFilter: function (req, file, cb) {
         if (file.mimetype.startsWith('image/') || 
             file.mimetype === 'application/pdf' ||
@@ -307,6 +319,11 @@ app.delete('/api/remove-avatar', authenticateToken, async (req, res) => {
     try {
         const username = req.body.username || req.user?.user;
         if (!username) return res.status(400).json({ error: 'Username required' });
+
+        const isAdmin = await isAdminUser(req.user);
+        if (username.toLowerCase() !== req.user?.user?.toLowerCase() && !isAdmin) {
+            return res.status(403).json({ error: 'No autorizado para eliminar el avatar de otro usuario.' });
+        }
         
         const user = await prisma.user.findFirst({ where: { user: { equals: username, mode: 'insensitive' } } });
         if (user && user.foto) {
@@ -350,6 +367,11 @@ app.post('/api/upload-signature', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Signature data is required' });
         }
 
+        const isAdmin = await isAdminUser(req.user);
+        if (targetUser.toLowerCase() !== req.user?.user?.toLowerCase() && !isAdmin) {
+            return res.status(403).json({ error: 'No autorizado para modificar la firma de otro usuario.' });
+        }
+
         await prisma.user.updateMany({
             where: { user: { equals: targetUser, mode: 'insensitive' } },
             data: { firma: signature }
@@ -368,6 +390,11 @@ app.delete('/api/remove-signature', authenticateToken, async (req, res) => {
         const { username } = req.body;
         const targetUser = username || req.user?.user;
         if (!targetUser) return res.status(400).json({ error: 'Username required' });
+
+        const isAdmin = await isAdminUser(req.user);
+        if (targetUser.toLowerCase() !== req.user?.user?.toLowerCase() && !isAdmin) {
+            return res.status(403).json({ error: 'No autorizado para eliminar la firma de otro usuario.' });
+        }
 
         await prisma.user.updateMany({
             where: { user: { equals: targetUser, mode: 'insensitive' } },
@@ -415,16 +442,18 @@ app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req,
 
 const uploadCourseMaterial = multer({
     storage: storage,
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB máximo
     fileFilter: function (req, file, cb) {
         if (file.mimetype.includes('pdf') ||
             file.mimetype.includes('powerpoint') ||
             file.mimetype.includes('presentation') ||
             file.mimetype.includes('document') ||
             file.mimetype.includes('msword') ||
-            file.mimetype.includes('application/')) {
+            file.mimetype.includes('application/vnd') ||
+            file.mimetype.includes('application/pdf')) {
             cb(null, true);
         } else {
-            cb(null, true); 
+            cb(new Error('Tipo de archivo no permitido. Solo se permiten documentos (PDF, Office, etc.).')); 
         }
     }
 });
@@ -472,7 +501,7 @@ const uploadCourseVideo = multer({
         if (file.mimetype.startsWith('video/') || file.originalname.match(/\.(mp4|mov|webm|mkv|avi|m4v)$/i)) {
             cb(null, true);
         } else {
-            cb(null, true);
+            cb(new Error('Tipo de archivo no permitido. Solo se permiten videos (MP4, WebM, MOV, etc.).'));
         }
     }
 });
@@ -1011,7 +1040,7 @@ app.post('/api/push/subscribe', authenticateToken, (req, res) => {
   res.json({ success: ok, message: 'Suscripción push registrada correctamente' });
 });
 
-app.post('/api/push/unsubscribe', (req, res) => {
+app.post('/api/push/unsubscribe', authenticateToken, (req, res) => {
   const { endpoint } = req.body;
   pushNotificationService.removeSubscription(endpoint);
   res.json({ success: true, message: 'Suscripción push eliminada' });
@@ -1062,6 +1091,10 @@ app.post('/api/push/send-notification', authenticateToken, async (req, res) => {
 
     let deliveredTo = 0;
     if (target === 'all' || target === 'todos') {
+      const isAdmin = await isAdminUser(req.user);
+      if (!isAdmin) {
+        return res.status(403).json({ error: 'Solo administradores pueden enviar notificaciones push a todos los usuarios.' });
+      }
       deliveredTo = await pushNotificationService.sendNotificationToAll(payload);
     } else if (Array.isArray(userIds) && userIds.length > 0) {
       for (const u of userIds) {
@@ -1132,7 +1165,7 @@ app.get('/api/push/unread-summary', optionalAuthenticateToken, async (req, res) 
 });
 
 // Marcar mensaje como leído desde la notificación push (sin abrir la PWA)
-app.post('/api/push/mark-read', async (req, res) => {
+app.post('/api/push/mark-read', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.body;
     if (messageId) {
@@ -1184,15 +1217,11 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     });
 
     if (!dbUser) {
-      return res.status(401).json({ error: 'Usuario no encontrado' });
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos' });
     }
 
     if (dbUser.isLocked) {
-      console.log(`\n======================================================`);
-      console.log(`[ALERTA] Usuario ya está bloqueado: ${dbUser.user}`);
-      console.log(`URL PARA DESBLOQUEAR INMEDIATAMENTE:`);
-      console.log(`https://ibro-api.onrender.com/api/emergency-unlock/${encodeURIComponent(dbUser.user)}`);
-      console.log(`======================================================\n`);
+      console.warn(`[ALERTA] Intento de acceso a cuenta bloqueada: ${dbUser.user}`);
       return res.status(403).json({ error: 'Cuenta bloqueada por seguridad. Revisa tu correo electrónico para desbloquearla.' });
     }
 
@@ -1297,31 +1326,13 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         maxAge: 30 * 24 * 60 * 60 * 1000 // 30 días
       });
 
-      return res.json({ success: true, user: dbUser, token, refreshToken });
+      return res.json({ success: true, user: sanitizeUser(dbUser), token, refreshToken });
     } else {
       // Incrementar intentos fallidos
-      const newAttempts = dbUser.failedLoginAttempts + 1;
-      let isNowLocked = false;
-      
-      if (newAttempts >= 3) {
-        isNowLocked = true;
-        // Generar token de recuperación
-        const crypto = require('crypto');
-        const token = crypto.randomBytes(32).toString('hex');
-        const expire = Date.now() + 3600000; // 1 hora
-        
-        await prisma.pendingReset.create({
-          data: {
-            user: dbUser.user,
-            token,
-            expire
-          }
-        });
+      const newAttempts = (dbUser.failedLoginAttempts || 0) + 1;
+      const isNowLocked = newAttempts >= 3;
 
-        const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${token}&user=${encodeURIComponent(dbUser.user)}`;
-        await sendLockoutEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido || ''}`.trim(), resetLink);
-      }
-
+      // 1) El bloqueo se aplica SIEMPRE primero (aunque falle el token o el correo)
       await prisma.user.update({
         where: { id: dbUser.id },
         data: { 
@@ -1331,11 +1342,19 @@ app.post('/api/login', loginLimiter, async (req, res) => {
       });
 
       if (isNowLocked) {
-        console.log(`\n======================================================`);
-        console.log(`[ALERTA] Usuario bloqueado: ${dbUser.user}`);
-        console.log(`URL PARA DESBLOQUEAR INMEDIATAMENTE:`);
-        console.log(`https://ibro-api.onrender.com/api/emergency-unlock/${encodeURIComponent(dbUser.user)}`);
-        console.log(`======================================================\n`);
+        // 2) Generar enlace de desbloqueo/restablecimiento y notificar por correo (best-effort)
+        try {
+          const unlockToken = crypto.randomBytes(32).toString('hex');
+          await createPendingReset(dbUser.id, unlockToken);
+          const resetLink = buildResetLink(null, dbUser.user, unlockToken);
+          if (dbUser.correo) {
+            await sendLockoutEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido || ''}`.trim(), resetLink);
+          }
+        } catch (lockErr) {
+          console.error('[LOGIN] Cuenta bloqueada, pero falló la generación/envío del enlace de desbloqueo:', lockErr.message);
+        }
+
+        console.warn(`[ALERTA] Usuario bloqueado por intentos fallidos: ${dbUser.user}. Un administrador puede desbloquearlo en /api/emergency-unlock/:user`);
         return res.status(403).json({ error: 'Cuenta bloqueada por demasiados intentos fallidos. Revisa tu correo.' });
       }
 
@@ -1571,128 +1590,178 @@ app.post('/api/gemini/chat', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// 🔑 RECUPERACIÓN DE CONTRASEÑA
+// ==========================================
+// - Códigos generados con crypto.randomInt (CSPRNG) y guardados como hash SHA-256.
+// - Caducan (RESET_CODE_TTL_MS) y son de un solo uso (se borran al usarse).
+// - Máximo RESET_MAX_ATTEMPTS intentos fallidos por usuario; al superarlo se invalidan todos
+//   sus códigos y debe solicitar uno nuevo. Además hay rate limit por IP en ambos endpoints.
+// - La respuesta NUNCA incluye el enlace ni el código (ni siquiera en mockMode).
+const RESET_CODE_TTL_MS = 60 * 60 * 1000; // 1 hora (coincide con el texto del correo)
+const RESET_MAX_ATTEMPTS = 5;
+const RESET_MAX_ACTIVE_CODES = 3;
+const resetFailedAttempts = new Map(); // userId -> { count, firstAt }
+
+const hashResetToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+
+async function createPendingReset(userId, plainToken) {
+  // Limpieza: códigos vencidos y exceso de códigos activos por usuario
+  await prisma.pendingReset.deleteMany({ where: { userId, expire: { lt: new Date() } } });
+  const active = await prisma.pendingReset.findMany({ where: { userId }, orderBy: { expire: 'desc' }, select: { id: true } });
+  const surplus = active.slice(RESET_MAX_ACTIVE_CODES - 1).map(r => r.id);
+  if (surplus.length > 0) await prisma.pendingReset.deleteMany({ where: { id: { in: surplus } } });
+
+  await prisma.pendingReset.create({
+    data: {
+      userId,
+      token: hashResetToken(plainToken),
+      expire: new Date(Date.now() + RESET_CODE_TTL_MS)
+    }
+  });
+  resetFailedAttempts.delete(String(userId));
+}
+
+// El enlace solo puede apuntar a un frontend de la lista blanca (evita phishing con un `origin` arbitrario)
+function buildResetLink(requestedOrigin, username, plainToken) {
+  let appOrigin = process.env.FRONTEND_URL || 'https://g-ibro.onrender.com';
+  if (typeof requestedOrigin === 'string' && /^https?:\/\//.test(requestedOrigin)) {
+    const cleanOrigin = requestedOrigin.split('?')[0].replace(/\/+$/, '');
+    const isLocal = /localhost|127\.0\.0\.1/.test(cleanOrigin);
+    if (corsOriginChecker.allowed.has(cleanOrigin.toLowerCase()) && (!isLocal || process.env.NODE_ENV !== 'production')) {
+      appOrigin = cleanOrigin;
+    }
+  }
+  return `${appOrigin.replace(/\/+$/, '')}?resetUser=${encodeURIComponent(username)}&resetToken=${encodeURIComponent(plainToken)}`;
+}
+
+const GENERIC_RECOVERY_MESSAGE = 'Si el usuario existe y tiene un correo registrado, recibirá un enlace para restablecer la contraseña. (Verifique también la bandeja de Spam)';
+
 // POST /api/auth/recover: Iniciar flujo de recuperación de contraseña enviando correo
 app.post('/api/auth/recover', recoverLimiter, async (req, res) => {
-  const { user, origin } = req.body;
-  if (!user) {
+  const { user, origin } = req.body || {};
+  if (!user || typeof user !== 'string' || user.length > 100) {
     return res.status(400).json({ error: 'Usuario requerido' });
   }
 
   try {
     const dbUser = await prisma.user.findFirst({
-      where: { user: { equals: user, mode: 'insensitive' } }
+      where: { user: { equals: user.trim(), mode: 'insensitive' } }
     });
 
-    if (!dbUser) {
-      return res.status(404).json({ error: 'El usuario no existe en la base de datos.' });
+    // Respuesta genérica: no revela si el usuario existe o tiene correo (anti-enumeración)
+    if (!dbUser || !dbUser.correo) {
+      console.warn(`[RECOVER] Solicitud para usuario inexistente o sin correo: "${user}"`);
+      return res.json({ success: true, message: GENERIC_RECOVERY_MESSAGE });
     }
 
-    if (!dbUser.correo) {
-      return res.status(400).json({ error: 'El usuario existe, pero no tiene registrado un correo electrónico asociado.' });
-    }
-
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expireTime = Date.now() + 3600000; // 1 hora
-
-    // Guardar token en base de datos
-    await prisma.pendingReset.create({
-      data: {
-        userId: dbUser.id,
-        token: verificationCode,
-        expire: new Date(Date.now() + 3600000)
-      }
-    });
-
-    let appOrigin = 'https://g-ibro.onrender.com';
-    if (origin && origin.startsWith('http') && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
-      appOrigin = origin.split('?')[0];
-    }
-    const resetLink = `${appOrigin}?resetUser=${encodeURIComponent(dbUser.user)}&resetToken=${verificationCode}`;
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
+    await createPendingReset(dbUser.id, verificationCode);
+    const resetLink = buildResetLink(origin, dbUser.user, verificationCode);
 
     let mailRes;
     try {
-      mailRes = await sendRecoveryEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido}`, resetLink);
+      mailRes = await sendRecoveryEmail(dbUser.correo, `${dbUser.nombre} ${dbUser.apellido || ''}`.trim(), resetLink);
     } catch (mailError) {
-      console.warn('[SMTP ERROR] Failed to send recovery email.');
-      console.error(mailError);
+      console.error('[SMTP ERROR] Failed to send recovery email:', mailError?.message || mailError);
       return res.status(500).json({ error: 'No se pudo despachar el correo debido a un error del servicio de mensajería. Por favor intenta más tarde.' });
     }
 
-    if (mailRes.mockMode) {
-      // Incluso en mock mode devolvemos el resetLink para desarrollo y pruebas
-      return res.json({
-        success: true,
-        resetLink: resetLink,
-        message: 'Modo de prueba activo en el servidor. Revisa los logs de la consola del servidor.'
-      });
+    if (mailRes && mailRes.mockMode) {
+      // El enlace solo se imprime en los logs del servidor fuera de producción (ver emailService)
+      console.warn('[RECOVER] Servicio de correo en modo prueba: no se envió el correo de recuperación.');
     }
 
-    res.json({ success: true, message: 'Correo de recuperación enviado con éxito.' });
+    return res.json({ success: true, message: GENERIC_RECOVERY_MESSAGE });
   } catch (error) {
     console.error('Recovery request error:', error);
-    res.status(500).json({ error: 'Error al procesar la recuperación de contraseña: ' + error.message });
+    return res.status(500).json({ error: 'Error al procesar la recuperación de contraseña.' });
   }
 });
 
-// POST /api/auth/reset-password: Validar token y cambiar contraseña
+// POST /api/auth/reset-password: Validar código y cambiar contraseña
 app.post('/api/auth/reset-password', resetPasswordLimiter, async (req, res) => {
-  const { user, token, newPassword } = req.body;
-  if (!user || !token || !newPassword) {
+  const { user, token, newPassword } = req.body || {};
+  if (!user || !token || !newPassword || typeof user !== 'string' || typeof token !== 'string' || typeof newPassword !== 'string') {
     return res.status(400).json({ error: 'Todos los campos son requeridos' });
   }
+  if (newPassword.length < 8 || newPassword.length > 200) {
+    return res.status(400).json({ error: 'La nueva contraseña debe tener entre 8 y 200 caracteres.' });
+  }
+
+  const INVALID_MSG = 'El código de seguridad o usuario es incorrecto.';
 
   try {
+    const dbUser = await prisma.user.findFirst({
+      where: { user: { equals: user.trim(), mode: 'insensitive' } }
+    });
+    if (!dbUser) {
+      return res.status(400).json({ error: INVALID_MSG });
+    }
+
+    const key = String(dbUser.id);
+    const attempts = resetFailedAttempts.get(key);
+    if (attempts && Date.now() - attempts.firstAt > RESET_CODE_TTL_MS) {
+      resetFailedAttempts.delete(key);
+    } else if (attempts && attempts.count >= RESET_MAX_ATTEMPTS) {
+      await prisma.pendingReset.deleteMany({ where: { userId: dbUser.id } });
+      resetFailedAttempts.delete(key);
+      return res.status(429).json({ error: 'Demasiados intentos con códigos incorrectos. Solicite un nuevo código de recuperación.' });
+    }
+
     const pending = await prisma.pendingReset.findFirst({
-      where: {
-        user: { user: { equals: user, mode: 'insensitive' } },
-        token: token
-      }
+      where: { userId: dbUser.id, token: hashResetToken(token.trim()) }
     });
 
     if (!pending) {
-      return res.status(400).json({ error: 'El código de seguridad o usuario es incorrecto.' });
+      const current = resetFailedAttempts.get(key) || { count: 0, firstAt: Date.now() };
+      current.count += 1;
+      resetFailedAttempts.set(key, current);
+      if (current.count >= RESET_MAX_ATTEMPTS) {
+        await prisma.pendingReset.deleteMany({ where: { userId: dbUser.id } });
+        resetFailedAttempts.delete(key);
+        return res.status(429).json({ error: 'Demasiados intentos con códigos incorrectos. Solicite un nuevo código de recuperación.' });
+      }
+      return res.status(400).json({ error: INVALID_MSG });
     }
 
     if (new Date(pending.expire) < new Date()) {
-      await prisma.pendingReset.delete({ where: { id: pending.id } });
+      await prisma.pendingReset.delete({ where: { id: pending.id } }).catch(() => {});
       return res.status(400).json({ error: 'El código de seguridad ha expirado.' });
     }
 
-    // Buscar al usuario
-    const dbUser = await prisma.user.findFirst({
-      where: { user: { equals: user, mode: 'insensitive' } }
-    });
-
-    if (!dbUser) {
-      return res.status(404).json({ error: 'Usuario no encontrado.' });
-    }
-
-    // Actualizar contraseña encriptándola
+    // Actualizar contraseña, desbloquear la cuenta e invalidar sesiones previas
     const hashedPassword = bcrypt.hashSync(newPassword, 10);
     await prisma.user.update({
       where: { id: dbUser.id },
-      data: { pass: hashedPassword }
+      data: {
+        pass: hashedPassword,
+        isLocked: false,
+        failedLoginAttempts: 0,
+        refreshToken: null
+      }
     });
+
+    // Un solo uso: se eliminan todos los códigos pendientes del usuario
+    await prisma.pendingReset.deleteMany({ where: { userId: dbUser.id } });
+    resetFailedAttempts.delete(key);
 
     // Registrar en auditoría
     await prisma.auditoria.create({
       data: {
-        id: Date.now().toString() + Math.random().toString().slice(-4),
+        id: Date.now().toString() + crypto.randomInt(1000, 10000).toString(),
         userId: dbUser.id,
         fecha: new Date(),
         action: 'Modificar',
         modulo: 'Usuario',
         recordDetails: `Cambio de contraseña para usuario [${dbUser.user}] mediante enlace de correo`
       }
-    });
-
-    // Eliminar el token usado
-    await prisma.pendingReset.delete({ where: { id: pending.id } });
+    }).catch(err => console.error('[RESET] Error registrando auditoría:', err.message));
 
     res.json({ success: true, message: 'Contraseña restablecida con éxito.' });
   } catch (error) {
     console.error('Reset password error:', error);
-    res.status(500).json({ error: 'Error al restablecer la contraseña: ' + error.message });
+    res.status(500).json({ error: 'Error al restablecer la contraseña.' });
   }
 });
 
@@ -2594,7 +2663,7 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
 });
 
 // GET /api/location/users: Obtener la ubicación de todos los usuarios
-app.get('/api/location/users', optionalAuthenticateToken, async (req, res) => {
+app.get('/api/location/users', authenticateToken, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
       select: {
@@ -5005,6 +5074,26 @@ async function reconcileOnlineStatus() {
   }
 }
 
+// GET /api/health: Verificación de salud y estado de la base de datos
+app.get('/api/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({
+      status: 'ok',
+      database: 'connected',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (err) {
+    console.error('[HealthCheck] Fallo conexión a base de datos:', err.message);
+    res.status(503).json({
+      status: 'degraded',
+      database: 'disconnected',
+      error: 'Fallo al verificar conexión con la base de datos'
+    });
+  }
+});
+
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   verifySmtpConnection();
@@ -5012,3 +5101,27 @@ server.listen(PORT, () => {
   reconcileOnlineStatus();
   setInterval(reconcileOnlineStatus, 120000);
 });
+
+// Apagado ordenado (Graceful Shutdown) para SIGTERM y SIGINT
+const gracefulShutdown = async (signal) => {
+  console.log(`\n[Server] Recibida señal ${signal}. Cerrando servidor HTTP y conexiones...`);
+  server.close(async () => {
+    console.log('[Server] Servidor HTTP y Socket.io cerrados.');
+    try {
+      await prisma.$disconnect();
+      console.log('[Server] Conexión de Prisma desconectada exitosamente.');
+    } catch (e) {
+      console.error('[Server] Error al desconectar Prisma:', e.message);
+    }
+    process.exit(0);
+  });
+
+  // Timeout de seguridad en caso de conexiones colgadas
+  setTimeout(() => {
+    console.error('[Server] Forzando cierre del proceso tras 10 segundos.');
+    process.exit(1);
+  }, 10000).unref();
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

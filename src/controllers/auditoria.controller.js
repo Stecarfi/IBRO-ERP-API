@@ -1,5 +1,7 @@
 const auditoriaService = require('../services/auditoria.service');
 const { generateActivityReport } = require('../cron/backup');
+const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../config/jwtSecret');
 
 class AuditoriaController {
   /**
@@ -8,12 +10,12 @@ class AuditoriaController {
    */
   async postEvento(req, res) {
     try {
-      const userId = req.user?.id || req.body?.userId;
-      const userLogin = req.user?.user || req.body?.userLogin;
+      const userId = req.user?.id;
+      const userLogin = req.user?.user;
       const { action, modulo, recordDetails, metadata, sessionId, tabStatus, elapsedActiveSeconds, elapsedIdleSeconds } = req.body || {};
 
       if (!userId && !userLogin) {
-        return res.status(400).json({ error: 'Identificador de usuario requerido' });
+        return res.status(401).json({ error: 'Usuario no autenticado para registrar auditoría' });
       }
 
       const result = await auditoriaService.registrarEvento(req, {
@@ -57,12 +59,12 @@ class AuditoriaController {
    */
   async postHeartbeat(req, res) {
     try {
-      const userId = req.user?.id || req.body?.userId;
-      const userLogin = req.user?.user || req.body?.userLogin;
+      const userId = req.user?.id;
+      const userLogin = req.user?.user;
       const { sessionId, tabStatus, elapsedActiveSeconds, elapsedIdleSeconds, currentModule } = req.body || {};
 
       if (!userId && !userLogin) {
-        return res.status(400).json({ error: 'Identificador de usuario requerido' });
+        return res.status(401).json({ error: 'Usuario no autenticado para enviar heartbeat' });
       }
 
       const result = await auditoriaService.procesarHeartbeat(req, {
@@ -105,25 +107,36 @@ class AuditoriaController {
         try { bodyData = JSON.parse(bodyData); } catch (e) {}
       }
 
-      const userId = bodyData?.userId;
-      const userLogin = bodyData?.userLogin;
+      // Validar token: sendBeacon envía el token dentro de bodyData.token; fetch puede usar header
+      let authUser = req.user;
+      const rawToken = bodyData?.token || (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].split(' ')[1] : null);
+      if (!authUser && rawToken) {
+        try {
+          authUser = jwt.verify(rawToken, JWT_SECRET, { clockTolerance: 60 });
+        } catch (_) {}
+      }
+
+      if (!authUser) {
+        return res.status(401).json({ error: 'Token de autenticación requerido para registrar salida' });
+      }
+
+      const userId = authUser.id;
+      const userLogin = authUser.user;
       const sessionId = bodyData?.sessionId;
       const currentModule = bodyData?.currentModule;
       const motivo = bodyData?.motivo || 'Cierre de pestaña o navegador';
 
-      if (userId || userLogin) {
-        await auditoriaService.procesarBeaconExit(req, {
-          userId,
-          userLogin,
-          sessionId,
-          currentModule,
-          motivo
-        });
+      await auditoriaService.procesarBeaconExit(req, {
+        userId,
+        userLogin,
+        sessionId,
+        currentModule,
+        motivo
+      });
 
-        const io = req.app?.get('io');
-        if (io) {
-          io.emit('usuario_desconectado', { userId, userLogin, fecha: new Date() });
-        }
+      const io = req.app?.get('io');
+      if (io) {
+        io.emit('usuario_desconectado', { userId, userLogin, fecha: new Date() });
       }
 
       res.json({ success: true });

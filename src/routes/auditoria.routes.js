@@ -17,9 +17,9 @@ const optionalAuth = (req, res, next) => {
 // Solo usuarios con acceso al módulo de Auditoría (o administradores) pueden consultar evidencia.
 const auditoriaAccess = [authenticateToken, requireModuleAccess('auditoria')];
 
-// Rutas de telemetría y presencia en tiempo real
-router.post('/evento', optionalAuth, (req, res) => auditoriaController.postEvento(req, res));
-router.post('/heartbeat', optionalAuth, (req, res) => auditoriaController.postHeartbeat(req, res));
+// Rutas de telemetría y presencia en tiempo real (Autenticación obligatoria)
+router.post('/evento', authenticateToken, (req, res) => auditoriaController.postEvento(req, res));
+router.post('/heartbeat', authenticateToken, (req, res) => auditoriaController.postHeartbeat(req, res));
 
 // Endpoint beacon de salida / cierre inesperado (navigator.sendBeacon no permite cabeceras)
 router.post('/beacon-exit', (req, res) => auditoriaController.postBeaconExit(req, res));

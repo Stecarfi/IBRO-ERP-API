@@ -2,14 +2,16 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "Servicios Core y API REST para IBRO ERP",
-  "main": "index.js",
+  "main": "src/index.js",
   "private": true,
   "scripts": {
-    "start": "npx prisma generate && npx prisma db push && node src/index.js",
+    "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "seed": "node src/seed.js",
+    "build": "prisma generate",
     "migrate": "npx prisma generate && npx prisma db push",
-    "build": "prisma generate"
+    "migrate:deploy": "prisma migrate deploy",
+    "seed": "node src/seed.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "erp",

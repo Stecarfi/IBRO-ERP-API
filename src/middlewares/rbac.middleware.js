@@ -1,9 +1,10 @@
 const prisma = require('../prisma');
+const { roleHasModule, buildAccessContext } = require('../security/permissions');
 
 /**
- * RBAC de servidor (Fase 0 - contención).
+ * RBAC de servidor.
  * El frontend controla la visibilidad con el JSON `permissions` del rol; el backend
- * debe aplicar la MISMA regla para que no baste con saltarse la UI.
+ * aplica la MISMA regla (ver src/security/permissions.js) para que no baste con saltarse la UI.
  */
 
 const roleCache = new Map(); // roleId -> { role, ts }
@@ -24,23 +25,6 @@ async function loadRole(roleId) {
   return role;
 }
 
-function parsePermissions(raw) {
-  if (!raw) return {};
-  if (typeof raw === 'object') return raw;
-  try { return JSON.parse(raw); } catch { return {}; }
-}
-
-function roleHasModule(role, moduleName) {
-  if (!role) return false;
-  const perms = parsePermissions(role.permissions);
-  if (perms.isSuperAdmin === true || perms.fullAccess === true) return true;
-  if (Array.isArray(role.modules) && role.modules.includes(moduleName)) return true;
-  const p = perms[moduleName];
-  if (Array.isArray(p)) return p.length > 0;
-  if (p && typeof p === 'object') return Object.values(p).some(Boolean);
-  return p === true;
-}
-
 async function isAdminUser(reqUser) {
   if (!reqUser) return false;
   const roleId = String(reqUser.roleId || '');
@@ -56,13 +40,29 @@ async function userHasModule(reqUser, moduleName) {
   return roleHasModule(role, moduleName);
 }
 
+/**
+ * Contexto de acceso completo del usuario autenticado (rol + banderas operativas).
+ * Ver buildAccessContext en src/security/permissions.js.
+ */
+async function getAccessContext(reqUser) {
+  if (!reqUser) return buildAccessContext({ user: null, role: null, isAdmin: false });
+  let isAdmin = false;
+  let role = null;
+  try {
+    role = await loadRole(reqUser.roleId);
+    isAdmin = String(reqUser.roleId || '') === '1' || roleHasModule(role, 'admin');
+  } catch (e) {
+    isAdmin = false;
+  }
+  return buildAccessContext({ user: reqUser, role, isAdmin });
+}
+
 /** Middleware: exige que el usuario autenticado tenga acceso a alguno de los módulos. */
 function requireModuleAccess(...moduleNames) {
   return async (req, res, next) => {
     try {
-      for (const m of moduleNames) {
-        if (await userHasModule(req.user, m)) return next();
-      }
+      const ctx = await getAccessContext(req.user);
+      if (ctx.hasAny(moduleNames)) return next();
     } catch (e) {}
     return res.status(403).json({ error: 'Acceso denegado: su rol no tiene permiso para este recurso.', code: 'FORBIDDEN' });
   };
@@ -76,4 +76,4 @@ async function requireAdmin(req, res, next) {
   return res.status(403).json({ error: 'Acceso denegado: se requieren permisos de Administrador.', code: 'FORBIDDEN' });
 }
 
-module.exports = { isAdminUser, userHasModule, requireModuleAccess, requireAdmin, loadRole };
+module.exports = { isAdminUser, userHasModule, requireModuleAccess, requireAdmin, loadRole, getAccessContext };

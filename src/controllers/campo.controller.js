@@ -231,8 +231,9 @@ class CampoController {
 
   // Helper para devolver mensajes de error amigables sin volcar JSON técnico
   formatearError(err, mensajePorDefecto = 'Error al procesar la solicitud.') {
-    if (err?.errors && Array.isArray(err.errors)) {
-      const items = err.errors.map(e => {
+    const list = err?.issues || err?.errors;
+    if (list && Array.isArray(list)) {
+      const items = list.map(e => {
         const campo = e.path && e.path.length > 0 ? `El campo '${e.path.join('.')}'` : 'La solicitud';
         if (e.code === 'invalid_type' && e.received === 'undefined') {
           return `${campo} es requerido.`;
@@ -393,7 +394,7 @@ class CampoController {
       const breadcrumb = await trackingService.registrarPing(req.user.id, parsed, io);
       res.json({ success: true, breadcrumb });
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -404,7 +405,7 @@ class CampoController {
       const result = await trackingService.registrarBatch(req.user.id, parsed.puntos, io);
       res.json({ success: true, ...result });
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -442,7 +443,7 @@ class CampoController {
 
       res.status(201).json({ success: true, visita });
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -473,7 +474,7 @@ class CampoController {
 
       res.json(result);
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -499,7 +500,7 @@ class CampoController {
 
       res.json(result);
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -515,7 +516,7 @@ class CampoController {
 
       res.json({ success: true, prospecto });
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -592,7 +593,7 @@ class CampoController {
       const geocerca = await prisma.geocerca.create({ data: parsed });
       res.json({ success: true, geocerca });
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -600,7 +601,7 @@ class CampoController {
     try {
       const zonas = await prisma.zonaComercial.findMany({
         where: { activo: true },
-        include: { asignaciones: { include: { usuario: true } } }
+        include: { asignaciones: { include: { usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true, roleId: true } } } } }
       });
       res.json(zonas);
     } catch (err) {
@@ -614,7 +615,7 @@ class CampoController {
       const zona = await prisma.zonaComercial.create({ data: parsed });
       res.json({ success: true, zona });
     } catch (err) {
-      res.status(400).json({ error: err.errors ? err.errors[0]?.message : err.message });
+      res.status(400).json({ error: this.formatearError(err) });
     }
   }
 
@@ -2728,7 +2729,17 @@ class CampoController {
 
   async actualizarClienteExterno(req, res) {
     try {
-      const data = await operacionExternaService.actualizarClienteExterno(req.params.id, req.body);
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
+      if (!cliente) {
+        return res.status(404).json({ error: 'Cliente externo no encontrado.' });
+      }
+      if (!esDel && cliente.comercialId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para modificar este cliente externo.' });
+      }
+
+      const data = await operacionExternaService.actualizarClienteExterno(id, req.body);
       
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) {
@@ -2751,9 +2762,19 @@ class CampoController {
 
   async cambiarEtapaEmbudo(req, res) {
     try {
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
+      if (!cliente) {
+        return res.status(404).json({ error: 'Cliente externo no encontrado.' });
+      }
+      if (!esDel && cliente.comercialId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para modificar este cliente externo.' });
+      }
+
       const etapa = req.body.nuevaEtapa || req.body.etapaEmbudo || req.body.etapa;
       const nota = req.body.nota || req.body.observaciones || req.body.motivo || '';
-      const data = await operacionExternaService.cambiarEtapaEmbudo(req.params.id, req.user.id, etapa, nota);
+      const data = await operacionExternaService.cambiarEtapaEmbudo(id, req.user.id, etapa, nota);
       
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) {
@@ -2861,7 +2882,15 @@ class CampoController {
 
   async actualizarCotizacionExterna(req, res) {
     try {
-      const data = await operacionExternaService.actualizarCotizacionExterna(req.params.id, req.user.id, req.body);
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const coti = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
+      if (!coti) return res.status(404).json({ error: 'Cotización externa no encontrada.' });
+      if (!esDel && coti.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para modificar esta cotización externa.' });
+      }
+
+      const data = await operacionExternaService.actualizarCotizacionExterna(id, req.user.id, req.body);
       await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_COTIZACION_EXTERNA', { id: data.id, codigo: data.codigo, total: data.total }, null, req);
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_UPDATE', timestamp: Date.now() });
@@ -2873,8 +2902,16 @@ class CampoController {
 
   async eliminarCotizacionExterna(req, res) {
     try {
-      await operacionExternaService.eliminarCotizacionExterna(req.params.id);
-      await this.registrarAuditoria(req.user.id, 'ELIMINAR_COTIZACION_EXTERNA', { id: req.params.id }, null, req);
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const coti = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
+      if (!coti) return res.status(404).json({ error: 'Cotización externa no encontrada.' });
+      if (!esDel && coti.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para eliminar esta cotización externa.' });
+      }
+
+      await operacionExternaService.eliminarCotizacionExterna(id);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_COTIZACION_EXTERNA', { id }, null, req);
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_DELETE', timestamp: Date.now() });
       res.json({ success: true });
@@ -2886,7 +2923,10 @@ class CampoController {
   async eliminarTodasCotizacionesExternas(req, res) {
     try {
       const esDel = this.esDelegado(req.user);
-      const targetUserId = esDel ? (req.query.usuarioId || null) : req.user.id;
+      if (!esDel) {
+        return res.status(403).json({ error: 'Solo la gerencia o delegados pueden realizar eliminación masiva de cotizaciones.' });
+      }
+      const targetUserId = req.query.usuarioId || null;
       const result = await operacionExternaService.eliminarTodasCotizacionesExternas(targetUserId);
       await this.registrarAuditoria(req.user.id, 'ELIMINAR_TODAS_COTIZACIONES_EXTERNAS', { count: result.count }, null, req);
       const io = req.app?.get ? req.app.get('io') : null;
@@ -2950,7 +2990,15 @@ class CampoController {
 
   async actualizarVentaExterna(req, res) {
     try {
-      const data = await operacionExternaService.actualizarVentaExterna(req.params.id, req.user.id, req.body);
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const venta = await prisma.ventaExternaCampo.findUnique({ where: { id } });
+      if (!venta) return res.status(404).json({ error: 'Venta externa no encontrada.' });
+      if (!esDel && venta.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para modificar esta venta externa.' });
+      }
+
+      const data = await operacionExternaService.actualizarVentaExterna(id, req.user.id, req.body);
       await this.registrarAuditoria(req.user.id, 'ACTUALIZAR_VENTA_EXTERNA', { id: data.id, codigo: data.codigo, valor: data.valorVendido }, null, req);
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) io.emit('db_update', { type: 'CAMPO_VENTA_EXTERNA_UPDATE', timestamp: Date.now() });
@@ -2962,8 +3010,16 @@ class CampoController {
 
   async eliminarVentaExterna(req, res) {
     try {
-      await operacionExternaService.eliminarVentaExterna(req.params.id);
-      await this.registrarAuditoria(req.user.id, 'ELIMINAR_VENTA_EXTERNA', { id: req.params.id }, null, req);
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const venta = await prisma.ventaExternaCampo.findUnique({ where: { id } });
+      if (!venta) return res.status(404).json({ error: 'Venta externa no encontrada.' });
+      if (!esDel && venta.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para eliminar esta venta externa.' });
+      }
+
+      await operacionExternaService.eliminarVentaExterna(id);
+      await this.registrarAuditoria(req.user.id, 'ELIMINAR_VENTA_EXTERNA', { id }, null, req);
       const io = req.app?.get ? req.app.get('io') : null;
       if (io) io.emit('db_update', { type: 'CAMPO_VENTA_EXTERNA_DELETE', timestamp: Date.now() });
       res.json({ success: true });
@@ -2975,7 +3031,10 @@ class CampoController {
   async eliminarTodasVentasExternas(req, res) {
     try {
       const esDel = this.esDelegado(req.user);
-      const targetUserId = esDel ? (req.query.usuarioId || null) : req.user.id;
+      if (!esDel) {
+        return res.status(403).json({ error: 'Solo la gerencia o delegados pueden realizar eliminación masiva de ventas externas.' });
+      }
+      const targetUserId = req.query.usuarioId || null;
       const result = await operacionExternaService.eliminarTodasVentasExternas(targetUserId);
       await this.registrarAuditoria(req.user.id, 'ELIMINAR_TODAS_VENTAS_EXTERNAS', { count: result.count }, null, req);
       const io = req.app?.get ? req.app.get('io') : null;
