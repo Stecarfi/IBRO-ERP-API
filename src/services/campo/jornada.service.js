@@ -1,14 +1,26 @@
 const prisma = require('../../prisma');
 const geofenceService = require('./geofence.service');
 
+const getColombiaDayBounds = (date = new Date()) => {
+  const d = date instanceof Date ? date : new Date(date);
+  const colombiaStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+  const startOfDay = new Date(`${colombiaStr}T00:00:00-05:00`);
+  const endOfDay = new Date(`${colombiaStr}T23:59:59.999-05:00`);
+  return { startOfDay, endOfDay, colombiaStr };
+};
+
 class JornadaService {
   /**
    * Apertura un nuevo turno de trabajo de campo
    */
   async iniciarJornada(usuarioId, data) {
     const ahora = new Date();
-    const startOfDay = new Date(ahora);
-    startOfDay.setHours(0, 0, 0, 0);
+    const { startOfDay } = getColombiaDayBounds(ahora);
 
     // Cerrar automáticamente jornadas huérfanas de días anteriores de este usuario
     try {
@@ -403,14 +415,13 @@ class JornadaService {
    */
   async getJornadaActiva(usuarioId) {
     const ahora = new Date();
-    const startOfDay = new Date(ahora);
-    startOfDay.setHours(0, 0, 0, 0);
+    const { startOfDay } = getColombiaDayBounds(ahora);
 
     const jornada = await prisma.jornadaLaboral.findFirst({
       where: {
         usuarioId,
         horaInicio: { gte: startOfDay },
-        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] }
+        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
       },
       include: {
         pausas: { where: { horaFin: null } },
@@ -470,13 +481,12 @@ class JornadaService {
    * Tarea nocturna para cerrar jornadas abiertas huérfanas
    */
   async cerrarJornadasHuerfanas() {
-    const hoy = new Date();
-    const limite = new Date(hoy.setHours(0, 0, 0, 0));
+    const { startOfDay: limite } = getColombiaDayBounds(new Date());
 
     const abiertas = await prisma.jornadaLaboral.findMany({
       where: {
         horaInicio: { lt: limite },
-        estado: { in: ['Iniciada', 'En Pausa'] }
+        estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
       }
     });
 

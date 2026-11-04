@@ -3355,18 +3355,43 @@ class CampoController {
         estadoVisita = 'Realizada';
       }
 
-      // Buscar jornada activa del usuario hoy si no se proporcionó jornadaId
+      // Buscar jornada activa del usuario hoy si no se proporcionó jornadaId (en zona horaria oficial Colombia)
       let resolvedJornadaId = jornadaId || null;
+      const { startOfDay: sDayCol, endOfDay: eDayCol } = getColombiaDayBounds(ahora);
+      const esCheckInDeHoy = getFechaColombia(ahora) === getFechaColombia(new Date());
+
       if (!resolvedJornadaId) {
-        const startOfDay = new Date(ahora);
-        startOfDay.setHours(0, 0, 0, 0);
-        const jornadaHoy = await prisma.jornadaLaboral.findFirst({
+        let jornadaHoy = await prisma.jornadaLaboral.findFirst({
           where: {
             usuarioId: targetUserId,
-            horaInicio: { gte: startOfDay }
+            horaInicio: { gte: sDayCol, lte: eDayCol }
           },
           orderBy: { horaInicio: 'desc' }
         });
+
+        // Si el asesor está registrando una llegada en vivo hoy y no había iniciado turno, abrir o reactivar automáticamente su turno del día
+        if (!jornadaHoy && esCheckInDeHoy && !checkOutDate) {
+          jornadaHoy = await prisma.jornadaLaboral.create({
+            data: {
+              usuarioId: targetUserId,
+              latInicio: numLat || 0,
+              lngInicio: numLng || 0,
+              direccionInicio: direccion ? String(direccion).trim() : String(lugar).trim(),
+              dispositivo: 'Web / Móvil (Auto-Inicio en Parada)',
+              estado: 'En Ruta',
+              horaInicio: ahora,
+              fecha: ahora,
+              retrasoMin: 0,
+              cumplimientoHorarioPct: 100
+            }
+          }).catch(() => null);
+        } else if (jornadaHoy && esCheckInDeHoy && !checkOutDate && !['Iniciada', 'En Ruta', 'Activa'].includes(jornadaHoy.estado)) {
+          jornadaHoy = await prisma.jornadaLaboral.update({
+            where: { id: jornadaHoy.id },
+            data: { estado: 'En Ruta', horaFin: null }
+          }).catch(() => jornadaHoy);
+        }
+
         if (jornadaHoy) resolvedJornadaId = jornadaHoy.id;
       }
 
@@ -3410,21 +3435,17 @@ class CampoController {
       if (req.body.visitaProgramadaId) {
         paradaProgramada = await prisma.visitaCampo.findUnique({ where: { id: req.body.visitaProgramadaId } }).catch(() => null);
       } else {
-        const sDay = new Date(ahora);
-        sDay.setHours(0, 0, 0, 0);
-        const eDay = new Date(ahora);
-        eDay.setHours(23, 59, 59, 999);
         paradaProgramada = await prisma.visitaCampo.findFirst({
           where: {
             usuarioId: targetUserId,
             estado: 'Programada',
             checkInHora: null,
-            fechaProgramada: { gte: sDay, lte: eDay },
             OR: [
               ...(clienteExternoId ? [{ clienteExternoId }] : []),
               { resultadoResumen: { equals: String(lugar).trim(), mode: 'insensitive' } }
             ]
-          }
+          },
+          orderBy: { createdAt: 'desc' }
         }).catch(() => null);
       }
 
@@ -4365,12 +4386,14 @@ class CampoController {
         presenciaMap.set(String(p.id), p);
       });
 
-      const where = {};
+      const where = {
+        checkInHora: { not: null }
+      };
       if (targetUserId) {
         where.usuarioId = targetUserId;
       }
 
-      // Periodo o rango inteligente
+      // Periodo o rango inteligente (estrictamente sobre checkInHora real en zona horaria Colombia)
       let modoPeriodo = (periodo || '').toLowerCase();
       let fechaStr = fecha || 'TODOS';
 
@@ -4383,54 +4406,33 @@ class CampoController {
       if (modoPeriodo === 'hoy') {
         const startOfDay = new Date(`${hoyColombia}T00:00:00-05:00`);
         const endOfDay = new Date(`${hoyColombia}T23:59:59.999-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
-          { createdAt: { gte: startOfDay, lte: endOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay, lte: endOfDay };
         fechaStr = hoyColombia;
       } else if (modoPeriodo === 'semana') {
         const sevenDaysAgo = new Date(ahora.getTime() - 7 * 24 * 3600 * 1000);
         const startStr = getFechaColombia(sevenDaysAgo);
         const startOfDay = new Date(`${startStr}T00:00:00-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay } },
-          { fechaProgramada: { gte: startOfDay } },
-          { createdAt: { gte: startOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay };
         fechaStr = 'SEMANA_ACTUAL';
       } else if (modoPeriodo === 'mes') {
         const thirtyDaysAgo = new Date(ahora.getTime() - 30 * 24 * 3600 * 1000);
         const startStr = getFechaColombia(thirtyDaysAgo);
         const startOfDay = new Date(`${startStr}T00:00:00-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay } },
-          { fechaProgramada: { gte: startOfDay } },
-          { createdAt: { gte: startOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay };
         fechaStr = 'MES_ACTUAL';
       } else if (modoPeriodo === 'rango' && desde && hasta) {
         const startOfDay = new Date(`${desde}T00:00:00-05:00`);
         const endOfDay = new Date(`${hasta}T23:59:59.999-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
-          { createdAt: { gte: startOfDay, lte: endOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay, lte: endOfDay };
         fechaStr = `${desde} a ${hasta}`;
       } else if (modoPeriodo === 'dia' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
         const startOfDay = new Date(`${fecha}T00:00:00-05:00`);
         const endOfDay = new Date(`${fecha}T23:59:59.999-05:00`);
-        where.OR = [
-          { checkInHora: { gte: startOfDay, lte: endOfDay } },
-          { fechaProgramada: { gte: startOfDay, lte: endOfDay } },
-          { createdAt: { gte: startOfDay, lte: endOfDay } }
-        ];
+        where.checkInHora = { gte: startOfDay, lte: endOfDay };
         fechaStr = fecha;
       } else {
         modoPeriodo = 'todos';
         fechaStr = 'TODOS';
-        // Sin restricción: devuelve el 100% de los registros almacenados en la base de datos
       }
 
       // 1. Obtener la lista estricta de Operadores en Campo (nunca Delegados de Gerencia ni Administradores)
@@ -4459,7 +4461,7 @@ class CampoController {
         where.usuarioId = targetUserId;
       }
 
-      // 2. Obtener todas las visitas en el filtro
+      // 2. Obtener todas las visitas REALES ejecutadas (con checkInHora real) en el filtro
       const items = await prisma.visitaCampo.findMany({
         where,
         include: {
@@ -4482,13 +4484,20 @@ class CampoController {
         advisorColorMap[u.id] = i % 8;
       });
 
-      // 4. Obtener jornadas de campo activas o recientes de hoy y últimos pings GPS
+      // 4. Obtener jornadas de hoy, últimas jornadas históricas, pings GPS y rutas asignadas
       const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
-      const [jornadas, ultimosPings] = await Promise.all([
+      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw, paradasRutaRaw] = await Promise.all([
         prisma.jornadaLaboral.findMany({
           where: {
             usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
             horaInicio: { gte: startOfToday, lte: endOfToday }
+          },
+          orderBy: { horaInicio: 'desc' },
+          take: 50
+        }),
+        prisma.jornadaLaboral.findMany({
+          where: {
+            usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds }
           },
           orderBy: { horaInicio: 'desc' },
           take: 50
@@ -4498,13 +4507,53 @@ class CampoController {
             usuarioId: { in: usuariosCampoIds }
           },
           orderBy: { timestamp: 'desc' },
-          take: 100
-        })
+          take: 150
+        }),
+        prisma.rastreoUbicacion.findMany({
+          where: {
+            usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
+            timestamp: { gte: startOfToday, lte: endOfToday }
+          },
+          orderBy: { timestamp: 'asc' },
+          take: 500
+        }),
+        prisma.actividadCampo.findMany({
+          where: {
+            ...(targetUserId ? { usuarioId: targetUserId } : { usuarioId: { in: usuariosCampoIds } }),
+            OR: [
+              { codigo: { startsWith: 'RUT-' } },
+              { titulo: { contains: 'Ruta', mode: 'insensitive' } }
+            ]
+          },
+          include: {
+            usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true } },
+            asignadoPor: { select: { id: true, nombre: true, apellido: true } }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 50
+        }).catch(() => []),
+        prisma.visitaCampo.findMany({
+          where: {
+            ...(targetUserId ? { usuarioId: targetUserId } : { usuarioId: { in: usuariosCampoIds } }),
+            OR: [
+              { tipoVisita: 'Ruta Asignada' },
+              { observaciones: { contains: '[Ruta RUT-' } }
+            ]
+          },
+          orderBy: { createdAt: 'asc' }
+        }).catch(() => [])
       ]);
+
       const jornadasPorUsuario = new Map();
       jornadas.forEach(j => {
         if (!jornadasPorUsuario.has(j.usuarioId)) {
           jornadasPorUsuario.set(j.usuarioId, j);
+        }
+      });
+      const ultimaJornadaPorUsuario = new Map();
+      ultimasJornadasHist.forEach(j => {
+        if (!ultimaJornadaPorUsuario.has(j.usuarioId)) {
+          ultimaJornadaPorUsuario.set(j.usuarioId, j);
         }
       });
       const pingPorUsuario = new Map();
@@ -4513,8 +4562,82 @@ class CampoController {
           pingPorUsuario.set(p.usuarioId, p);
         }
       });
+      const pingsHoyPorUsuario = new Map();
+      pingsHoy.forEach(p => {
+        if (!pingsHoyPorUsuario.has(p.usuarioId)) {
+          pingsHoyPorUsuario.set(p.usuarioId, []);
+        }
+        pingsHoyPorUsuario.get(p.usuarioId).push(p);
+      });
 
-      // 5. Procesamiento y Detección de Anomalías
+      // Construir Rutas Asignadas con estado real de cada parada
+      const rutasAsignadas = rutasActividadRaw.map(r => {
+        const paradasDeEstaRuta = paradasRutaRaw.filter(p =>
+          p.usuarioId === r.usuarioId &&
+          r.codigo &&
+          (p.observaciones || '').includes(`[Ruta ${r.codigo}]`)
+        );
+        const paradasFormateadas = paradasDeEstaRuta.map((p, idx) => {
+          const tieneCheckIn = Boolean(p.checkInHora);
+          const tieneCheckOut = Boolean(p.checkOutHora);
+          const estadoParada = tieneCheckOut ? 'Realizada' : (tieneCheckIn ? 'En Sitio' : 'Pendiente');
+          let durMin = p.duracionMin || 0;
+          if (tieneCheckIn && !tieneCheckOut) {
+            durMin = Math.min(240, Math.max(1, Math.round((ahora - new Date(p.checkInHora)) / 60000)));
+          }
+          return {
+            id: p.id,
+            numero: idx + 1,
+            codigo: p.codigo,
+            lugar: p.resultadoResumen || 'Parada de Ruta',
+            direccion: p.observaciones || '',
+            estado: estadoParada,
+            checkInHora: p.checkInHora,
+            checkOutHora: p.checkOutHora,
+            horaLlegada: p.checkInHora ? formatHoraColombia(p.checkInHora) : null,
+            horaSalida: p.checkOutHora ? formatHoraColombia(p.checkOutHora) : (p.checkInHora ? 'En Sitio' : null),
+            fechaReal: p.checkInHora ? getFechaColombia(p.checkInHora) : null,
+            duracionMin: durMin,
+            duracionTexto: tieneCheckIn ? (durMin >= 60 ? `${Math.floor(durMin / 60)}h ${durMin % 60}m` : `${durMin} min`) : 'Pendiente',
+            lat: p.checkInLat || null,
+            lng: p.checkInLng || null
+          };
+        });
+        const completadasCount = paradasFormateadas.filter(p => p.estado === 'Realizada').length;
+        const enSitioCount = paradasFormateadas.filter(p => p.estado === 'En Sitio').length;
+        const totalP = paradasFormateadas.length;
+        const progresoPct = totalP > 0 ? Math.round((completadasCount / totalP) * 100) : (r.estado === 'Completada' ? 100 : 0);
+        const estadoRutaReal = totalP > 0
+          ? (completadasCount === totalP ? 'Completada' : ((completadasCount > 0 || enSitioCount > 0) ? 'En Curso' : 'Pendiente'))
+          : (r.estado || 'Pendiente');
+
+        const nombreAsesorRuta = `${r.usuario?.nombre || ''} ${r.usuario?.apellido || ''}`.trim() || r.usuario?.user || 'Asesor';
+        const fechaProgStr = r.fechaProgramada ? getFechaColombia(r.fechaProgramada) : getFechaColombia(r.createdAt);
+        return {
+          id: r.id,
+          codigo: r.codigo,
+          titulo: r.titulo,
+          objetivo: r.descripcion || r.titulo || 'Ruta comercial asignada',
+          descripcion: r.descripcion || '',
+          usuarioId: r.usuarioId,
+          asesorNombre: nombreAsesorRuta,
+          colorIndex: advisorColorMap[r.usuarioId] !== undefined ? advisorColorMap[r.usuarioId] : 0,
+          fecha: fechaProgStr,
+          fechaProgramada: fechaProgStr,
+          fechaCreacion: getFechaColombia(r.createdAt),
+          horaCreacion: formatHoraColombia(r.createdAt),
+          estado: estadoRutaReal,
+          prioridad: r.prioridad || 'Alta',
+          totalParadas: totalP,
+          paradasCompletadas: completadasCount,
+          paradasEnSitio: enSitioCount,
+          paradasPendientes: Math.max(0, totalP - completadasCount - enSitioCount),
+          progresoPct,
+          paradas: paradasFormateadas
+        };
+      });
+
+      // 5. Procesamiento de Movimientos Reales y Detección de Anomalías
       const paradasPorUsuarioYFecha = {};
       const ultimoCheckOutPorUsuario = {};
       const clientesUnicosSet = new Set();
@@ -4524,20 +4647,35 @@ class CampoController {
 
       const movimientos = items.map((item, index) => {
         const uId = item.usuarioId;
-        const rawDate = item.checkInHora || item.fechaProgramada || item.createdAt;
-        const fechaCol = rawDate ? getFechaColombia(new Date(rawDate)) : hoyColombia;
+        const checkInDate = new Date(item.checkInHora);
+        const fechaCol = getFechaColombia(checkInDate);
+
+        // Normalizar checkOutHora si por algún cierre automático anterior quedó con timestamp menor a checkInHora
+        let checkOutEfectivo = item.checkOutHora ? new Date(item.checkOutHora) : null;
+        let duracionMin = Math.min(480, Math.max(0, item.duracionMin || 0));
+        if (checkOutEfectivo && checkOutEfectivo < checkInDate) {
+          const fallbackMin = duracionMin > 1 ? duracionMin : 15;
+          checkOutEfectivo = new Date(checkInDate.getTime() + fallbackMin * 60000);
+          duracionMin = fallbackMin;
+        } else if (checkOutEfectivo && duracionMin <= 0) {
+          duracionMin = Math.min(480, Math.max(1, Math.round((checkOutEfectivo - checkInDate) / 60000)));
+        } else if (!checkOutEfectivo) {
+          // Si es de un día anterior y quedó sin checkOut, tratar como cerrada al final de esa visita (~20 min) para no mostrar falso "En Sitio" eterno
+          if (fechaCol !== hoyColombia) {
+            const fallbackMin = duracionMin > 0 ? duracionMin : 20;
+            checkOutEfectivo = new Date(checkInDate.getTime() + fallbackMin * 60000);
+            duracionMin = fallbackMin;
+          } else {
+            const rawOpenMin = Math.max(1, Math.round((ahora - checkInDate) / 60000));
+            duracionMin = Math.min(240, rawOpenMin);
+          }
+        }
+        tiempoEfectivoTotalMin += duracionMin;
 
         const keyGrupo = `${uId}_${fechaCol}`;
         if (!paradasPorUsuarioYFecha[keyGrupo]) paradasPorUsuarioYFecha[keyGrupo] = 0;
         paradasPorUsuarioYFecha[keyGrupo] += 1;
         const paradaNum = paradasPorUsuarioYFecha[keyGrupo];
-
-        let duracionMin = Math.min(480, Math.max(0, item.duracionMin || 0));
-        if (item.checkInHora && !item.checkOutHora) {
-          const rawOpenMin = Math.max(1, Math.round((ahora - new Date(item.checkInHora)) / 60000));
-          duracionMin = Math.min(240, rawOpenMin);
-        }
-        tiempoEfectivoTotalMin += duracionMin;
 
         const lugarNombre = item.resultadoResumen || item.clienteExterno?.nombre || item.cliente?.nom || item.prospecto?.nombreComercial || 'Punto de Ruta';
         if (lugarNombre) clientesUnicosSet.add(lugarNombre.trim().toLowerCase());
@@ -4553,7 +4691,7 @@ class CampoController {
         // --- VERIFICACIÓN DE PARADAS ABIERTAS SIN SALIDA E INTERVALOS DE TRÁNSITO ---
         const anomaliasParada = [];
 
-        if (item.checkInHora && !item.checkOutHora && duracionMin >= 180) {
+        if (!checkOutEfectivo && fechaCol === hoyColombia && duracionMin >= 180) {
           anomaliasParada.push({
             tipo: 'CHECKIN_SIN_SALIDA',
             label: 'Check-In Abierto sin Salida',
@@ -4563,17 +4701,16 @@ class CampoController {
         }
 
         let tiempoTransitoAntesMin = 0;
-        if (item.checkInHora && ultimoCheckOutPorUsuario[keyGrupo]) {
-          const minutosDesdeUltimaSalida = Math.round((new Date(item.checkInHora) - new Date(ultimoCheckOutPorUsuario[keyGrupo])) / 60000);
+        if (ultimoCheckOutPorUsuario[keyGrupo]) {
+          const minutosDesdeUltimaSalida = Math.round((checkInDate - new Date(ultimoCheckOutPorUsuario[keyGrupo])) / 60000);
           if (minutosDesdeUltimaSalida > 0 && minutosDesdeUltimaSalida <= 240) {
             tiempoTransitoAntesMin = minutosDesdeUltimaSalida;
             tiempoTransitoEstimadoMin += minutosDesdeUltimaSalida;
           }
         }
 
-        // Actualizar último checkout para la siguiente comparación
-        if (item.checkOutHora) {
-          ultimoCheckOutPorUsuario[keyGrupo] = item.checkOutHora;
+        if (checkOutEfectivo) {
+          ultimoCheckOutPorUsuario[keyGrupo] = checkOutEfectivo;
         }
 
         const esSospechosa = anomaliasParada.length > 0;
@@ -4587,18 +4724,19 @@ class CampoController {
             usuarioId: uId,
             lugar: lugarNombre,
             fecha: fechaCol,
-            hora: item.checkInHora ? formatHoraColombia(item.checkInHora) : '--:--',
+            hora: formatHoraColombia(checkInDate),
             anomalias: anomaliasParada
           });
         }
 
         const colorIdx = advisorColorMap[uId] !== undefined ? advisorColorMap[uId] : 0;
+        const estadoReal = checkOutEfectivo ? 'Realizada' : 'En Curso';
 
         return {
           id: item.id,
           codigo: item.codigo || `MOV-${index + 1}`,
           fecha: fechaCol,
-          fechaIso: rawDate,
+          fechaIso: checkInDate.toISOString(),
           paradaNumero: paradaNum,
           numeroParada: paradaNum,
           usuarioId: item.usuarioId,
@@ -4612,10 +4750,14 @@ class CampoController {
           direccion: direccionLugar,
           motivo: item.tipoVisita || 'Visita Comercial',
           contacto: item.contactoAtendio || item.clienteExterno?.contacto || '',
-          checkInHora: item.checkInHora,
+          checkInHora: checkInDate.toISOString(),
+          horaLlegada: formatHoraColombia(checkInDate),
+          horaLlegadaColombia: formatHoraColombia(checkInDate),
           checkInLat: item.checkInLat,
           checkInLng: item.checkInLng,
-          checkOutHora: item.checkOutHora,
+          checkOutHora: checkOutEfectivo ? checkOutEfectivo.toISOString() : null,
+          horaSalida: checkOutEfectivo ? formatHoraColombia(checkOutEfectivo) : null,
+          horaSalidaColombia: checkOutEfectivo ? formatHoraColombia(checkOutEfectivo) : null,
           checkOutLat: item.checkOutLat,
           checkOutLng: item.checkOutLng,
           duracionMin,
@@ -4623,10 +4765,10 @@ class CampoController {
           tiempoTransitoAntesMin,
           tiempoTransitoAntesTexto: tiempoTransitoAntesMin > 0 ? `${tiempoTransitoAntesMin} min traslado` : null,
           firmaCliente: item.firmaCliente || null,
-          estado: item.checkOutHora ? 'Realizada' : (item.checkInHora ? 'En Curso' : (item.estado || 'Pendiente')),
+          estado: estadoReal,
           actividadesRealizadas: item.actividadesRealizadas || '',
           observaciones: item.observaciones || '',
-          resultado: item.resultadoVisita || (item.checkOutHora ? 'Completada' : 'En Curso'),
+          resultado: item.resultadoVisita || (checkOutEfectivo ? 'Completada' : 'En Curso'),
           evidencias: Array.isArray(item.evidencias) ? item.evidencias : [],
           anomalias: anomaliasParada,
           esSospechosa,
@@ -4638,61 +4780,65 @@ class CampoController {
         };
       });
 
-      // Ordenar movimientos en orden descendente para la visualización cronológica ejecutiva
+      // Ordenar movimientos en orden descendente (más reciente primero) para la visualización cronológica ejecutiva
       const movimientosDesc = [...movimientos].reverse();
 
-      // 6. Directorio Operativo de Asesores con Ficha Ejecutiva
+      // 6. Directorio Operativo de Asesores con Ficha Ejecutiva en Tiempo Real
       const asesoresDetalle = usuariosCampo.map(u => {
         const uMovs = movimientos.filter(m => m.usuarioId === u.id);
+        const uMovsHoy = uMovs.filter(m => m.fecha === hoyColombia);
         const j = jornadasPorUsuario.get(u.id);
+        const ultJ = ultimaJornadaPorUsuario.get(u.id);
         const pres = presenciaMap.get(String(u.id));
         const isOnlineReal = Boolean(pres?.isOnline || (pres?.estadoPresencia === 'EN_LINEA'));
-        const paradaActiva = uMovs.find(m => (m.estado === 'En Curso' || (m.checkInHora && !m.checkOutHora)) && m.fecha === hoyColombia);
+        const paradaActiva = uMovsHoy.find(m => m.estado === 'En Curso' || (m.checkInHora && !m.checkOutHora));
 
-        let estadoOperativo = 'Sin actividad';
+        const tieneJornadaActivaHoy = Boolean(j && ['Iniciada', 'En Ruta', 'Activa', 'En Pausa'].includes(j.estado) && !j.horaFin);
+        const enTurnoActivo = tieneJornadaActivaHoy || Boolean(paradaActiva);
+
+        let estadoOperativo = 'Fuera de Turno';
         let estadoColor = 'slate';
 
         if (paradaActiva) {
           estadoOperativo = 'Visitando Cliente';
           estadoColor = 'amber';
-        } else if (j && ['Iniciada', 'En Ruta', 'Activa'].includes(j.estado)) {
+        } else if (j && ['Iniciada', 'En Ruta', 'Activa'].includes(j.estado) && !j.horaFin) {
           estadoOperativo = 'En ruta';
           estadoColor = 'emerald';
-        } else if (j && j.estado === 'En Pausa') {
+        } else if (j && j.estado === 'En Pausa' && !j.horaFin) {
           estadoOperativo = 'En pausa';
           estadoColor = 'orange';
-        } else if (j && j.estado === 'Finalizada') {
+        } else if (j && (j.estado === 'Finalizada' || j.horaFin)) {
           estadoOperativo = 'Finalizada';
           estadoColor = 'slate';
         } else if (isOnlineReal) {
           estadoOperativo = 'Disponible';
           estadoColor = 'blue';
-        } else if (uMovs.length > 0) {
-          estadoOperativo = 'Finalizada';
-          estadoColor = 'slate';
         }
 
         const tiempoEnCampoMin = uMovs.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
+        const tiempoHoyMin = uMovsHoy.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
         const completadas = uMovs.filter(m => m.estado === 'Realizada').length;
         const efectividadPct = uMovs.length > 0 ? Math.round((completadas / uMovs.length) * 100) : 0;
         const anomaliasAsesor = anomaliasGlobales.filter(a => a.usuarioId === u.id);
 
         const ultimaParada = uMovs.length > 0 ? uMovs[uMovs.length - 1] : null;
         const pingGps = pingPorUsuario.get(u.id);
+        const pingsDeHoy = pingsHoyPorUsuario.get(u.id) || [];
 
-        // Resolver coordenadas en tiempo real del operador (parada activa > último ping / ubicación en vivo del usuario > inicio de turno > última parada)
+        // Resolver coordenadas en tiempo real del operador (parada activa > último ping reciente > ubicación del usuario > inicio de turno > última parada real)
         let latReal = null;
         let lngReal = null;
         if (paradaActiva?.checkInLat && paradaActiva?.checkInLng) {
           latReal = Number(paradaActiva.checkInLat);
           lngReal = Number(paradaActiva.checkInLng);
-        } else if (u.lat != null && u.lng != null) {
-          latReal = Number(u.lat);
-          lngReal = Number(u.lng);
-        } else if (pingGps?.lat != null && pingGps?.lng != null) {
+        } else if (pingGps?.lat != null && pingGps?.lng != null && (pingGps.lat !== 0 || pingGps.lng !== 0)) {
           latReal = Number(pingGps.lat);
           lngReal = Number(pingGps.lng);
-        } else if (j?.latInicio != null && j?.lngInicio != null) {
+        } else if (u.lat != null && u.lng != null && (u.lat !== 0 || u.lng !== 0)) {
+          latReal = Number(u.lat);
+          lngReal = Number(u.lng);
+        } else if (j?.latInicio != null && j?.lngInicio != null && (j.latInicio !== 0 || j.lngInicio !== 0)) {
           latReal = Number(j.latInicio);
           lngReal = Number(j.lngInicio);
         } else if (ultimaParada && (ultimaParada.checkInLat || ultimaParada.checkOutLat)) {
@@ -4706,12 +4852,33 @@ class CampoController {
 
         let textoUbicacion = 'Sin reporte GPS';
         if (paradaActiva) {
-          textoUbicacion = `En visita: ${paradaActiva.lugar}`;
+          textoUbicacion = `En sitio: ${paradaActiva.lugar} (desde ${paradaActiva.horaLlegadaColombia})`;
         } else if (ultimaParada) {
-          textoUbicacion = `Última parada: ${ultimaParada.lugar}`;
+          textoUbicacion = `Última parada: ${ultimaParada.lugar} (${ultimaParada.fecha} • ${ultimaParada.horaLlegadaColombia})`;
         } else if (coordsObj) {
           textoUbicacion = `GPS en tiempo real (${coordsObj.lat.toFixed(4)}, ${coordsObj.lng.toFixed(4)})`;
         }
+
+        // Recorrido real de hoy (breadcrumbs GPS + paradas de hoy)
+        const recorridoHoy = [];
+        pingsDeHoy.forEach(p => {
+          if (p.lat && p.lng && (p.lat !== 0 || p.lng !== 0)) {
+            recorridoHoy.push([Number(p.lat), Number(p.lng)]);
+          }
+        });
+        uMovsHoy.forEach(m => {
+          if (m.checkInLat && m.checkInLng) {
+            recorridoHoy.push([Number(m.checkInLat), Number(m.checkInLng)]);
+          }
+        });
+
+        const rutasAsesor = rutasAsignadas.filter(r => r.usuarioId === u.id);
+        const horaInicioHoyStr = j?.horaInicio
+          ? formatHoraColombia(j.horaInicio)
+          : (paradaActiva?.checkInHora ? formatHoraColombia(paradaActiva.checkInHora) : null);
+        const horaInicioHoyIso = j?.horaInicio
+          ? new Date(j.horaInicio).toISOString()
+          : (paradaActiva?.checkInHora || null);
 
         return {
           id: u.id,
@@ -4722,12 +4889,25 @@ class CampoController {
           telefono: u.telefono || null,
           esComercialCampo: true,
           esDelegadoGerencia: false,
-          isOnline: isOnlineReal,
+          isOnline: isOnlineReal || enTurnoActivo,
+          enTurnoActivo,
           primerIngreso: pres?.primerIngreso || (j ? j.horaInicio : null),
           colorIndex: advisorColorMap[u.id] !== undefined ? advisorColorMap[u.id] : 0,
           estado: estadoOperativo,
           estadoColor,
-          horaInicio: j?.horaInicio ? formatHoraColombia(j.horaInicio) : (uMovs.length > 0 && uMovs[0].checkInHora ? formatHoraColombia(uMovs[0].checkInHora) : '--:--'),
+          horaInicio: horaInicioHoyStr || '--:--',
+          horaInicioHoy: horaInicioHoyStr,
+          horaInicioIso: horaInicioHoyIso,
+          horaFinHoy: j?.horaFin ? formatHoraColombia(j.horaFin) : null,
+          bateria: pingGps?.bateria ?? j?.bateriaInicio ?? null,
+          velocidad: pingGps?.velocidad ?? 0,
+          ultimoTurno: ultJ ? {
+            id: ultJ.id,
+            fecha: getFechaColombia(ultJ.horaInicio),
+            horaInicio: formatHoraColombia(ultJ.horaInicio),
+            horaFin: ultJ.horaFin ? formatHoraColombia(ultJ.horaFin) : null,
+            estado: ultJ.estado
+          } : null,
           ubicacionActual: textoUbicacion,
           direccionActual: paradaActiva ? paradaActiva.direccion : (ultimaParada ? ultimaParada.direccion : ''),
           coordenadasActuales: coordsObj,
@@ -4736,14 +4916,45 @@ class CampoController {
           lastLocationUpdate: pingGps?.timestamp || (u.lastLocationUpdate ? new Date(Number(u.lastLocationUpdate)).toISOString() : null),
           totalVisitas: uMovs.length,
           totalParadas: uMovs.length,
+          visitasHoy: uMovsHoy.length,
           visitasCompletadas: completadas,
           visitasEnCurso: paradaActiva ? 1 : 0,
           tiempoEnCampoMin,
           tiempoEnCampoFormateado: tiempoEnCampoMin >= 60 ? `${Math.floor(tiempoEnCampoMin / 60)}h ${tiempoEnCampoMin % 60}m` : `${tiempoEnCampoMin}m`,
+          tiempoHoyMin,
+          tiempoHoyFormateado: tiempoHoyMin >= 60 ? `${Math.floor(tiempoHoyMin / 60)}h ${tiempoHoyMin % 60}m` : `${tiempoHoyMin}m`,
           efectividadPct,
           totalAnomalias: anomaliasAsesor.length,
-          paradaActiva: paradaActiva ? { id: paradaActiva.id, lugar: paradaActiva.lugar, horaLlegada: paradaActiva.checkInHora ? formatHoraColombia(paradaActiva.checkInHora) : '--:--' } : null,
-          trazabilidad: uMovs
+          paradaActiva: paradaActiva ? {
+            id: paradaActiva.id,
+            codigo: paradaActiva.codigo,
+            lugar: paradaActiva.lugar,
+            direccion: paradaActiva.direccion,
+            motivo: paradaActiva.motivo,
+            checkInHora: paradaActiva.checkInHora,
+            horaLlegada: paradaActiva.horaLlegadaColombia,
+            duracionMin: paradaActiva.duracionMin,
+            lat: paradaActiva.checkInLat,
+            lng: paradaActiva.checkInLng
+          } : null,
+          ultimaParadaDetalle: ultimaParada ? {
+            id: ultimaParada.id,
+            codigo: ultimaParada.codigo,
+            lugar: ultimaParada.lugar,
+            direccion: ultimaParada.direccion,
+            motivo: ultimaParada.motivo,
+            fecha: ultimaParada.fecha,
+            checkInHora: ultimaParada.checkInHora,
+            checkOutHora: ultimaParada.checkOutHora,
+            horaLlegada: ultimaParada.horaLlegadaColombia,
+            horaSalida: ultimaParada.horaSalidaColombia || 'En Sitio',
+            duracionTexto: ultimaParada.duracionTexto,
+            lat: ultimaParada.checkInLat,
+            lng: ultimaParada.checkInLng
+          } : null,
+          rutasAsignadas: rutasAsesor,
+          recorridoHoy,
+          trazabilidad: [...uMovs].reverse()
         };
       });
 
@@ -4867,6 +5078,7 @@ class CampoController {
         productividadPorAsesor,
         evolucionDiaria,
         evolucionMensual,
+        rutasAsignadas,
         asesores: asesoresDetalle,
         movimientos: movimientosDesc
       });

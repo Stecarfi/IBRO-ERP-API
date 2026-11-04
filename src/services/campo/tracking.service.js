@@ -1,6 +1,27 @@
 const prisma = require('../../prisma');
 const geofenceService = require('./geofence.service');
 
+const getColombiaDayBounds = (date = new Date()) => {
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
+    const colombiaStr = date.trim();
+    return {
+      startOfDay: new Date(`${colombiaStr}T00:00:00-05:00`),
+      endOfDay: new Date(`${colombiaStr}T23:59:59.999-05:00`),
+      colombiaStr
+    };
+  }
+  const d = date instanceof Date ? date : new Date(date);
+  const colombiaStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+  const startOfDay = new Date(`${colombiaStr}T00:00:00-05:00`);
+  const endOfDay = new Date(`${colombiaStr}T23:59:59.999-05:00`);
+  return { startOfDay, endOfDay, colombiaStr };
+};
+
 class TrackingService {
   /**
    * Procesa y almacena un ping de telemetría unitario
@@ -148,9 +169,7 @@ class TrackingService {
    * Consulta el recorrido cronológico de un colaborador para un día específico
    */
   async getHistorialRecorrido(usuarioId, fechaStr) {
-    const fecha = fechaStr ? new Date(fechaStr) : new Date();
-    const startOfDay = new Date(fecha.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(fecha.setHours(23, 59, 59, 999));
+    const { startOfDay, endOfDay, colombiaStr } = getColombiaDayBounds(fechaStr || new Date());
 
     const puntos = await prisma.rastreoUbicacion.findMany({
       where: {
@@ -215,9 +234,7 @@ class TrackingService {
    * Obtiene la última posición conocida y estado de todos los colaboradores
    */
   async getUltimasUbicacionesPersonal() {
-    const ahoraDate = new Date();
-    const startOfDay = new Date(ahoraDate);
-    startOfDay.setHours(0, 0, 0, 0);
+    const { startOfDay } = getColombiaDayBounds(new Date());
 
     const users = await prisma.user.findMany({
       where: { isLocked: false, esComercialCampo: true, esDelegadoGerencia: false, user: { not: 'admin' }, roleId: { not: '1' } },
@@ -235,7 +252,7 @@ class TrackingService {
         lastLocationUpdate: true,
         jornadas: {
           where: {
-            estado: { in: ['Iniciada', 'En Pausa', 'En Ruta'] },
+            estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] },
             horaInicio: { gte: startOfDay }
           },
           orderBy: { horaInicio: 'desc' },
