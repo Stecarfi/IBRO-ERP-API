@@ -18,19 +18,23 @@ const iniciarJornadaSchema = z.preprocess((val) => {
   bateriaInicio: z.coerce.number().min(0).max(100).optional().nullable()
 }).default({}));
 
-// Schema para pausa de jornada
+// Schema para pausa de jornada (Hora de Almuerzo / Descanso)
 const pausaJornadaSchema = z.object({
   jornadaId: z.string().optional().nullable(),
-  tipo: z.enum(['Almuerzo', 'Descanso', 'Capacitacion', 'Incidente', 'Calamidad', 'Taller', 'Otro']).optional().default('Descanso'),
+  tipo: z.enum(['Almuerzo', 'Descanso', 'Capacitacion', 'Incidente', 'Calamidad', 'Taller', 'Otro']).optional().default('Almuerzo'),
   lat: z.coerce.number().optional().nullable(),
   lng: z.coerce.number().optional().nullable(),
+  bateria: z.coerce.number().min(0).max(100).optional().nullable(),
   motivo: z.string().optional().nullable()
 }).default({});
 
 // Schema para reanudar jornada
 const reanudarJornadaSchema = z.object({
   pausaId: z.string().optional().nullable(),
-  jornadaId: z.string().optional().nullable()
+  jornadaId: z.string().optional().nullable(),
+  lat: z.coerce.number().optional().nullable(),
+  lng: z.coerce.number().optional().nullable(),
+  bateria: z.coerce.number().min(0).max(100).optional().nullable()
 }).default({});
 
 // Schema para finalizar jornada

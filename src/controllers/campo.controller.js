@@ -4484,13 +4484,16 @@ class CampoController {
         advisorColorMap[u.id] = i % 8;
       });
 
-      // 4. Obtener jornadas de hoy, últimas jornadas históricas, pings GPS y rutas asignadas
+      // 4. Obtener jornadas de hoy, últimas jornadas históricas, pings GPS, rutas asignadas y pausas de almuerzo
       const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
-      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw, paradasRutaRaw] = await Promise.all([
+      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw, paradasRutaRaw, pausasRaw] = await Promise.all([
         prisma.jornadaLaboral.findMany({
           where: {
             usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
             horaInicio: { gte: startOfToday, lte: endOfToday }
+          },
+          include: {
+            pausas: { orderBy: { horaInicio: 'desc' } }
           },
           orderBy: { horaInicio: 'desc' },
           take: 50
@@ -4541,6 +4544,22 @@ class CampoController {
             ]
           },
           orderBy: { createdAt: 'asc' }
+        }).catch(() => []),
+        prisma.pausaJornada.findMany({
+          where: {
+            jornada: {
+              usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds }
+            }
+          },
+          include: {
+            jornada: {
+              include: {
+                usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true } }
+              }
+            }
+          },
+          orderBy: { horaInicio: 'desc' },
+          take: 100
         }).catch(() => [])
       ]);
 
@@ -4568,6 +4587,70 @@ class CampoController {
           pingsHoyPorUsuario.set(p.usuarioId, []);
         }
         pingsHoyPorUsuario.get(p.usuarioId).push(p);
+      });
+
+      // Construir Trazabilidad Real de Hora de Almuerzo y Pausas de Jornada
+      const LIMITE_ALMUERZO_MIN = 60;
+      const pausasAlmuerzo = (pausasRaw || []).map(p => {
+        const uPausa = p.jornada?.usuario;
+        const uIdPausa = p.jornada?.usuarioId;
+        const nombreAsesorPausa = `${uPausa?.nombre || ''} ${uPausa?.apellido || ''}`.trim() || uPausa?.user || 'Asesor';
+        const inicioDate = new Date(p.horaInicio);
+        const fechaPausa = getFechaColombia(inicioDate);
+        const jornadaSigueEnPausaHoy = Boolean(
+          fechaPausa === hoyColombia &&
+          !p.horaFin &&
+          !p.jornada?.horaFin &&
+          p.jornada?.estado === 'En Pausa'
+        );
+
+        let finDate = p.horaFin ? new Date(p.horaFin) : null;
+        if (!finDate && !jornadaSigueEnPausaHoy && p.jornada?.horaFin) {
+          finDate = new Date(p.jornada.horaFin);
+        }
+
+        const enCurso = jornadaSigueEnPausaHoy && !finDate;
+        let duracionMin = p.duracionMin != null ? Number(p.duracionMin) : 0;
+        if (enCurso) {
+          duracionMin = Math.max(1, Math.round((ahora - inicioDate) / 60000));
+        } else if (finDate && duracionMin <= 0) {
+          duracionMin = Math.max(1, Math.round((finDate - inicioDate) / 60000));
+        }
+
+        const cumpleHorario = duracionMin <= LIMITE_ALMUERZO_MIN;
+        const excesoMin = Math.max(0, duracionMin - LIMITE_ALMUERZO_MIN);
+        const duracionTexto = duracionMin >= 60
+          ? `${Math.floor(duracionMin / 60)}h ${duracionMin % 60}m`
+          : `${duracionMin} min`;
+
+        return {
+          id: p.id,
+          jornadaId: p.jornadaId,
+          usuarioId: uIdPausa,
+          asesorNombre: nombreAsesorPausa,
+          usuarioCargo: uPausa?.cargo || 'Asesor Comercial',
+          usuarioFoto: uPausa?.foto || null,
+          colorIndex: advisorColorMap[uIdPausa] !== undefined ? advisorColorMap[uIdPausa] : 0,
+          tipo: p.tipo || 'Almuerzo',
+          motivo: p.motivo || 'Hora de Almuerzo',
+          fecha: fechaPausa,
+          esDeHoy: fechaPausa === hoyColombia,
+          horaInicioIso: inicioDate.toISOString(),
+          horaSalidaAlmuerzo: formatHoraColombia(inicioDate),
+          horaFinIso: finDate ? finDate.toISOString() : null,
+          horaActivacionJornada: finDate ? formatHoraColombia(finDate) : (enCurso ? 'En Almuerzo Ahora' : 'Sin registro de reactivación'),
+          enCurso,
+          duracionMin,
+          duracionTexto,
+          limiteAlmuerzoMin: LIMITE_ALMUERZO_MIN,
+          cumpleHorario,
+          excesoMin,
+          estadoCumplimiento: enCurso
+            ? (duracionMin > LIMITE_ALMUERZO_MIN ? `En almuerzo (+${excesoMin} min excedido)` : 'En Hora de Almuerzo')
+            : (cumpleHorario ? 'Cumplió horario de almuerzo' : `Se demoró +${excesoMin} min en activar`),
+          lat: p.lat || null,
+          lng: p.lng || null
+        };
       });
 
       // Construir Rutas Asignadas con estado real de cada parada
@@ -4873,6 +4956,26 @@ class CampoController {
         });
 
         const rutasAsesor = rutasAsignadas.filter(r => r.usuarioId === u.id);
+        const pausasAsesor = pausasAlmuerzo.filter(p => p.usuarioId === u.id);
+        const pausasHoyAsesor = pausasAsesor.filter(p => p.esDeHoy);
+        const pausaActiva = pausasHoyAsesor.find(p => p.enCurso) || null;
+        const almuerzoHoy = pausaActiva || pausasHoyAsesor[0] || null;
+        const ultimoAlmuerzo = pausasAsesor[0] || null;
+
+        if (pausaActiva && !paradaActiva) {
+          estadoOperativo = 'En Almuerzo';
+          estadoColor = 'orange';
+        }
+
+        // Batería 100% real reportada por el dispositivo HOY (nunca inventada ni de días anteriores)
+        const ultimoPingHoyConBateria = [...pingsDeHoy].reverse().find(p => p.bateria != null);
+        const bateriaRealHoy = ultimoPingHoyConBateria?.bateria != null
+          ? Number(ultimoPingHoyConBateria.bateria)
+          : (j?.bateriaInicio != null ? Number(j.bateriaInicio) : null);
+        const bateriaHoraHoy = ultimoPingHoyConBateria?.timestamp
+          ? formatHoraColombia(ultimoPingHoyConBateria.timestamp)
+          : (j?.bateriaInicio != null && j?.horaInicio ? formatHoraColombia(j.horaInicio) : null);
+
         const horaInicioHoyStr = j?.horaInicio
           ? formatHoraColombia(j.horaInicio)
           : (paradaActiva?.checkInHora ? formatHoraColombia(paradaActiva.checkInHora) : null);
@@ -4891,6 +4994,7 @@ class CampoController {
           esDelegadoGerencia: false,
           isOnline: isOnlineReal || enTurnoActivo,
           enTurnoActivo,
+          enAlmuerzoAhora: Boolean(pausaActiva),
           primerIngreso: pres?.primerIngreso || (j ? j.horaInicio : null),
           colorIndex: advisorColorMap[u.id] !== undefined ? advisorColorMap[u.id] : 0,
           estado: estadoOperativo,
@@ -4899,8 +5003,13 @@ class CampoController {
           horaInicioHoy: horaInicioHoyStr,
           horaInicioIso: horaInicioHoyIso,
           horaFinHoy: j?.horaFin ? formatHoraColombia(j.horaFin) : null,
-          bateria: pingGps?.bateria ?? j?.bateriaInicio ?? null,
-          velocidad: pingGps?.velocidad ?? 0,
+          bateria: bateriaRealHoy,
+          bateriaHora: bateriaHoraHoy,
+          velocidad: pingsDeHoy.length > 0 ? (pingsDeHoy[pingsDeHoy.length - 1]?.velocidad ?? 0) : 0,
+          pausaActiva,
+          almuerzoHoy,
+          ultimoAlmuerzo,
+          historialAlmuerzos: pausasAsesor,
           ultimoTurno: ultJ ? {
             id: ultJ.id,
             fecha: getFechaColombia(ultJ.horaInicio),
@@ -5079,6 +5188,7 @@ class CampoController {
         evolucionDiaria,
         evolucionMensual,
         rutasAsignadas,
+        pausasAlmuerzo,
         asesores: asesoresDetalle,
         movimientos: movimientosDesc
       });

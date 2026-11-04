@@ -117,10 +117,10 @@ class JornadaService {
   }
 
   /**
-   * Registra una pausa o descanso
+   * Registra la pausa de jornada por Hora de Almuerzo o descanso
    */
   async iniciarPausa(usuarioId, data) {
-    let { jornadaId, tipo, motivo = '', lat, lng } = data || {};
+    let { jornadaId, tipo = 'Almuerzo', motivo = 'Hora de Almuerzo', lat, lng, bateria = null } = data || {};
 
     let jornada = null;
     if (jornadaId) {
@@ -130,33 +130,69 @@ class JornadaService {
       jornada = await prisma.jornadaLaboral.findFirst({
         where: {
           usuarioId,
-          estado: { in: ['Iniciada', 'En Ruta', 'En Pausa'] }
+          estado: { in: ['Iniciada', 'En Ruta', 'En Pausa', 'Activa'] }
         },
         orderBy: { horaInicio: 'desc' }
       });
     }
 
     if (!jornada || jornada.usuarioId !== usuarioId) {
-      return { success: false, error: 'No se encontró una jornada activa para pausar' };
+      return { success: false, error: 'No se encontró un turno activo para pausar.' };
     }
 
-    const pausa = await prisma.pausaJornada.create({
-      data: {
+    const ahora = new Date();
+    const tipoEfectivo = (!tipo || String(motivo).toLowerCase().includes('almuerzo')) ? 'Almuerzo' : tipo;
+    const motivoEfectivo = motivo || 'Hora de Almuerzo';
+
+    // Verificar si ya tiene una pausa abierta para no duplicarla
+    let pausa = await prisma.pausaJornada.findFirst({
+      where: {
         jornadaId: jornada.id,
-        tipo: tipo || 'Descanso',
-        motivo,
-        lat: lat ? parseFloat(lat) : null,
-        lng: lng ? parseFloat(lng) : null,
-        horaInicio: new Date()
-      }
+        horaFin: null
+      },
+      orderBy: { horaInicio: 'desc' }
     });
 
-    const esAlmuerzo = String(tipo).toLowerCase().includes('almuerzo');
+    if (!pausa) {
+      pausa = await prisma.pausaJornada.create({
+        data: {
+          jornadaId: jornada.id,
+          tipo: tipoEfectivo,
+          motivo: motivoEfectivo,
+          lat: lat ? parseFloat(lat) : null,
+          lng: lng ? parseFloat(lng) : null,
+          horaInicio: ahora
+        }
+      });
+    }
+
+    // Si el dispositivo reportó batería real o coordenadas, registrarlas en el rastreo
+    const batReal = bateria !== null && bateria !== undefined && bateria !== '' && !isNaN(Number(bateria))
+      ? Math.min(100, Math.max(0, Math.round(Number(bateria))))
+      : null;
+    if ((lat && lng) || batReal !== null) {
+      await prisma.rastreoUbicacion.create({
+        data: {
+          usuarioId,
+          jornadaId: jornada.id,
+          lat: lat ? parseFloat(lat) : (jornada.latInicio || 0),
+          lng: lng ? parseFloat(lng) : (jornada.lngInicio || 0),
+          bateria: batReal,
+          enMovimiento: false,
+          timestamp: ahora
+        }
+      }).catch(() => {});
+    }
+
+    const esAlmuerzo = String(tipoEfectivo).toLowerCase().includes('almuerzo') || String(motivoEfectivo).toLowerCase().includes('almuerzo');
     const jornadaActualizada = await prisma.jornadaLaboral.update({
       where: { id: jornada.id },
       data: {
         estado: 'En Pausa',
-        ...(esAlmuerzo ? { horaAlmuerzoInicio: new Date() } : {})
+        ...(esAlmuerzo && !jornada.horaAlmuerzoInicio ? { horaAlmuerzoInicio: pausa.horaInicio } : {})
+      },
+      include: {
+        pausas: { orderBy: { horaInicio: 'desc' } }
       }
     });
 
@@ -164,10 +200,10 @@ class JornadaService {
   }
 
   /**
-   * Reanuda la jornada finalizando la pausa activa
+   * Reactiva la jornada finalizando la pausa de almuerzo activa y calculando el tiempo exacto
    */
   async reanudarPausa(usuarioId, data) {
-    const { pausaId } = data || {};
+    const { pausaId, lat, lng, bateria = null } = data || {};
 
     let pausa = null;
     if (pausaId) {
@@ -178,23 +214,26 @@ class JornadaService {
     }
 
     if (!pausa) {
-      // Buscar última pausa abierta para este usuario
       pausa = await prisma.pausaJornada.findFirst({
         where: {
           horaFin: null,
-          jornada: { usuarioId, estado: { in: ['En Pausa', 'Iniciada', 'En Ruta'] } }
+          jornada: { usuarioId, estado: { in: ['En Pausa', 'Iniciada', 'En Ruta', 'Activa'] } }
         },
         include: { jornada: true },
         orderBy: { horaInicio: 'desc' }
       });
     }
 
+    const ahora = new Date();
+    const batReal = bateria !== null && bateria !== undefined && bateria !== '' && !isNaN(Number(bateria))
+      ? Math.min(100, Math.max(0, Math.round(Number(bateria))))
+      : null;
+
     if (!pausa) {
-      // Si no hay pausa específica registrada, reanudar la jornada activa directamente
       const jornada = await prisma.jornadaLaboral.findFirst({
         where: {
           usuarioId,
-          estado: { in: ['En Pausa', 'Iniciada', 'En Ruta'] }
+          estado: { in: ['En Pausa', 'Iniciada', 'En Ruta', 'Activa'] }
         },
         orderBy: { horaInicio: 'desc' }
       });
@@ -202,22 +241,22 @@ class JornadaService {
       if (jornada) {
         const jornadaActualizada = await prisma.jornadaLaboral.update({
           where: { id: jornada.id },
-          data: { estado: 'Iniciada' }
+          data: { estado: 'Iniciada' },
+          include: { pausas: { orderBy: { horaInicio: 'desc' } } }
         });
         return { success: true, jornada: jornadaActualizada };
       }
 
-      return { success: false, error: 'No se encontró ninguna jornada activa o en pausa para reanudar' };
+      return { success: false, error: 'No se encontró ninguna jornada activa o en pausa para activar.' };
     }
 
     if (pausa.jornada && pausa.jornada.usuarioId !== usuarioId) {
-      return { success: false, error: 'Usuario no autorizado para reanudar esta pausa' };
+      return { success: false, error: 'Usuario no autorizado para activar esta jornada.' };
     }
 
-    const ahora = new Date();
     const duracionMin = Math.max(1, Math.round((ahora - new Date(pausa.horaInicio)) / 60000));
 
-    await prisma.pausaJornada.update({
+    const pausaCerrada = await prisma.pausaJornada.update({
       where: { id: pausa.id },
       data: {
         horaFin: ahora,
@@ -225,16 +264,33 @@ class JornadaService {
       }
     });
 
-    const esAlmuerzo = String(pausa.tipo).toLowerCase().includes('almuerzo');
+    if ((lat && lng) || batReal !== null) {
+      await prisma.rastreoUbicacion.create({
+        data: {
+          usuarioId,
+          jornadaId: pausa.jornadaId,
+          lat: lat ? parseFloat(lat) : (pausa.jornada?.latInicio || 0),
+          lng: lng ? parseFloat(lng) : (pausa.jornada?.lngInicio || 0),
+          bateria: batReal,
+          enMovimiento: true,
+          timestamp: ahora
+        }
+      }).catch(() => {});
+    }
+
+    const esAlmuerzo = String(pausa.tipo).toLowerCase().includes('almuerzo') || String(pausa.motivo || '').toLowerCase().includes('almuerzo');
     const jornadaActualizada = await prisma.jornadaLaboral.update({
       where: { id: pausa.jornadaId },
       data: {
         estado: 'Iniciada',
         ...(esAlmuerzo ? { horaAlmuerzoFin: ahora } : {})
+      },
+      include: {
+        pausas: { orderBy: { horaInicio: 'desc' } }
       }
     });
 
-    return { success: true, jornada: jornadaActualizada };
+    return { success: true, pausa: pausaCerrada, duracionMin, jornada: jornadaActualizada };
   }
 
   /**
@@ -424,7 +480,7 @@ class JornadaService {
         estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
       },
       include: {
-        pausas: { where: { horaFin: null } },
+        pausas: { orderBy: { horaInicio: 'desc' } },
         visitas: {
           orderBy: { fechaProgramada: 'asc' },
           include: { cliente: true, prospecto: true, clienteExterno: true }
