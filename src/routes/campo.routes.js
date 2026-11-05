@@ -94,6 +94,8 @@ router.get('/rutas', (req, res) => campoController.getRutasAsignadas(req, res));
 router.delete('/rutas', (req, res) => campoController.eliminarTodasRutas(req, res));
 router.put('/rutas/:id/cumplimiento', (req, res) => campoController.actualizarEstadoActividad(req, res));
 router.put('/rutas/:id/estado', (req, res) => campoController.actualizarEstadoActividad(req, res));
+router.post('/rutas/:id/iniciar', (req, res) => campoController.iniciarRutaAsignada(req, res));
+router.post('/rutas/:id/cerrar', (req, res) => campoController.cerrarRutaAsignada(req, res));
 router.put('/rutas/:id', (req, res) => campoController.actualizarRuta(req, res));
 router.delete('/rutas/:id', (req, res) => campoController.eliminarRuta(req, res));
 router.post('/rutas/:id/aprobar', (req, res) => campoController.aprobarActividad(req, res));
@@ -135,6 +137,8 @@ router.put('/externo/clientes/:id', (req, res) => campoController.actualizarClie
 router.delete('/externo/clientes/:id', (req, res) => campoController.eliminarClienteExterno(req, res));
 router.delete('/externo/clientes', (req, res) => campoController.eliminarTodosClientesExternos(req, res));
 router.put('/externo/clientes/:id/etapa', (req, res) => campoController.cambiarEtapaEmbudo(req, res));
+router.post('/externo/clientes/:id/exigir-seguimiento', (req, res) => campoController.solicitarAccionDelegado(req, res));
+router.post('/solicitar-accion', (req, res) => campoController.solicitarAccionDelegado(req, res));
 
 router.get('/externo/cotizaciones', (req, res) => campoController.getCotizacionesExternas(req, res));
 router.post('/externo/cotizaciones', (req, res) => campoController.crearCotizacionExterna(req, res));

@@ -44,6 +44,10 @@ class OperacionExternaService {
           comercial: {
             select: { id: true, nombre: true, apellido: true, cargo: true }
           },
+          seguimientos: {
+            orderBy: { fechaHora: 'desc' },
+            take: 15
+          },
           _count: {
             select: {
               visitas: true,
@@ -67,6 +71,7 @@ class OperacionExternaService {
       })
     ]);
 
+    const ahoraMs = Date.now();
     const nombresFormalesMap = new Map();
     clientesFormales.forEach(c => {
       const key = (c.nombre || '').trim().toLowerCase();
@@ -153,7 +158,45 @@ class OperacionExternaService {
       }
     });
 
-    let consolidado = [...clientesFormales, ...Array.from(clientesDeVisitasMap.values())];
+    let consolidado = [...clientesFormales, ...Array.from(clientesDeVisitasMap.values())].map(c => {
+      const segs = Array.isArray(c.seguimientos) ? c.seguimientos : [];
+      const segsReales = segs.filter(s => !(s.tipoAccion === 'Observacion' && String(s.resultado || '').startsWith('Registro Inicial')));
+      const solicitudDelegado = segs.find(s =>
+        s.tipoAccion === 'Solicitud del Delegado' ||
+        String(s.resultado || '').toLowerCase().includes('exigido por delegado') ||
+        String(s.resultado || '').toLowerCase().includes('solicitud del delegado')
+      );
+      const seguimientosPosterioresASolicitud = solicitudDelegado
+        ? segsReales.filter(s => s.id !== solicitudDelegado.id && new Date(s.fechaHora) > new Date(solicitudDelegado.fechaHora))
+        : [];
+      const tieneSolicitudAccionPendiente = Boolean(solicitudDelegado && seguimientosPosterioresASolicitud.length === 0);
+
+      const totalVisitas = c._count?.visitas || 0;
+      const totalSegsReales = segsReales.length > 0 ? segsReales.length : (String(c.id).startsWith('VIS-CLI-') ? (c._count?.seguimientos || 0) : 0);
+      const ultimaFechaGestion = segsReales[0]?.fechaHora || c.ultimaVisitaFecha || c.updatedAt || c.createdAt;
+      const diasSinSeguimiento = ultimaFechaGestion ? Math.max(0, Math.floor((ahoraMs - new Date(ultimaFechaGestion).getTime()) / (24 * 3600 * 1000))) : 0;
+      const sinSeguimientoPostRegistro = totalSegsReales === 0 && totalVisitas === 0;
+      const requiereSeguimientoObligatorio = sinSeguimientoPostRegistro || tieneSolicitudAccionPendiente || diasSinSeguimiento >= 3;
+
+      return {
+        ...c,
+        seguimientosRealesCount: totalSegsReales,
+        sinSeguimientoPostRegistro,
+        tieneSolicitudAccionPendiente,
+        solicitudAccionDetalle: tieneSolicitudAccionPendiente ? {
+          id: solicitudDelegado.id,
+          fecha: solicitudDelegado.fechaHora,
+          instrucciones: solicitudDelegado.observaciones || solicitudDelegado.compromisos || 'Realizar seguimiento comercial inmediato al cliente.',
+          proximaActividad: solicitudDelegado.proximaActividad || 'Seguimiento Exigido por Delegado'
+        } : null,
+        ultimaFechaGestion,
+        diasSinSeguimiento,
+        requiereSeguimientoObligatorio,
+        estadoSeguimiento: tieneSolicitudAccionPendiente
+          ? 'Acción Exigida por Delegado'
+          : (sinSeguimientoPostRegistro ? 'Seguimiento Inicial Pendiente' : (diasSinSeguimiento >= 3 ? `Requiere Seguimiento (${diasSinSeguimiento}d)` : 'Al Día'))
+      };
+    });
 
     if (etapa && etapa !== 'TODAS') {
       consolidado = consolidado.filter(c => (c.etapaEmbudo || 'Prospecto') === etapa);
@@ -329,13 +372,19 @@ class OperacionExternaService {
 
     // Registrar seguimiento inicial de creación con evidencias y adjuntos si existen
     const adjuntosIniciales = Array.isArray(data.evidencias || data.adjuntos) ? (data.evidencias || data.adjuntos) : [];
+    const compromisoSeg = (data.compromisoSeguimiento || data.compromisoInicial || '').trim();
+    const fechaSegProg = data.fechaProximoSeguimiento || data.fechaSeguimiento || null;
+
     await prisma.seguimientoCampo.create({
       data: {
         clienteExternoId: nuevoCliente.id,
         usuarioId: comercialId,
-        tipoAccion: 'Observacion',
-        resultado: `Registro Inicial (${tipoRegistro})`,
-        observaciones: `Registro creado en etapa: ${etapaEmbudo}. Origen: ${origen}.${data.notas ? ` Notas: ${data.notas}` : ''}`,
+        tipoAccion: compromisoSeg ? 'Seguimiento Programado' : 'Observacion',
+        resultado: compromisoSeg ? `Seguimiento Programado (${tipoRegistro})` : `Registro Inicial (${tipoRegistro})`,
+        observaciones: `Registro creado en etapa: ${etapaEmbudo}. Origen: ${origen}.${data.notas ? ` Notas: ${data.notas}` : ''}${compromisoSeg ? ` | Compromiso de seguimiento: ${compromisoSeg}` : ''}`,
+        compromisos: compromisoSeg || 'Realizar primer seguimiento comercial obligatorio',
+        proximaActividad: compromisoSeg || 'Primer seguimiento comercial post-registro',
+        fechaProgramada: fechaSegProg ? new Date(fechaSegProg) : new Date(Date.now() + 24 * 3600 * 1000),
         evidencias: adjuntosIniciales
       }
     });
@@ -700,25 +749,124 @@ class OperacionExternaService {
    */
   async registrarVentaExterna(comercialId, data) {
     const {
-      clienteExternoId,
+      clienteExternoId: rawClienteExternoId,
+      clienteNombre = '',
+      clienteTelefono = '',
+      clienteDireccion = '',
       cotizacionId = null,
       valorVendido,
       metodoPago = 'Contado',
       observaciones = '',
+      compromisoSeguimiento = '',
+      fechaProximoSeguimiento = null,
+      numeroFactura = '',
       items = []
     } = data;
-
-    if (!clienteExternoId || !valorVendido) {
-      throw new Error('clienteExternoId y valorVendido son obligatorios');
-    }
 
     const valor = parseFloat(valorVendido);
     if (isNaN(valor) || valor <= 0) {
       throw new Error('El valor vendido debe ser un número positivo');
     }
 
+    // Resolver o crear el ClienteExternoCampo si viene de visita en terreno (VIS-CLI-...) o por nombre
+    let clienteExternoId = rawClienteExternoId;
+    if (clienteExternoId && String(clienteExternoId).startsWith('VIS-CLI-')) {
+      const visitaId = String(clienteExternoId).replace('VIS-CLI-', '');
+      const vis = await prisma.visitaCampo.findUnique({ where: { id: visitaId } }).catch(() => null);
+      const nomBuscar = (vis?.resultadoResumen || clienteNombre || 'Cliente de Campo').trim();
+      let existente = await prisma.clienteExternoCampo.findFirst({
+        where: { nombre: { equals: nomBuscar, mode: 'insensitive' } }
+      });
+      if (!existente) {
+        const cCount = await prisma.clienteExternoCampo.count();
+        existente = await prisma.clienteExternoCampo.create({
+          data: {
+            codigo: `CLEX-${String(cCount + 1).padStart(5, '0')}`,
+            nombre: nomBuscar,
+            contacto: vis?.contactoAtendio || nomBuscar,
+            telefono: clienteTelefono || 'Registrado en campo',
+            ciudad: 'Cartagena',
+            direccion: vis?.observaciones || clienteDireccion || 'Visitado en terreno',
+            sectorEconomico: vis?.tipoVisita || 'Comercio',
+            origen: 'Visita en Terreno',
+            tipoRegistro: 'Cliente Activo',
+            etapaEmbudo: 'Venta',
+            comercialId
+          }
+        });
+      }
+      clienteExternoId = existente.id;
+    } else if (clienteExternoId) {
+      const checkFormal = await prisma.clienteExternoCampo.findUnique({ where: { id: clienteExternoId } }).catch(() => null);
+      if (!checkFormal) {
+        const checkInterno = await prisma.cliente.findUnique({ where: { id: clienteExternoId } }).catch(() => null);
+        const nomCrear = (checkInterno?.nom || clienteNombre || 'Cliente Comercial').trim();
+        let existentePorNombre = await prisma.clienteExternoCampo.findFirst({
+          where: { nombre: { equals: nomCrear, mode: 'insensitive' } }
+        });
+        if (!existentePorNombre) {
+          const cCount = await prisma.clienteExternoCampo.count();
+          existentePorNombre = await prisma.clienteExternoCampo.create({
+            data: {
+              codigo: `CLEX-${String(cCount + 1).padStart(5, '0')}`,
+              nombre: nomCrear,
+              nitDoc: checkInterno?.nit || null,
+              contacto: checkInterno?.contacto || nomCrear,
+              telefono: checkInterno?.tel || clienteTelefono || 'Registrado en campo',
+              ciudad: checkInterno?.ciudad || 'Cartagena',
+              direccion: checkInterno?.dir || clienteDireccion || null,
+              sectorEconomico: 'Comercio',
+              origen: 'Venta Directa en Campo',
+              tipoRegistro: 'Cliente Activo',
+              etapaEmbudo: 'Venta',
+              comercialId
+            }
+          });
+        }
+        clienteExternoId = existentePorNombre.id;
+      }
+    } else if (clienteNombre && String(clienteNombre).trim()) {
+      const nomBuscar = String(clienteNombre).trim();
+      let existente = await prisma.clienteExternoCampo.findFirst({
+        where: { nombre: { equals: nomBuscar, mode: 'insensitive' } }
+      });
+      if (!existente) {
+        const cCount = await prisma.clienteExternoCampo.count();
+        existente = await prisma.clienteExternoCampo.create({
+          data: {
+            codigo: `CLEX-${String(cCount + 1).padStart(5, '0')}`,
+            nombre: nomBuscar,
+            contacto: nomBuscar,
+            telefono: clienteTelefono || 'Registrado en campo',
+            ciudad: 'Cartagena',
+            direccion: clienteDireccion || 'Registrado en venta del día',
+            sectorEconomico: 'Comercio',
+            origen: 'Venta Directa en Campo',
+            tipoRegistro: 'Cliente Activo',
+            etapaEmbudo: 'Venta',
+            comercialId
+          }
+        });
+      }
+      clienteExternoId = existente.id;
+    }
+
+    if (!clienteExternoId) {
+      throw new Error('Debe seleccionar o indicar el nombre del cliente para registrar la venta');
+    }
+
     const count = await prisma.ventaExternaCampo.count();
-    const codigo = `VTEX-${String(count + 1).padStart(5, '0')}`;
+    let codigo = `VTEX-${String(count + 1).padStart(5, '0')}`;
+    const existeCod = await prisma.ventaExternaCampo.findUnique({ where: { codigo } }).catch(() => null);
+    if (existeCod) {
+      codigo = `VTEX-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
+    }
+
+    const obsFinal = [
+      numeroFactura ? `Factura/Pedido: ${numeroFactura}` : '',
+      observaciones ? String(observaciones).trim() : '',
+      compromisoSeguimiento ? `Compromiso de seguimiento: ${String(compromisoSeguimiento).trim()}` : ''
+    ].filter(Boolean).join(' | ');
 
     const nuevaVenta = await prisma.ventaExternaCampo.create({
       data: {
@@ -728,14 +876,14 @@ class OperacionExternaService {
         cotizacionId: cotizacionId || null,
         valorVendido: valor,
         metodoPago,
-        observaciones: observaciones || null,
-        items: items.length > 0 ? items : null,
+        observaciones: obsFinal || null,
+        items: Array.isArray(items) && items.length > 0 ? items : null,
         estado: 'Cerrada'
       },
       include: {
         clienteExterno: true,
         cotizacion: true,
-        comercial: { select: { id: true, nombre: true, apellido: true } }
+        comercial: { select: { id: true, nombre: true, apellido: true, cargo: true } }
       }
     });
 
@@ -757,17 +905,20 @@ class OperacionExternaService {
           estado: 'Aprobada',
           updatedAt: new Date()
         }
-      });
+      }).catch(() => {});
     }
 
-    // 3. Registrar seguimiento comercial
+    // 3. Registrar seguimiento comercial y compromiso post-venta obligatorio
     await prisma.seguimientoCampo.create({
       data: {
         clienteExternoId,
         usuarioId: comercialId,
         tipoAccion: 'Venta',
-        resultado: `Venta Cerrada (${codigo})`,
-        observaciones: `Cierre comercial por valor de $${valor.toLocaleString()}. Método: ${metodoPago}. ${observaciones}`
+        resultado: `Venta del Día Cerrada (${codigo})`,
+        observaciones: `Cierre comercial por valor de $${valor.toLocaleString('es-CO')}. Método: ${metodoPago}.${obsFinal ? ` ${obsFinal}` : ''}`,
+        compromisos: compromisoSeguimiento || 'Seguimiento post-venta y verificación de entrega/satisfacción',
+        proximaActividad: compromisoSeguimiento || 'Seguimiento post-venta al cliente',
+        fechaProgramada: fechaProximoSeguimiento ? new Date(fechaProximoSeguimiento) : new Date(Date.now() + 2 * 24 * 3600 * 1000)
       }
     });
 

@@ -1714,8 +1714,15 @@ class CampoController {
         codigoRuta = `RUT-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
       }
 
-      const detalleTexto = instrucciones || notas || (puntosParada ? `Paradas: ${puntosParada}` : '') || `Ruta asignada en zona ${zona || 'Comercial'}.`;
-      const paradasCount = Array.isArray(clientesIds) && clientesIds.length > 0 ? clientesIds.length : (puntosParada ? puntosParada.split(',').length : 1);
+      const puntosStr = puntosParada ? String(puntosParada).trim() : '';
+      const esNumeroMetaParadas = /^\d+$/.test(puntosStr);
+      const listaParadasReales = (!esNumeroMetaParadas && puntosStr)
+        ? puntosStr.split(',').map(s => s.trim()).filter(s => s && !/^\d+$/.test(s))
+        : [];
+      const paradasCount = Array.isArray(clientesIds) && clientesIds.length > 0
+        ? clientesIds.length
+        : (esNumeroMetaParadas ? Math.max(1, parseInt(puntosStr, 10)) : (listaParadasReales.length > 0 ? listaParadasReales.length : 1));
+      const detalleTexto = instrucciones || notas || (puntosStr ? (esNumeroMetaParadas ? `Meta de paradas: ${paradasCount}` : `Paradas: ${puntosStr}`) : '') || `Ruta asignada en zona ${zona || 'Comercial'}.`;
 
       // 1. Crear actividad matriz de la ruta
       const actividadRuta = await prisma.actividadCampo.create({
@@ -1733,6 +1740,8 @@ class CampoController {
             {
               fecha: new Date(),
               usuario: (`${req.user?.nombre || ''} ${req.user?.apellido || ''}`.trim()) || req.user?.username || req.user?.email || 'Delegado de Gerencia',
+              accion: 'CREACION',
+              estadoNuevo: 'Pendiente',
               texto: `Ruta programada por el Delegado de Gerencia.`
             }
           ]
@@ -1743,7 +1752,7 @@ class CampoController {
         }
       });
 
-      // 2. Programar las paradas asociadas a la ruta en VisitaCampo (conectadas con la Ruta Día a Día)
+      // 2. Programar las paradas asociadas a la ruta en VisitaCampo (solo si son nombres reales de lugares/clientes, nunca números sueltos)
       const visitasCreadas = [];
       if (Array.isArray(clientesIds) && clientesIds.length > 0) {
         for (let i = 0; i < clientesIds.length; i++) {
@@ -1779,10 +1788,9 @@ class CampoController {
           });
           visitasCreadas.push(vis);
         }
-      } else if (puntosParada && String(puntosParada).trim()) {
-        const listaParadas = String(puntosParada).split(',').map(s => s.trim()).filter(Boolean);
-        for (let i = 0; i < listaParadas.length; i++) {
-          const nombreParada = listaParadas[i];
+      } else if (listaParadasReales.length > 0) {
+        for (let i = 0; i < listaParadasReales.length; i++) {
+          const nombreParada = listaParadasReales[i];
           const countVis = await prisma.visitaCampo.count();
           const codigoVis = `VIS-${Date.now().toString().slice(-5)}-${String(countVis + i + 1).padStart(3, '0')}`;
 
@@ -1890,42 +1898,93 @@ class CampoController {
         orderBy: { fechaProgramada: 'desc' }
       });
 
-      // Enriquecer cada ruta con el progreso real de sus paradas en VisitaCampo (Ruta Día a Día)
+      const hoyCol = getFechaColombia(new Date());
+
+      // Enriquecer cada ruta con el progreso real de sus paradas en VisitaCampo y su estado oficial (Pendiente, En Curso, Finalizada)
       const rutasEnriquecidas = await Promise.all(rutas.map(async (r) => {
-        const fechaR = r.fechaProgramada ? new Date(r.fechaProgramada) : null;
-        let paradasRuta = [];
-        if (r.codigo) {
-          paradasRuta = await prisma.visitaCampo.findMany({
+        const fechaProgStr = r.fechaProgramada ? getFechaColombia(r.fechaProgramada) : getFechaColombia(r.createdAt);
+        const startDayCol = new Date(`${fechaProgStr}T00:00:00-05:00`);
+        const endDayCol = new Date(`${fechaProgStr}T23:59:59.999-05:00`);
+
+        const [paradasExplicitas, visitasRealesDia] = await Promise.all([
+          r.codigo
+            ? prisma.visitaCampo.findMany({
+                where: {
+                  usuarioId: r.usuarioId,
+                  observaciones: { contains: `[Ruta ${r.codigo}]` }
+                },
+                orderBy: { createdAt: 'asc' }
+              }).catch(() => [])
+            : Promise.resolve([]),
+          prisma.visitaCampo.findMany({
             where: {
               usuarioId: r.usuarioId,
-              observaciones: { contains: `[Ruta ${r.codigo}]` }
+              checkInHora: { gte: startDayCol, lte: endDayCol }
             },
-            orderBy: { createdAt: 'asc' }
-          }).catch(() => []);
+            orderBy: { checkInHora: 'asc' }
+          }).catch(() => [])
+        ]);
+
+        const paradasMap = new Map();
+        paradasExplicitas.forEach(p => {
+          const resNom = String(p.resultadoResumen || '').trim();
+          if (/^\d+$/.test(resNom) && !p.checkInHora) return;
+          paradasMap.set(p.id, p);
+        });
+        visitasRealesDia.forEach(v => {
+          if (!paradasMap.has(v.id)) paradasMap.set(v.id, v);
+        });
+        const paradasRuta = Array.from(paradasMap.values());
+
+        let metaParadas = 0;
+        const descStr = String(r.descripcion || '');
+        const matchParadas = descStr.match(/Paradas:\s*(\d+)/i) || descStr.match(/Meta de paradas:\s*(\d+)/i) || descStr.match(/Paradas asignadas:\s*(\d+)/i);
+        if (matchParadas && matchParadas[1]) {
+          metaParadas = Math.max(0, parseInt(matchParadas[1], 10));
         }
-        if (paradasRuta.length === 0 && fechaR) {
-          const sDay = new Date(fechaR);
-          sDay.setHours(0, 0, 0, 0);
-          const eDay = new Date(fechaR);
-          eDay.setHours(23, 59, 59, 999);
-          paradasRuta = await prisma.visitaCampo.findMany({
-            where: {
-              usuarioId: r.usuarioId,
-              OR: [
-                { checkInHora: { gte: sDay, lte: eDay } },
-                { fechaProgramada: { gte: sDay, lte: eDay } }
-              ]
-            },
-            orderBy: { createdAt: 'asc' }
-          }).catch(() => []);
-        }
-        const totalParadasRuta = paradasRuta.length;
+
         const paradasCompletadasRuta = paradasRuta.filter(p => p.estado === 'Realizada' || p.checkOutHora != null).length;
         const paradasEnCursoRuta = paradasRuta.filter(p => p.estado === 'En Curso' || (p.checkInHora != null && p.checkOutHora == null)).length;
-        const progresoRutaPct = totalParadasRuta > 0 ? Math.round((paradasCompletadasRuta / totalParadasRuta) * 100) : (['Completada', 'Finalizada', 'Aprobada'].includes(r.estado) ? 100 : 0);
+        const totalParadasRuta = Math.max(metaParadas, paradasRuta.length, 1);
+        const progresoRutaPct = ['Completada', 'Finalizada', 'Aprobada'].includes(r.estado)
+          ? 100
+          : Math.min(100, Math.round((paradasCompletadasRuta / totalParadasRuta) * 100));
+
+        // Extraer observación general de cierre de ruta dejada por el asesor
+        const comentariosArr = Array.isArray(r.comentarios) ? r.comentarios : [];
+        const comentarioCierreObj = [...comentariosArr].reverse().find(c =>
+          c.accion === 'CIERRE_RUTA' ||
+          c.accion === 'EJECUCION' ||
+          c.estadoNuevo === 'Finalizada' ||
+          c.estadoNuevo === 'Completada' ||
+          Boolean(c.observacionGeneral)
+        );
+        const observacionCierre = comentarioCierreObj?.observacionGeneral || comentarioCierreObj?.texto || '';
+        const fechaHoraCierre = r.fechaFinalizacion
+          ? formatHoraColombia(r.fechaFinalizacion)
+          : (comentarioCierreObj?.fecha ? formatHoraColombia(comentarioCierreObj.fecha) : null);
+
+        // Normalizar estrictamente a los 3 estados oficiales: Pendiente, En Curso, Finalizada
+        let estadoOficial = 'Pendiente';
+        if (['Finalizada', 'Completada', 'Aprobada'].includes(r.estado)) {
+          estadoOficial = 'Finalizada';
+        } else if (
+          ['En Curso', 'En ejecucion', 'En Progreso', 'En Corrección'].includes(r.estado) ||
+          paradasCompletadasRuta > 0 ||
+          paradasEnCursoRuta > 0
+        ) {
+          estadoOficial = 'En Curso';
+        }
 
         return {
           ...r,
+          estado: estadoOficial,
+          estadoOriginal: r.estado,
+          fechaColombia: fechaProgStr,
+          esRutaDeHoy: fechaProgStr === hoyCol,
+          observacionCierre,
+          fechaHoraCierre,
+          metaParadas,
           totalParadasRuta,
           paradasCompletadasRuta,
           paradasEnCursoRuta,
@@ -1934,8 +1993,8 @@ class CampoController {
             id: p.id,
             codigo: p.codigo,
             orden: idx + 1,
-            lugar: p.resultadoResumen || 'Parada programada',
-            estado: p.checkOutHora ? 'Realizada' : (p.checkInHora ? 'En Curso' : p.estado),
+            lugar: p.resultadoResumen || 'Parada en ruta',
+            estado: p.checkOutHora ? 'Realizada' : (p.checkInHora ? 'En Curso' : 'Pendiente'),
             horaLlegada: p.checkInHora ? formatHoraColombia(p.checkInHora) : null,
             horaSalida: p.checkOutHora ? formatHoraColombia(p.checkOutHora) : null,
             duracionMin: p.duracionMin || 0
@@ -1946,6 +2005,229 @@ class CampoController {
       res.json(rutasEnriquecidas);
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Iniciar Ruta Asignada (pasa a estado "En Curso")
+  async iniciarRutaAsignada(req, res) {
+    try {
+      const { id } = req.params;
+      const { comentario = '' } = req.body || {};
+      const result = await actividadesService.actualizarEstado(req.user.id, id, {
+        estado: 'En Curso',
+        accion: 'INICIAR_RUTA',
+        comentario: comentario || 'Ruta iniciada por el asesor en operación de campo.'
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'INICIAR_RUTA', ruta: result.actividad });
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ESTADO', actividad: result.actividad, tarea: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, ruta: result.actividad, actividad: result.actividad });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Cerrar / Finalizar Ruta Asignada con Observación General obligatoria para el Delegado
+  async cerrarRutaAsignada(req, res) {
+    try {
+      const { id } = req.params;
+      const { observacionGeneral, observacionCierre, comentario, evidencias = [], adjuntos = [] } = req.body || {};
+      const obsFinal = (observacionGeneral || observacionCierre || comentario || '').trim();
+      if (!obsFinal) {
+        return res.status(400).json({ error: 'Debe ingresar una observación general del cierre de la ruta para el Delegado.' });
+      }
+
+      const result = await actividadesService.actualizarEstado(req.user.id, id, {
+        estado: 'Finalizada',
+        accion: 'CIERRE_RUTA',
+        observacionGeneral: obsFinal,
+        comentario: obsFinal,
+        evidencias,
+        adjuntos
+      });
+      if (!result.success) return res.status(400).json({ error: result.error });
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_RUTA_FINALIZADA', {
+        rutaId: id,
+        codigo: result.actividad.codigo,
+        observacionGeneral: obsFinal
+      });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'CIERRE_RUTA', ruta: result.actividad, observacionCierre: obsFinal });
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ESTADO', actividad: result.actividad, tarea: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
+      }
+
+      res.json({ success: true, ruta: result.actividad, actividad: result.actividad });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Solicitar Acción / Exigir Seguimiento por parte del Delegado a un Asesor sobre Cliente, Ruta o Venta
+  async solicitarAccionDelegado(req, res) {
+    try {
+      if (!this.esDelegado(req.user)) {
+        return res.status(403).json({ error: 'Solo el Delegado de Gerencia puede emitir solicitudes de acción y exigir seguimiento.' });
+      }
+
+      const paramClienteId = req.params.id || null;
+      const {
+        usuarioId: bodyUsuarioId,
+        comercialId,
+        clienteExternoId: bodyClienteId,
+        clienteNombre: bodyClienteNombre = '',
+        rutaId = null,
+        ventaId = null,
+        tipoAccion = 'Seguimiento Obligatorio a Cliente',
+        titulo = '',
+        instrucciones = '',
+        observaciones = '',
+        prioridad = 'Alta',
+        fechaLimite = null
+      } = req.body || {};
+
+      let resolvedClienteId = paramClienteId || bodyClienteId || null;
+      let targetUserId = bodyUsuarioId || comercialId || null;
+      let nombreCliente = bodyClienteNombre || '';
+
+      if (resolvedClienteId) {
+        if (String(resolvedClienteId).startsWith('VIS-CLI-')) {
+          const visId = String(resolvedClienteId).replace('VIS-CLI-', '');
+          const visBase = await prisma.visitaCampo.findUnique({ where: { id: visId } }).catch(() => null);
+          if (visBase) {
+            targetUserId = targetUserId || visBase.usuarioId;
+            nombreCliente = nombreCliente || visBase.resultadoResumen || 'Cliente en Terreno';
+            // Promover a cliente formal para registrar el seguimiento exigido
+            let formal = await prisma.clienteExternoCampo.findFirst({
+              where: { nombre: { equals: nombreCliente, mode: 'insensitive' } }
+            });
+            if (!formal) {
+              const countC = await prisma.clienteExternoCampo.count();
+              formal = await prisma.clienteExternoCampo.create({
+                data: {
+                  codigo: `CLEX-${String(countC + 1).padStart(5, '0')}`,
+                  nombre: nombreCliente,
+                  contacto: visBase.contactoAtendio || nombreCliente,
+                  telefono: 'Registrado en campo',
+                  ciudad: 'Cartagena',
+                  direccion: visBase.observaciones || 'Visitado en terreno',
+                  sectorEconomico: visBase.tipoVisita || 'Comercio',
+                  origen: 'Visita en Terreno',
+                  tipoRegistro: 'Cliente Potencial',
+                  etapaEmbudo: 'Seguimiento',
+                  comercialId: targetUserId || req.user.id
+                }
+              });
+            }
+            resolvedClienteId = formal.id;
+          }
+        } else {
+          const cliObj = await prisma.clienteExternoCampo.findUnique({ where: { id: resolvedClienteId } }).catch(() => null);
+          if (cliObj) {
+            targetUserId = targetUserId || cliObj.comercialId;
+            nombreCliente = nombreCliente || cliObj.nombre;
+          }
+        }
+      }
+
+      if (!targetUserId && rutaId) {
+        const rObj = await prisma.actividadCampo.findUnique({ where: { id: rutaId } }).catch(() => null);
+        if (rObj) targetUserId = rObj.usuarioId;
+      }
+
+      if (!targetUserId && ventaId) {
+        const vObj = await prisma.ventaExternaCampo.findUnique({ where: { id: ventaId }, include: { clienteExterno: true } }).catch(() => null);
+        if (vObj) {
+          targetUserId = vObj.comercialId;
+          resolvedClienteId = resolvedClienteId || vObj.clienteExternoId;
+          nombreCliente = nombreCliente || vObj.clienteExterno?.nombre || '';
+        }
+      }
+
+      if (!targetUserId) {
+        return res.status(400).json({ error: 'Debe indicar el asesor comercial responsable de ejecutar la acción.' });
+      }
+
+      const detalleInstrucciones = (instrucciones || observaciones || `Realizar seguimiento inmediato y reportar gestión comercial${nombreCliente ? ` al cliente ${nombreCliente}` : ''}.`).trim();
+      const tituloAccion = (titulo || (nombreCliente ? `🚨 Seguimiento Exigido: ${nombreCliente}` : `🚨 Acción Exigida: ${tipoAccion}`)).trim();
+
+      // 1. Crear Tarea / Solicitud de Acción de Alta Prioridad en ActividadCampo
+      const actResult = await actividadesService.crearActividad(req.user.id, {
+        usuarioId: targetUserId,
+        titulo: tituloAccion,
+        descripcion: detalleInstrucciones,
+        prioridad: prioridad || 'Alta',
+        fechaProgramada: fechaLimite || new Date(),
+        prefijoCodigo: 'ACC',
+        esSolicitudAccion: true,
+        clienteExternoId: resolvedClienteId,
+        clienteNombre: nombreCliente
+      });
+
+      // 2. Si está asociado a un cliente, dejar trazabilidad directa en SeguimientoCampo como exigencia del Delegado
+      let seguimientoCreado = null;
+      if (resolvedClienteId) {
+        seguimientoCreado = await prisma.seguimientoCampo.create({
+          data: {
+            clienteExternoId: resolvedClienteId,
+            usuarioId: targetUserId,
+            tipoAccion: 'Solicitud del Delegado',
+            resultado: 'Seguimiento Exigido por Delegado',
+            observaciones: detalleInstrucciones,
+            compromisos: detalleInstrucciones,
+            proximaActividad: tituloAccion,
+            fechaProgramada: fechaLimite ? new Date(fechaLimite) : new Date()
+          },
+          include: {
+            clienteExterno: true,
+            usuario: { select: { id: true, nombre: true, apellido: true } }
+          }
+        }).catch(() => null);
+      }
+
+      await this.registrarAuditoria(req.user.id, 'CAMPO_SOLICITUD_ACCION_DELEGADO', {
+        usuarioId: targetUserId,
+        clienteExternoId: resolvedClienteId,
+        clienteNombre: nombreCliente,
+        titulo: tituloAccion,
+        instrucciones: detalleInstrucciones
+      });
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACCION_DELEGADO', {
+          usuarioId: targetUserId,
+          clienteExternoId: resolvedClienteId,
+          clienteNombre: nombreCliente,
+          actividad: actResult.actividad,
+          seguimiento: seguimientoCreado,
+          instrucciones: detalleInstrucciones,
+          timestamp: Date.now()
+        });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'CREAR', tarea: actResult.actividad, actividad: actResult.actividad });
+        if (seguimientoCreado) {
+          io.emit('CAMPO_SEGUIMIENTO_UPDATE', { accion: 'CREAR', seguimiento: seguimientoCreado });
+        }
+        io.emit('db_update', { type: 'CAMPO_ACCION_DELEGADO', timestamp: Date.now() });
+      }
+
+      res.status(201).json({
+        success: true,
+        message: 'Solicitud de acción enviada en tiempo real al asesor en campo.',
+        actividad: actResult.actividad,
+        seguimiento: seguimientoCreado
+      });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
     }
   }
 
@@ -4989,9 +5271,9 @@ class CampoController {
         advisorColorMap[u.id] = i % 8;
       });
 
-      // 4. Obtener jornadas de hoy, últimas jornadas históricas, pings GPS, rutas asignadas y pausas de almuerzo
+      // 4. Obtener jornadas de hoy, últimas jornadas históricas, pings GPS, rutas asignadas, pausas de almuerzo, ventas y clientes
       const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
-      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw, paradasRutaRaw, pausasRaw] = await Promise.all([
+      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw, paradasRutaRaw, pausasRaw, visitasRealesParaRutas, ventasCampoRaw, clientesCampoRaw] = await Promise.all([
         prisma.jornadaLaboral.findMany({
           where: {
             usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
@@ -5066,6 +5348,37 @@ class CampoController {
           },
           orderBy: { horaInicio: 'desc' },
           take: 100
+        }).catch(() => []),
+        prisma.visitaCampo.findMany({
+          where: {
+            ...(targetUserId ? { usuarioId: targetUserId } : { usuarioId: { in: usuariosCampoIds } }),
+            checkInHora: { not: null }
+          },
+          orderBy: { checkInHora: 'asc' },
+          take: 500
+        }).catch(() => []),
+        prisma.ventaExternaCampo.findMany({
+          where: {
+            ...(targetUserId ? { comercialId: targetUserId } : { comercialId: { in: usuariosCampoIds } })
+          },
+          include: {
+            clienteExterno: true,
+            comercial: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true } }
+          },
+          orderBy: { fecha: 'desc' },
+          take: 200
+        }).catch(() => []),
+        prisma.clienteExternoCampo.findMany({
+          where: {
+            ...(targetUserId ? { comercialId: targetUserId } : { comercialId: { in: usuariosCampoIds } })
+          },
+          include: {
+            comercial: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true } },
+            seguimientos: { orderBy: { fechaHora: 'desc' }, take: 10 },
+            _count: { select: { visitas: true, seguimientos: true, cotizaciones: true, ventas: true } }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 200
         }).catch(() => [])
       ]);
 
@@ -5156,20 +5469,123 @@ class CampoController {
         };
       });
 
-      // Construir Rutas Asignadas con estado real de cada parada
+      // Construir Ventas de Campo y Auditoría de Clientes sin Seguimiento
+      const ventasFormateadas = (ventasCampoRaw || []).map(v => {
+        const dVenta = new Date(v.fecha || v.createdAt);
+        const fechaColVenta = getFechaColombia(dVenta);
+        const nomAsesorV = `${v.comercial?.nombre || ''} ${v.comercial?.apellido || ''}`.trim() || v.comercial?.user || 'Asesor';
+        return {
+          id: v.id,
+          codigo: v.codigo,
+          comercialId: v.comercialId,
+          usuarioId: v.comercialId,
+          asesorNombre: nomAsesorV,
+          clienteExternoId: v.clienteExternoId,
+          clienteNombre: v.clienteExterno?.nombre || 'Cliente Comercial',
+          clienteTelefono: v.clienteExterno?.telefono || '',
+          clienteDireccion: v.clienteExterno?.direccion || '',
+          valorVendido: Number(v.valorVendido || 0),
+          metodoPago: v.metodoPago || 'Contado',
+          observaciones: v.observaciones || '',
+          items: Array.isArray(v.items) ? v.items : [],
+          estado: v.estado || 'Cerrada',
+          fecha: fechaColVenta,
+          fechaIso: dVenta.toISOString(),
+          hora: formatHoraColombia(dVenta),
+          esDeHoy: fechaColVenta === hoyColombia
+        };
+      });
+      const ventasDia = ventasFormateadas.filter(v => v.esDeHoy);
+
+      const clientesAuditados = (clientesCampoRaw || []).map(c => {
+        const segs = Array.isArray(c.seguimientos) ? c.seguimientos : [];
+        const segsReales = segs.filter(s => !(s.tipoAccion === 'Observacion' && String(s.resultado || '').startsWith('Registro Inicial')));
+        const solicitudDelegado = segs.find(s =>
+          s.tipoAccion === 'Solicitud del Delegado' ||
+          String(s.resultado || '').toLowerCase().includes('exigido por delegado')
+        );
+        const segsPosteriores = solicitudDelegado
+          ? segsReales.filter(s => s.id !== solicitudDelegado.id && new Date(s.fechaHora) > new Date(solicitudDelegado.fechaHora))
+          : [];
+        const tieneSolicitudAccionPendiente = Boolean(solicitudDelegado && segsPosteriores.length === 0);
+        const visitasRealesCliente = (visitasRealesParaRutas || []).filter(v =>
+          v.clienteExternoId === c.id ||
+          (c.nombre && String(v.resultadoResumen || '').trim().toLowerCase() === String(c.nombre).trim().toLowerCase())
+        ).length;
+        const totalVisitasC = Math.max(c._count?.visitas || 0, visitasRealesCliente);
+        const sinSeguimientoPostRegistro = segsReales.length === 0 && totalVisitasC === 0;
+        const ultimaFechaG = segsReales[0]?.fechaHora || c.updatedAt || c.createdAt;
+        const diasSinSeg = ultimaFechaG ? Math.max(0, Math.floor((ahora.getTime() - new Date(ultimaFechaG).getTime()) / (24 * 3600 * 1000))) : 0;
+        const requiereSeguimientoObligatorio = sinSeguimientoPostRegistro || tieneSolicitudAccionPendiente || diasSinSeg >= 3;
+        const nomAsesorC = `${c.comercial?.nombre || ''} ${c.comercial?.apellido || ''}`.trim() || c.comercial?.user || 'Asesor';
+
+        return {
+          id: c.id,
+          codigo: c.codigo,
+          nombre: c.nombre,
+          contacto: c.contacto || c.nombre,
+          telefono: c.telefono || '',
+          direccion: c.direccion || '',
+          ciudad: c.ciudad || 'Cartagena',
+          etapaEmbudo: c.etapaEmbudo || 'Prospecto',
+          tipoRegistro: c.tipoRegistro || 'Cliente Potencial',
+          comercialId: c.comercialId,
+          asesorNombre: nomAsesorC,
+          fechaRegistro: getFechaColombia(c.createdAt),
+          seguimientosRealesCount: segsReales.length,
+          totalVisitas: totalVisitasC,
+          sinSeguimientoPostRegistro,
+          tieneSolicitudAccionPendiente,
+          solicitudAccionInstrucciones: tieneSolicitudAccionPendiente ? (solicitudDelegado.observaciones || 'Realizar seguimiento comercial inmediato') : null,
+          diasSinSeguimiento: diasSinSeg,
+          requiereSeguimientoObligatorio,
+          motivoExigencia: tieneSolicitudAccionPendiente
+            ? 'Acción Exigida por el Delegado'
+            : (sinSeguimientoPostRegistro ? 'Cliente registrado sin seguimiento posterior' : `${diasSinSeg} días sin seguimiento`)
+        };
+      });
+      const clientesSinSeguimiento = clientesAuditados.filter(c => c.requiereSeguimientoObligatorio);
+
+      // Construir Rutas Asignadas con estado oficial (Pendiente, En Curso, Finalizada), paradas reales del día y observación general de cierre
       const rutasAsignadas = rutasActividadRaw.map(r => {
-        const paradasDeEstaRuta = paradasRutaRaw.filter(p =>
+        const fechaProgStr = r.fechaProgramada ? getFechaColombia(r.fechaProgramada) : getFechaColombia(r.createdAt);
+        const paradasExplicitas = paradasRutaRaw.filter(p =>
           p.usuarioId === r.usuarioId &&
           r.codigo &&
-          (p.observaciones || '').includes(`[Ruta ${r.codigo}]`)
+          (p.observaciones || '').includes(`[Ruta ${r.codigo}]`) &&
+          !(/^\d+$/.test(String(p.resultadoResumen || '').trim()) && !p.checkInHora)
         );
-        const paradasFormateadas = paradasDeEstaRuta.map((p, idx) => {
+        const visitasRealesEnFechaRuta = (visitasRealesParaRutas || []).filter(v =>
+          v.usuarioId === r.usuarioId &&
+          v.checkInHora &&
+          getFechaColombia(v.checkInHora) === fechaProgStr
+        );
+
+        const paradasMap = new Map();
+        paradasExplicitas.forEach(p => paradasMap.set(p.id, p));
+        visitasRealesEnFechaRuta.forEach(v => {
+          if (!paradasMap.has(v.id)) paradasMap.set(v.id, v);
+        });
+        const paradasCombinadas = Array.from(paradasMap.values());
+
+        let metaParadas = 0;
+        const descStr = String(r.descripcion || '');
+        const matchMeta = descStr.match(/Paradas:\s*(\d+)/i) || descStr.match(/Meta de paradas:\s*(\d+)/i) || descStr.match(/Paradas asignadas:\s*(\d+)/i);
+        if (matchMeta && matchMeta[1]) {
+          metaParadas = Math.max(0, parseInt(matchMeta[1], 10));
+        }
+
+        const paradasFormateadas = paradasCombinadas.map((p, idx) => {
           const tieneCheckIn = Boolean(p.checkInHora);
           const tieneCheckOut = Boolean(p.checkOutHora);
-          const estadoParada = tieneCheckOut ? 'Realizada' : (tieneCheckIn ? 'En Sitio' : 'Pendiente');
+          const fechaParadaCol = tieneCheckIn ? getFechaColombia(p.checkInHora) : null;
+          const cerradaEfectiva = tieneCheckOut || (tieneCheckIn && fechaParadaCol !== hoyColombia);
+          const estadoParada = cerradaEfectiva ? 'Realizada' : (tieneCheckIn ? 'En Sitio' : 'Pendiente');
           let durMin = p.duracionMin || 0;
-          if (tieneCheckIn && !tieneCheckOut) {
+          if (tieneCheckIn && !cerradaEfectiva) {
             durMin = Math.min(240, Math.max(1, Math.round((ahora - new Date(p.checkInHora)) / 60000)));
+          } else if (cerradaEfectiva && durMin <= 0 && tieneCheckIn && tieneCheckOut) {
+            durMin = Math.max(1, Math.round((new Date(p.checkOutHora) - new Date(p.checkInHora)) / 60000));
           }
           return {
             id: p.id,
@@ -5181,39 +5597,78 @@ class CampoController {
             checkInHora: p.checkInHora,
             checkOutHora: p.checkOutHora,
             horaLlegada: p.checkInHora ? formatHoraColombia(p.checkInHora) : null,
-            horaSalida: p.checkOutHora ? formatHoraColombia(p.checkOutHora) : (p.checkInHora ? 'En Sitio' : null),
-            fechaReal: p.checkInHora ? getFechaColombia(p.checkInHora) : null,
+            horaSalida: p.checkOutHora ? formatHoraColombia(p.checkOutHora) : (tieneCheckIn ? (cerradaEfectiva ? 'Cerrada' : 'En Sitio') : null),
+            fechaReal: fechaParadaCol,
             duracionMin: durMin,
             duracionTexto: tieneCheckIn ? (durMin >= 60 ? `${Math.floor(durMin / 60)}h ${durMin % 60}m` : `${durMin} min`) : 'Pendiente',
             lat: p.checkInLat || null,
             lng: p.checkInLng || null
           };
         });
+
         const completadasCount = paradasFormateadas.filter(p => p.estado === 'Realizada').length;
         const enSitioCount = paradasFormateadas.filter(p => p.estado === 'En Sitio').length;
-        const totalP = paradasFormateadas.length;
-        const progresoPct = totalP > 0 ? Math.round((completadasCount / totalP) * 100) : (r.estado === 'Completada' ? 100 : 0);
-        const estadoRutaReal = totalP > 0
-          ? (completadasCount === totalP ? 'Completada' : ((completadasCount > 0 || enSitioCount > 0) ? 'En Curso' : 'Pendiente'))
-          : (r.estado || 'Pendiente');
+        const totalP = Math.max(metaParadas, paradasFormateadas.length, 1);
+
+        // Extraer observación general de cierre de la ruta
+        const comentariosRuta = Array.isArray(r.comentarios) ? r.comentarios : [];
+        const cierreCommentObj = [...comentariosRuta].reverse().find(c =>
+          c.accion === 'CIERRE_RUTA' ||
+          c.accion === 'EJECUCION' ||
+          c.estadoNuevo === 'Finalizada' ||
+          c.estadoNuevo === 'Completada' ||
+          Boolean(c.observacionGeneral)
+        );
+        const observacionCierre = cierreCommentObj?.observacionGeneral || cierreCommentObj?.texto || '';
+        const horaCierre = r.fechaFinalizacion
+          ? formatHoraColombia(r.fechaFinalizacion)
+          : (cierreCommentObj?.fecha ? formatHoraColombia(cierreCommentObj.fecha) : null);
+
+        // Estado oficial de la ruta: Pendiente, En Curso, Finalizada
+        let estadoRutaReal = 'Pendiente';
+        if (['Finalizada', 'Completada', 'Aprobada'].includes(r.estado)) {
+          estadoRutaReal = 'Finalizada';
+        } else if (
+          ['En Curso', 'En ejecucion', 'En Progreso', 'En Corrección'].includes(r.estado) ||
+          completadasCount > 0 ||
+          enSitioCount > 0
+        ) {
+          estadoRutaReal = 'En Curso';
+        }
+
+        const progresoPct = estadoRutaReal === 'Finalizada'
+          ? 100
+          : Math.min(100, Math.round((completadasCount / totalP) * 100));
 
         const nombreAsesorRuta = `${r.usuario?.nombre || ''} ${r.usuario?.apellido || ''}`.trim() || r.usuario?.user || 'Asesor';
-        const fechaProgStr = r.fechaProgramada ? getFechaColombia(r.fechaProgramada) : getFechaColombia(r.createdAt);
+        const instruccionesLimpia = descStr
+          .replace(/^Instrucciones del Delegado:\s*/i, '')
+          .replace(/\nParadas asignadas:.*$/i, '')
+          .trim();
+
         return {
           id: r.id,
           codigo: r.codigo,
           titulo: r.titulo,
-          objetivo: r.descripcion || r.titulo || 'Ruta comercial asignada',
+          nombreZona: String(r.titulo || '').replace(/^Ruta:\s*/i, '').trim() || r.titulo,
+          objetivo: instruccionesLimpia || r.titulo || 'Ruta comercial asignada',
           descripcion: r.descripcion || '',
+          instrucciones: instruccionesLimpia,
           usuarioId: r.usuarioId,
           asesorNombre: nombreAsesorRuta,
           colorIndex: advisorColorMap[r.usuarioId] !== undefined ? advisorColorMap[r.usuarioId] : 0,
           fecha: fechaProgStr,
           fechaProgramada: fechaProgStr,
+          esRutaDeHoy: fechaProgStr === hoyColombia,
           fechaCreacion: getFechaColombia(r.createdAt),
           horaCreacion: formatHoraColombia(r.createdAt),
           estado: estadoRutaReal,
+          estadoOriginal: r.estado,
+          observacionCierre,
+          horaCierre,
+          comentarios: comentariosRuta,
           prioridad: r.prioridad || 'Alta',
+          metaParadas,
           totalParadas: totalP,
           paradasCompletadas: completadasCount,
           paradasEnSitio: enSitioCount,
@@ -5458,7 +5913,21 @@ class CampoController {
           }
         });
 
-        const rutasAsesor = rutasAsignadas.filter(r => r.usuarioId === u.id);
+        const rutasAsesor = rutasAsignadas
+          .filter(r => r.usuarioId === u.id)
+          .sort((a, b) => String(b.fecha || '').localeCompare(String(a.fecha || '')));
+        const rutaHoy = rutasAsesor.find(r => r.esRutaDeHoy || r.fecha === hoyColombia) || null;
+        const ultimaRuta = rutasAsesor[0] || null;
+        const rutaPrincipal = rutaHoy || ultimaRuta || null;
+
+        const ventasAsesor = ventasFormateadas.filter(v => v.comercialId === u.id);
+        const ventasHoyAsesor = ventasAsesor.filter(v => v.esDeHoy);
+        const ventasHoyMonto = ventasHoyAsesor.reduce((acc, v) => acc + (v.valorVendido || 0), 0);
+        const ventasPeriodoMonto = ventasAsesor.reduce((acc, v) => acc + (v.valorVendido || 0), 0);
+
+        const clientesAsesor = clientesAuditados.filter(c => c.comercialId === u.id);
+        const clientesSinSegAsesor = clientesAsesor.filter(c => c.requiereSeguimientoObligatorio);
+
         const pausasAsesor = pausasAlmuerzo.filter(p => p.usuarioId === u.id);
         const pausasHoyAsesor = pausasAsesor.filter(p => p.esDeHoy);
         const pausaActiva = pausasHoyAsesor.find(p => p.enCurso) || null;
@@ -5563,6 +6032,24 @@ class CampoController {
             lng: ultimaParada.checkInLng
           } : null,
           rutasAsignadas: rutasAsesor,
+          rutaHoy,
+          ultimaRuta,
+          rutaPrincipal: rutaPrincipal ? {
+            ...rutaPrincipal,
+            esRutaDeHoy: Boolean(rutaHoy),
+            etiquetaAsignacion: rutaHoy
+              ? 'Ruta Asignada de Hoy'
+              : `Última Ruta Asignada (${rutaPrincipal.fecha})`
+          } : null,
+          ventasHoy: ventasHoyAsesor,
+          ventasHoyCount: ventasHoyAsesor.length,
+          ventasHoyMonto,
+          ventasPeriodo: ventasAsesor,
+          ventasPeriodoCount: ventasAsesor.length,
+          ventasPeriodoMonto,
+          clientesRegistradosCount: clientesAsesor.length,
+          clientesSinSeguimientoCount: clientesSinSegAsesor.length,
+          clientesSinSeguimientoLista: clientesSinSegAsesor.slice(0, 10),
           recorridoHoy,
           trazabilidad: [...uMovs].reverse()
         };
@@ -5690,6 +6177,9 @@ class CampoController {
         evolucionMensual,
         rutasAsignadas,
         pausasAlmuerzo,
+        ventasDia,
+        ventasRecientes: ventasFormateadas,
+        clientesSinSeguimiento,
         asesores: asesoresDetalle,
         movimientos: movimientosDesc
       });

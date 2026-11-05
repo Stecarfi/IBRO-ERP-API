@@ -79,7 +79,8 @@ class ActividadesService {
       asignadoAId = null,
       comercialId = null,
       usuarioAsignadoId = null,
-      visitaId = null
+      visitaId = null,
+      prefijoCodigo = 'ACT'
     } = data;
 
     if (!titulo || !titulo.trim()) {
@@ -89,10 +90,10 @@ class ActividadesService {
     const targetUserId = asignadoAId || comercialId || usuarioAsignadoId || data.usuarioId || usuarioId;
 
     const count = await prisma.actividadCampo.count();
-    let codigo = `ACT-${String(count + 1).padStart(5, '0')}`;
+    let codigo = `${prefijoCodigo}-${String(count + 1).padStart(5, '0')}`;
     const exists = await prisma.actividadCampo.findUnique({ where: { codigo } });
     if (exists) {
-      codigo = `ACT-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
+      codigo = `${prefijoCodigo}-${Date.now().toString().slice(-5)}-${Math.floor(Math.random() * 90 + 10)}`;
     }
 
     const fechaObj = String(fechaProgramada).includes('T')
@@ -116,13 +117,15 @@ class ActividadesService {
         fecha: new Date().toISOString(),
         usuarioId,
         usuario: creadorNombre,
-        accion: 'CREACION',
+        accion: data.esSolicitudAccion ? 'SOLICITUD_ACCION_DELEGADO' : 'CREACION',
         tipo: 'evento',
         estadoAnterior: null,
         estadoNuevo: 'Pendiente',
         responsableAnterior: null,
         responsableActual: responsableNombre,
         responsableActualId: targetUserId,
+        clienteExternoId: data.clienteExternoId || null,
+        clienteNombre: data.clienteNombre || null,
         texto: `Tarea asignada a ${responsableNombre} por ${creadorNombre}.${descripcion ? ` Instrucciones: ${descripcion.trim()}` : ''}`
       }
     ];
@@ -156,10 +159,10 @@ class ActividadesService {
           data: {
             id: notifId,
             paraId: targetUserId,
-            titulo: 'Nueva Tarea Asignada por el Delegado',
-            mensaje: `El Delegado de Gerencia ${creadorNombre} le ha asignado la tarea: "${titulo.trim()}". Prioridad: ${prioridad}.`,
+            titulo: data.esSolicitudAccion ? '🚨 Solicitud de Acción del Delegado' : 'Nueva Tarea Asignada por el Delegado',
+            mensaje: `El Delegado de Gerencia ${creadorNombre} le ha asignado: "${titulo.trim()}". ${descripcion ? `Detalle: ${descripcion.trim()}` : ''}`,
             de: creadorNombre,
-            tipo: 'actividad_asignada',
+            tipo: data.esSolicitudAccion ? 'solicitud_accion' : 'actividad_asignada',
             fecha: new Date(),
             leida: false,
             targetModule: 'comercial_campo'
@@ -174,10 +177,23 @@ class ActividadesService {
   }
 
   /**
-   * Actualizar estado de una actividad (Pendiente, En ejecucion, Finalizada, Completada, Aprobada, En Corrección, Reprogramada)
+   * Actualizar estado de una actividad o ruta (Pendiente, En Curso, Finalizada, Completada, Aprobada, En Corrección, Reprogramada)
    */
   async actualizarEstado(usuarioId, actividadId, data) {
-    const { estado, comentario = '', nuevaFecha = null, evidencias = [], adjuntos = [], accion = null, instrucciones = '', motivo = '' } = data;
+    const {
+      estado,
+      comentario = '',
+      observacionGeneral = '',
+      observacionCierre = '',
+      nuevaFecha = null,
+      evidencias = [],
+      adjuntos = [],
+      accion = null,
+      instrucciones = '',
+      motivo = ''
+    } = data;
+
+    const comentarioEfectivo = (observacionGeneral || observacionCierre || comentario || '').trim();
 
     const actividad = await prisma.actividadCampo.findUnique({
       where: { id: actividadId },
@@ -188,18 +204,26 @@ class ActividadesService {
     });
 
     if (!actividad) {
-      return { success: false, error: 'Actividad / Tarea no encontrada.' };
+      return { success: false, error: 'Actividad / Ruta no encontrada.' };
     }
+
+    const esRuta = (actividad.codigo || '').startsWith('RUT-') || (actividad.titulo || '').toLowerCase().startsWith('ruta:');
 
     let nuevoEstado = estado || actividad.estado;
     if (accion === 'APROBACION') nuevoEstado = 'Aprobada';
     if (accion === 'SOLICITUD_CORRECCION') nuevoEstado = 'En Corrección';
-    if (accion === 'REAPERTURA') nuevoEstado = 'En ejecucion';
+    if (accion === 'REAPERTURA') nuevoEstado = esRuta ? 'En Curso' : 'En ejecucion';
+    if (accion === 'INICIAR_RUTA' || (esRuta && (nuevoEstado === 'En ejecucion' || nuevoEstado === 'En Progreso'))) {
+      nuevoEstado = 'En Curso';
+    }
+    if (accion === 'CIERRE_RUTA' || (esRuta && (nuevoEstado === 'Completada' || nuevoEstado === 'Finalizada'))) {
+      nuevoEstado = 'Finalizada';
+    }
 
     const updateData = { estado: nuevoEstado };
     if (nuevoEstado === 'Finalizada' || nuevoEstado === 'Completada' || nuevoEstado === 'Aprobada') {
       updateData.fechaFinalizacion = new Date();
-    } else if (nuevoEstado === 'En Corrección' || nuevoEstado === 'En ejecucion' || nuevoEstado === 'Pendiente') {
+    } else if (nuevoEstado === 'En Corrección' || nuevoEstado === 'En ejecucion' || nuevoEstado === 'En Curso' || nuevoEstado === 'Pendiente') {
       updateData.fechaFinalizacion = null;
     }
 
@@ -215,24 +239,30 @@ class ActividadesService {
       if (u) userName = `${u.nombre || ''} ${u.apellido || ''}`.trim() || u.user || 'Colaborador';
     } catch (e) {}
 
-    const existingComments = Array.isArray(actividad.comentarios) ? actividad.comentarios : [];
+    const existingComments = Array.isArray(actividad.comentarios) ? [...actividad.comentarios] : [];
     const incomingEvidencias = Array.isArray(evidencias) && evidencias.length > 0 ? evidencias : (Array.isArray(adjuntos) ? adjuntos : []);
-    
+
     // Determinar detalle y tipo de acción de auditoría
     let accionEvento = accion || 'CAMBIO_ESTADO';
-    let textoEvento = comentario || '';
+    let textoEvento = comentarioEfectivo || '';
     if (nuevoEstado === 'Aprobada' || accion === 'APROBACION') {
       accionEvento = 'APROBACION';
-      textoEvento = comentario || 'Gestión verificada y aprobada por el Delegado de Gerencia.';
+      textoEvento = comentarioEfectivo || 'Gestión verificada y aprobada por el Delegado de Gerencia.';
     } else if (nuevoEstado === 'En Corrección' || accion === 'SOLICITUD_CORRECCION') {
       accionEvento = 'SOLICITUD_CORRECCION';
-      textoEvento = instrucciones || comentario || 'El Delegado de Gerencia solicitó correcciones sobre la gestión realizada.';
+      textoEvento = instrucciones || comentarioEfectivo || 'El Delegado de Gerencia solicitó correcciones sobre la gestión realizada.';
     } else if (accion === 'REAPERTURA') {
       accionEvento = 'REAPERTURA';
-      textoEvento = motivo || comentario || 'Actividad reabierta por el Delegado de Gerencia para seguimiento.';
+      textoEvento = motivo || comentarioEfectivo || 'Actividad/Ruta reabierta por el Delegado de Gerencia para seguimiento.';
+    } else if (esRuta && (nuevoEstado === 'Finalizada' || nuevoEstado === 'Completada' || accion === 'CIERRE_RUTA')) {
+      accionEvento = 'CIERRE_RUTA';
+      textoEvento = comentarioEfectivo || 'Ruta finalizada en terreno por el asesor.';
+    } else if (esRuta && nuevoEstado === 'En Curso') {
+      accionEvento = 'INICIAR_RUTA';
+      textoEvento = comentarioEfectivo || 'Ruta iniciada y puesta en curso por el asesor en campo.';
     } else if (nuevoEstado === 'Completada' || nuevoEstado === 'Finalizada') {
       accionEvento = 'EJECUCION';
-      textoEvento = comentario || 'Tarea ejecutada y marcada como completada en terreno.';
+      textoEvento = comentarioEfectivo || 'Tarea ejecutada y marcada como completada en terreno.';
     }
 
     const eventoAuditoria = {
@@ -244,6 +274,7 @@ class ActividadesService {
       estadoAnterior: actividad.estado,
       estadoNuevo: nuevoEstado,
       texto: textoEvento,
+      observacionGeneral: (accionEvento === 'CIERRE_RUTA' || accionEvento === 'EJECUCION') ? textoEvento : undefined,
       evidencias: incomingEvidencias.length > 0 ? incomingEvidencias : undefined
     };
 
@@ -267,18 +298,17 @@ class ActividadesService {
     // Notificaciones cruzadas automáticas
     try {
       const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
-      const esRuta = (actividad.codigo || '').startsWith('RUT-') || (actividad.titulo || '').toLowerCase().startsWith('ruta:');
-      
+
       // Si el Delegado solicita corrección o aprueba, notificar al asesor
       if ((nuevoEstado === 'En Corrección' || nuevoEstado === 'Aprobada') && actividad.usuarioId) {
         await prisma.notificacion.create({
           data: {
             id: notifId,
             paraId: actividad.usuarioId,
-            titulo: nuevoEstado === 'Aprobada' ? 'Gestión de Tarea Aprobada' : '⚠️ Solicitud de Corrección en Tarea',
+            titulo: nuevoEstado === 'Aprobada' ? 'Gestión Aprobada por el Delegado' : '⚠️ Solicitud de Corrección del Delegado',
             mensaje: nuevoEstado === 'Aprobada'
-              ? `El Delegado de Gerencia ${userName} ha aprobado la gestión de la tarea: "${actividad.titulo}".`
-              : `El Delegado de Gerencia ${userName} ha devuelto la tarea "${actividad.titulo}" para corrección: "${textoEvento}".`,
+              ? `El Delegado de Gerencia ${userName} ha aprobado la gestión de "${actividad.titulo}".`
+              : `El Delegado de Gerencia ${userName} solicita acción/corrección sobre "${actividad.titulo}": "${textoEvento}".`,
             de: userName,
             tipo: nuevoEstado === 'Aprobada' ? 'tarea_aprobada' : 'tarea_correccion',
             fecha: new Date(),
@@ -286,14 +316,23 @@ class ActividadesService {
             targetModule: 'comercial_campo'
           }
         });
-      } else if ((nuevoEstado === 'Completada' || nuevoEstado === 'Finalizada') && actividad.asignadoPorId && actividad.asignadoPorId !== usuarioId) {
-        // Asesor cumplió la tarea: notificar al Delegado
+      } else if ((nuevoEstado === 'Completada' || nuevoEstado === 'Finalizada' || nuevoEstado === 'En Curso') && actividad.asignadoPorId && actividad.asignadoPorId !== usuarioId) {
+        // Asesor inició o cerró ruta / cumplió tarea: notificar al Delegado
+        const tituloNotif = esRuta
+          ? (nuevoEstado === 'En Curso' ? `📍 Ruta en Curso (${actividad.codigo})` : `✅ Ruta Finalizada (${actividad.codigo})`)
+          : 'Cumplimiento de Tarea Registrado';
+        const mensajeNotif = esRuta
+          ? (nuevoEstado === 'En Curso'
+            ? `El asesor ${userName} puso EN CURSO la "${actividad.titulo}".`
+            : `El asesor ${userName} FINALIZÓ la "${actividad.titulo}". Observación general de cierre: "${textoEvento}"`)
+          : `El asesor ${userName} completó la tarea: "${actividad.titulo}".${comentarioEfectivo ? ` Observaciones: ${comentarioEfectivo}` : ''}`;
+
         await prisma.notificacion.create({
           data: {
             id: notifId,
             paraId: actividad.asignadoPorId,
-            titulo: esRuta ? 'Cumplimiento de Ruta Registrado' : 'Cumplimiento de Tarea Registrado',
-            mensaje: `El asesor ${userName} completó la tarea: "${actividad.titulo}".${comentario ? ` Observaciones: ${comentario}` : ''}`,
+            titulo: tituloNotif,
+            mensaje: mensajeNotif,
             de: userName,
             tipo: 'cumplimiento_asignacion',
             fecha: new Date(),
