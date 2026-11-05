@@ -6,7 +6,8 @@ class OperacionExternaService {
   // =================================================================
 
   /**
-   * Obtiene la cartera de clientes externos y prospectos con filtros
+   * Obtiene la cartera de clientes externos y prospectos con filtros,
+   * consolidando tanto el directorio formal como los clientes reales atendidos en visitas de terreno.
    */
   async getClientesExternos({ usuarioId, etapa, tipo, search, esDelegado = false }) {
     const where = {};
@@ -36,29 +37,197 @@ class OperacionExternaService {
       ];
     }
 
-    return prisma.clienteExternoCampo.findMany({
-      where,
-      include: {
-        comercial: {
-          select: { id: true, nombre: true, apellido: true, cargo: true }
-        },
-        _count: {
-          select: {
-            visitas: true,
-            seguimientos: true,
-            cotizaciones: true,
-            ventas: true
+    const [clientesFormales, visitasReales] = await Promise.all([
+      prisma.clienteExternoCampo.findMany({
+        where,
+        include: {
+          comercial: {
+            select: { id: true, nombre: true, apellido: true, cargo: true }
+          },
+          _count: {
+            select: {
+              visitas: true,
+              seguimientos: true,
+              cotizaciones: true,
+              ventas: true
+            }
           }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.visitaCampo.findMany({
+        where: {
+          checkInHora: { not: null },
+          ...((!esDelegado && usuarioId) ? { usuarioId } : (usuarioId && usuarioId !== 'TODOS' ? { usuarioId } : {}))
+        },
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } }
+        },
+        orderBy: { checkInHora: 'desc' }
+      })
+    ]);
+
+    const nombresFormalesMap = new Map();
+    clientesFormales.forEach(c => {
+      const key = (c.nombre || '').trim().toLowerCase();
+      if (key) nombresFormalesMap.set(key, c);
     });
+
+    // Agrupar clientes visitados en terreno y vincular/enriquecer conteo real de visitas
+    const clientesDeVisitasMap = new Map();
+    visitasReales.forEach(v => {
+      const rawNombre = (v.resultadoResumen || '').trim();
+      if (!rawNombre) return;
+      // Ignorar nombres genéricos de rutas o etiquetas de parada sin nombre de cliente real
+      if (
+        /^\[Ruta\s/i.test(rawNombre) ||
+        /^Parada\s*#/i.test(rawNombre) ||
+        /^\d+\s*:\s*Zonas/i.test(rawNombre) ||
+        /^Realizar la cobertura/i.test(rawNombre) ||
+        /^Cubrir la zona/i.test(rawNombre) ||
+        /^Cada uno de los clientes/i.test(rawNombre)
+      ) {
+        return;
+      }
+
+      const normKey = rawNombre.toLowerCase();
+      if (nombresFormalesMap.has(normKey)) {
+        const formal = nombresFormalesMap.get(normKey);
+        if (formal._count) {
+          formal._count.visitas = Math.max(formal._count.visitas || 0, (formal._visitasTerrenoCount || 0) + 1);
+          formal._visitasTerrenoCount = (formal._visitasTerrenoCount || 0) + 1;
+        }
+        return;
+      }
+
+      let dirExtraida = '';
+      if (v.observaciones && v.observaciones.includes('(') && v.observaciones.includes(')')) {
+        const m = v.observaciones.match(/\((.*?)\)/);
+        if (m && m[1] && !m[1].includes('Cierre por')) dirExtraida = m[1];
+      }
+
+      if (!clientesDeVisitasMap.has(normKey)) {
+        const etapaCalculada = v.resultadoVisita === 'Venta Cerrada' || v.resultadoVisita === 'Pedido Tomado'
+          ? 'Venta'
+          : (v.resultadoVisita === 'Cotización Solicitada' ? 'Cotizacion' : (v.resultadoVisita === 'Seguimiento Programado' ? 'Seguimiento' : 'Visita'));
+
+        clientesDeVisitasMap.set(normKey, {
+          id: v.clienteExternoId || `VIS-CLI-${v.id}`,
+          visitaOrigenId: v.id,
+          codigo: v.codigo || 'CLI-CAMPO',
+          nombre: rawNombre,
+          nitDoc: null,
+          contacto: v.contactoAtendio || rawNombre,
+          telefono: null,
+          correo: null,
+          ciudad: 'Cartagena',
+          direccion: dirExtraida || v.observaciones || 'Registrado en visita de campo',
+          sectorEconomico: v.tipoVisita || 'Comercio',
+          clasificacion: 'Visitado en Campo',
+          origen: 'Visita en Terreno',
+          tipoRegistro: 'Cliente Potencial',
+          etapaEmbudo: etapaCalculada,
+          comercialId: v.usuarioId,
+          comercial: v.usuario || null,
+          lat: v.checkInLat || null,
+          lng: v.checkInLng || null,
+          notas: v.actividadesRealizadas || v.observaciones || null,
+          ultimaVisitaFecha: v.checkInHora,
+          createdAt: v.checkInHora || v.createdAt,
+          updatedAt: v.checkOutHora || v.checkInHora || v.createdAt,
+          _count: {
+            visitas: 1,
+            seguimientos: v.actividadesRealizadas ? 1 : 0,
+            cotizaciones: 0,
+            ventas: 0
+          }
+        });
+      } else {
+        const existing = clientesDeVisitasMap.get(normKey);
+        existing._count.visitas += 1;
+        if (v.actividadesRealizadas) existing._count.seguimientos += 1;
+        if (!existing.contacto && v.contactoAtendio) existing.contacto = v.contactoAtendio;
+        if ((!existing.direccion || existing.direccion === 'Registrado en visita de campo') && dirExtraida) {
+          existing.direccion = dirExtraida;
+        }
+      }
+    });
+
+    let consolidado = [...clientesFormales, ...Array.from(clientesDeVisitasMap.values())];
+
+    if (etapa && etapa !== 'TODAS') {
+      consolidado = consolidado.filter(c => (c.etapaEmbudo || 'Prospecto') === etapa);
+    }
+    if (tipo && tipo !== 'TODOS') {
+      consolidado = consolidado.filter(c => c.tipoRegistro === tipo);
+    }
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      consolidado = consolidado.filter(c =>
+        (c.nombre || '').toLowerCase().includes(q) ||
+        (c.nitDoc || '').toLowerCase().includes(q) ||
+        (c.contacto || '').toLowerCase().includes(q) ||
+        (c.telefono || '').toLowerCase().includes(q) ||
+        (c.ciudad || '').toLowerCase().includes(q) ||
+        (c.comercial?.nombre || '').toLowerCase().includes(q)
+      );
+    }
+
+    return consolidado;
   }
 
   /**
    * Obtiene un cliente externo con su historial comercial 360°
    */
   async getClienteExternoById(id) {
+    if (String(id).startsWith('VIS-CLI-')) {
+      const visitaId = String(id).replace('VIS-CLI-', '');
+      const visitaBase = await prisma.visitaCampo.findUnique({
+        where: { id: visitaId },
+        include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, cargo: true, telefono: true } }
+        }
+      });
+      if (!visitaBase) throw new Error('Registro de cliente en terreno no encontrado');
+
+      const nombreTarget = (visitaBase.resultadoResumen || '').trim();
+      const visitasRelacionadas = await prisma.visitaCampo.findMany({
+        where: {
+          resultadoResumen: { equals: nombreTarget, mode: 'insensitive' }
+        },
+        orderBy: { checkInHora: 'desc' },
+        take: 30
+      });
+
+      return {
+        id,
+        codigo: visitaBase.codigo || 'CLI-CAMPO',
+        nombre: nombreTarget || 'Cliente Visitado en Terreno',
+        nitDoc: null,
+        contacto: visitaBase.contactoAtendio || nombreTarget,
+        telefono: null,
+        correo: null,
+        ciudad: 'Cartagena',
+        direccion: visitaBase.observaciones || 'Visitado en terreno',
+        sectorEconomico: visitaBase.tipoVisita || 'Comercio',
+        etapaEmbudo: 'Visita',
+        comercialId: visitaBase.usuarioId,
+        comercial: visitaBase.usuario,
+        visitas: visitasRelacionadas,
+        seguimientos: visitasRelacionadas
+          .filter(v => v.actividadesRealizadas || v.observaciones)
+          .map(v => ({
+            id: `SEG-${v.id}`,
+            fechaHora: v.checkOutHora || v.checkInHora || v.createdAt,
+            tipoAccion: v.tipoVisita || 'Visita en Terreno',
+            resultado: v.resultadoVisita || 'Realizada',
+            observaciones: `${v.actividadesRealizadas ? `${v.actividadesRealizadas}. ` : ''}${v.observaciones || ''}`.trim()
+          })),
+        cotizaciones: [],
+        ventas: []
+      };
+    }
+
     const cliente = await prisma.clienteExternoCampo.findUnique({
       where: { id },
       include: {
@@ -85,6 +254,24 @@ class OperacionExternaService {
     });
 
     if (!cliente) throw new Error('Cliente externo no encontrado');
+
+    // También incluir visitas registradas por nombre en VisitaCampo que aún no tenían clienteExternoId vinculado
+    if (cliente.nombre) {
+      const visitasPorNombre = await prisma.visitaCampo.findMany({
+        where: {
+          resultadoResumen: { equals: cliente.nombre.trim(), mode: 'insensitive' }
+        },
+        orderBy: { checkInHora: 'desc' },
+        take: 20
+      });
+      const existingIds = new Set((cliente.visitas || []).map(v => v.id));
+      visitasPorNombre.forEach(vn => {
+        if (!existingIds.has(vn.id)) {
+          cliente.visitas.push(vn);
+        }
+      });
+    }
+
     return cliente;
   }
 

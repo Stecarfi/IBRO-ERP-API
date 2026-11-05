@@ -2731,6 +2731,34 @@ class CampoController {
     try {
       const { id } = req.params;
       const esDel = this.esDelegado(req.user);
+
+      // Si el cliente proviene de una visita de campo (VIS-CLI-...), promoverlo al directorio formal
+      if (String(id).startsWith('VIS-CLI-')) {
+        const visitaId = String(id).replace('VIS-CLI-', '');
+        const visitaBase = await prisma.visitaCampo.findUnique({ where: { id: visitaId } });
+        if (!visitaBase) {
+          return res.status(404).json({ error: 'Registro de cliente en terreno no encontrado.' });
+        }
+        const targetComercialId = req.body.comercialId || visitaBase.usuarioId || req.user.id;
+        const nuevoFormal = await operacionExternaService.crearClienteExterno(targetComercialId, {
+          nombre: req.body.nombre || visitaBase.resultadoResumen || 'Cliente en Terreno',
+          nitDoc: req.body.nitDoc || null,
+          contacto: req.body.contacto || visitaBase.contactoAtendio || null,
+          telefono: req.body.telefono || 'Sin teléfono',
+          correo: req.body.correo || null,
+          ciudad: req.body.ciudad || 'Cartagena',
+          direccion: req.body.direccion || visitaBase.observaciones || null,
+          sectorEconomico: req.body.sectorEconomico || 'Comercio',
+          etapaEmbudo: req.body.etapaEmbudo || 'Visita',
+          notas: req.body.notas || visitaBase.actividadesRealizadas || null
+        });
+        await prisma.visitaCampo.updateMany({
+          where: { resultadoResumen: { equals: visitaBase.resultadoResumen || '', mode: 'insensitive' } },
+          data: { clienteExternoId: nuevoFormal.id, usuarioId: targetComercialId }
+        }).catch(() => {});
+        return res.json(nuevoFormal);
+      }
+
       const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
       if (!cliente) {
         return res.status(404).json({ error: 'Cliente externo no encontrado.' });
@@ -2764,6 +2792,29 @@ class CampoController {
     try {
       const { id } = req.params;
       const esDel = this.esDelegado(req.user);
+      const etapa = req.body.nuevaEtapa || req.body.etapaEmbudo || req.body.etapa;
+      const nota = req.body.nota || req.body.observaciones || req.body.motivo || '';
+
+      if (String(id).startsWith('VIS-CLI-')) {
+        const visitaId = String(id).replace('VIS-CLI-', '');
+        const visitaBase = await prisma.visitaCampo.findUnique({ where: { id: visitaId } });
+        if (!visitaBase) return res.status(404).json({ error: 'Cliente no encontrado.' });
+        const nuevoFormal = await operacionExternaService.crearClienteExterno(visitaBase.usuarioId || req.user.id, {
+          nombre: visitaBase.resultadoResumen || 'Cliente en Terreno',
+          contacto: visitaBase.contactoAtendio || null,
+          telefono: 'Sin teléfono',
+          ciudad: 'Cartagena',
+          direccion: visitaBase.observaciones || null,
+          etapaEmbudo: etapa || 'Visita',
+          notas: nota || visitaBase.actividadesRealizadas || null
+        });
+        await prisma.visitaCampo.updateMany({
+          where: { resultadoResumen: { equals: visitaBase.resultadoResumen || '', mode: 'insensitive' } },
+          data: { clienteExternoId: nuevoFormal.id }
+        }).catch(() => {});
+        return res.json(nuevoFormal);
+      }
+
       const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
       if (!cliente) {
         return res.status(404).json({ error: 'Cliente externo no encontrado.' });
@@ -2772,8 +2823,6 @@ class CampoController {
         return res.status(403).json({ error: 'No autorizado para modificar este cliente externo.' });
       }
 
-      const etapa = req.body.nuevaEtapa || req.body.etapaEmbudo || req.body.etapa;
-      const nota = req.body.nota || req.body.observaciones || req.body.motivo || '';
       const data = await operacionExternaService.cambiarEtapaEmbudo(id, req.user.id, etapa, nota);
       
       const io = req.app?.get ? req.app.get('io') : null;
@@ -2798,7 +2847,20 @@ class CampoController {
     try {
       const { id } = req.params;
       const esDel = this.esDelegado(req.user);
-      
+
+      if (String(id).startsWith('VIS-CLI-')) {
+        const visitaId = String(id).replace('VIS-CLI-', '');
+        const visitaBase = await prisma.visitaCampo.findUnique({ where: { id: visitaId } });
+        if (!visitaBase) return res.status(404).json({ error: 'Registro no encontrado.' });
+        if (!esDel && visitaBase.usuarioId !== req.user.id) {
+          return res.status(403).json({ error: 'No autorizado para eliminar este cliente.' });
+        }
+        await prisma.visitaCampo.deleteMany({
+          where: { resultadoResumen: { equals: visitaBase.resultadoResumen || '', mode: 'insensitive' } }
+        });
+        return res.json({ success: true, message: 'Cliente y sus visitas eliminados correctamente.' });
+      }
+
       const cliente = await prisma.clienteExternoCampo.findUnique({ where: { id } });
       if (!cliente) {
         return res.status(404).json({ error: 'Cliente externo no encontrado.' });
@@ -3097,170 +3159,588 @@ class CampoController {
   }
 
   // --- RESUMEN CONSOLIDADO DE GESTIÓN POR PERÍODO (DIARIO / SEMANAL / MENSUAL / HISTÓRICO) ---
+  calcularDistanciaKm(lat1, lon1, lat2, lon2) {
+    if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return 0;
+    const nLat1 = Number(lat1);
+    const nLon1 = Number(lon1);
+    const nLat2 = Number(lat2);
+    const nLon2 = Number(lon2);
+    if (isNaN(nLat1) || isNaN(nLon1) || isNaN(nLat2) || isNaN(nLon2)) return 0;
+    if ((nLat1 === 0 && nLon1 === 0) || (nLat2 === 0 && nLon2 === 0)) return 0;
+    const R = 6371;
+    const dLat = ((nLat2 - nLat1) * Math.PI) / 180;
+    const dLon = ((nLon2 - nLon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((nLat1 * Math.PI) / 180) *
+        Math.cos((nLat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const dist = R * c;
+    return dist <= 150 ? dist : 0;
+  }
+
   async getResumenPeriodoComercial(req, res) {
     try {
+      await autoCerrarJornadasVencidas(prisma);
+
       const esDel = this.esDelegado(req.user);
-      const { usuarioId, periodo = 'hoy', fechaDesde, fechaHasta } = req.query;
+      const { usuarioId, periodo = 'todos', fecha, fechaDesde, fechaHasta } = req.query;
       const targetUserId = usuarioId && usuarioId !== 'TODOS' ? usuarioId : (esDel ? null : req.user.id);
 
       const ahora = new Date();
-      let inicio = new Date(ahora);
-      inicio.setHours(0, 0, 0, 0);
-      let fin = new Date(ahora);
-      fin.setHours(23, 59, 59, 999);
+      const hoyColombia = getFechaColombia(ahora);
+      const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
 
-      if (periodo === 'todos') {
-        inicio = new Date('2020-01-01T00:00:00.000Z');
-        fin = new Date('2030-12-31T23:59:59.999Z');
-      } else if (periodo === 'semana') {
-        const diaSemana = ahora.getDay();
-        const diffDias = diaSemana === 0 ? 6 : diaSemana - 1; // Lunes
-        inicio.setDate(ahora.getDate() - diffDias);
-      } else if (periodo === 'mes') {
-        inicio.setDate(1);
+      let inicio = startOfToday;
+      let fin = endOfToday;
+      let modoPeriodo = String(periodo || 'todos').toLowerCase();
+
+      if (fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha) && fecha !== 'TODOS') {
+        inicio = new Date(`${fecha}T00:00:00-05:00`);
+        fin = new Date(`${fecha}T23:59:59.999-05:00`);
+        modoPeriodo = 'dia';
+      } else if (modoPeriodo === 'todos') {
+        inicio = new Date('2020-01-01T00:00:00-05:00');
+        fin = new Date('2030-12-31T23:59:59.999-05:00');
+      } else if (modoPeriodo === 'semana') {
+        const sevenDaysAgo = new Date(ahora.getTime() - 7 * 24 * 3600 * 1000);
+        const startStr = getFechaColombia(sevenDaysAgo);
+        inicio = new Date(`${startStr}T00:00:00-05:00`);
+        fin = endOfToday;
+      } else if (modoPeriodo === 'mes') {
+        const thirtyDaysAgo = new Date(ahora.getTime() - 30 * 24 * 3600 * 1000);
+        const startStr = getFechaColombia(thirtyDaysAgo);
+        inicio = new Date(`${startStr}T00:00:00-05:00`);
+        fin = endOfToday;
       } else if (fechaDesde || fechaHasta) {
-        if (fechaDesde) {
-          inicio = new Date(fechaDesde);
-          inicio.setHours(0, 0, 0, 0);
-        }
-        if (fechaHasta) {
-          fin = new Date(fechaHasta);
-          fin.setHours(23, 59, 59, 999);
-        }
+        if (fechaDesde) inicio = new Date(`${String(fechaDesde).split('T')[0]}T00:00:00-05:00`);
+        if (fechaHasta) fin = new Date(`${String(fechaHasta).split('T')[0]}T23:59:59.999-05:00`);
       }
 
-      const userWhere = targetUserId ? { usuarioId: targetUserId } : {};
-      const comWhere = targetUserId ? { comercialId: targetUserId } : {};
+      // 0. Obtener lista oficial de operadores de campo
+      const usuariosCampo = await prisma.user.findMany({
+        where: this.getFiltroOperadoresCampo(),
+        select: {
+          id: true,
+          nombre: true,
+          apellido: true,
+          user: true,
+          cargo: true,
+          telefono: true,
+          correo: true,
+          foto: true,
+          isOnline: true,
+          lat: true,
+          lng: true,
+          lastLocationUpdate: true
+        },
+        orderBy: { nombre: 'asc' }
+      });
+      const usuariosCampoIds = usuariosCampo.map(u => u.id);
+      const userMap = new Map(usuariosCampo.map((u, idx) => [u.id, { ...u, colorIndex: idx % 8 }]));
 
-      // 0. Datos del Asesor
+      const userWhere = targetUserId
+        ? { usuarioId: targetUserId }
+        : { usuarioId: { in: usuariosCampoIds } };
+      const comWhere = targetUserId
+        ? { comercialId: targetUserId }
+        : { comercialId: { in: usuariosCampoIds } };
+
       let asesorInfo = null;
       if (targetUserId && targetUserId !== 'TODOS') {
-        asesorInfo = await prisma.user.findUnique({
+        asesorInfo = userMap.get(targetUserId) || await prisma.user.findUnique({
           where: { id: targetUserId },
-          select: { id: true, nombre: true, apellido: true, cargo: true, telefono: true, correo: true }
+          select: { id: true, nombre: true, apellido: true, user: true, cargo: true, telefono: true, correo: true, foto: true }
         });
       }
 
-      // 1. Jornadas
-      const jornadas = await prisma.jornadaLaboral.findMany({
+      // 1. Jornadas en el período y Jornadas de HOY para estado en vivo
+      const [jornadas, jornadasHoy, pausasPeriodo, pingsHoy] = await Promise.all([
+        prisma.jornadaLaboral.findMany({
+          where: {
+            ...userWhere,
+            ...(modoPeriodo !== 'todos' ? { horaInicio: { gte: inicio, lte: fin } } : {})
+          },
+          include: {
+            usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true } },
+            pausas: { orderBy: { horaInicio: 'desc' } }
+          },
+          orderBy: { horaInicio: 'desc' }
+        }),
+        prisma.jornadaLaboral.findMany({
+          where: {
+            usuarioId: { in: usuariosCampoIds },
+            horaInicio: { gte: startOfToday, lte: endOfToday }
+          },
+          include: {
+            pausas: { orderBy: { horaInicio: 'desc' } }
+          },
+          orderBy: { horaInicio: 'desc' }
+        }),
+        prisma.pausaJornada.findMany({
+          where: {
+            ...(modoPeriodo !== 'todos' ? { horaInicio: { gte: inicio, lte: fin } } : {}),
+            jornada: userWhere
+          },
+          include: {
+            jornada: {
+              include: {
+                usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true } }
+              }
+            }
+          },
+          orderBy: { horaInicio: 'desc' }
+        }).catch(() => []),
+        prisma.rastreoUbicacion.findMany({
+          where: {
+            usuarioId: { in: usuariosCampoIds },
+            timestamp: { gte: startOfToday, lte: endOfToday }
+          },
+          orderBy: { timestamp: 'desc' },
+          take: 300
+        }).catch(() => [])
+      ]);
+
+      // 2. Visitas reales ejecutadas (con checkInHora real) en el período
+      const visitasRaw = await prisma.visitaCampo.findMany({
         where: {
           ...userWhere,
-          horaInicio: { gte: inicio, lte: fin }
+          checkInHora: modoPeriodo !== 'todos' ? { gte: inicio, lte: fin } : { not: null }
         },
-        select: {
-          id: true,
-          estado: true,
-          horaInicio: true,
-          horaFin: true,
-          latInicio: true,
-          lngInicio: true,
-          direccionInicio: true,
-          bateriaInicio: true,
-          tiempoTotalMin: true,
-          distanciaKm: true,
-          totalVisitas: true,
-          dispositivo: true,
-          observaciones: true
-        },
-        orderBy: { horaInicio: 'desc' }
-      });
-
-      const totalJornadas = jornadas.length;
-      let minutosTotales = 0;
-      jornadas.forEach(j => {
-        if (j.estado === 'Iniciada' && !j.horaFin && j.horaInicio) {
-          const elapsedMin = Math.max(0, Math.round((ahora.getTime() - new Date(j.horaInicio).getTime()) / 60000));
-          minutosTotales += elapsedMin;
-        } else {
-          minutosTotales += (j.tiempoTotalMin || 0);
-        }
-      });
-      const horasTotales = Number((minutosTotales / 60).toFixed(1));
-      const kmTotales = Number(jornadas.reduce((acc, j) => acc + (j.distanciaKm || 0), 0).toFixed(1));
-
-      // 2. Visitas Detalladas
-      const visitasWhere = {
-        ...userWhere,
-        ...(periodo !== 'todos' ? {
-          OR: [
-            { fechaProgramada: { gte: inicio, lte: fin } },
-            { checkInHora: { gte: inicio, lte: fin } },
-            { createdAt: { gte: inicio, lte: fin } }
-          ]
-        } : {})
-      };
-
-      const visitas = await prisma.visitaCampo.findMany({
-        where: visitasWhere,
         include: {
+          usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true, telefono: true } },
           cliente: { select: { id: true, nom: true, direccion: true, tel: true, ciudad: true } },
-          clienteExterno: { select: { id: true, nombre: true, direccion: true, telefono: true, ciudad: true } },
+          clienteExterno: { select: { id: true, nombre: true, direccion: true, telefono: true, ciudad: true, contacto: true } },
           prospecto: { select: { id: true, nombreComercial: true, razonSocial: true, ciudad: true, contactoTelefono: true } },
           evidenciasRelacionadas: { select: { id: true, url: true, tipo: true, observaciones: true } }
         },
-        orderBy: [
-          { checkInHora: 'desc' },
-          { fechaProgramada: 'asc' },
-          { createdAt: 'desc' }
-        ]
+        orderBy: { checkInHora: 'asc' }
       });
 
+      // Procesar visitas cronológicamente por asesor y día para calcular traslados y distancia real
+      const ultimoCheckOutPorGrupo = {};
+      const ultimaCoordPorGrupo = {};
+      const diasOperativosSet = new Set();
+      let minutosVisitasTotal = 0;
+      let minutosTransitoTotal = 0;
+      let kmRecorridosVisitas = 0;
+
+      const visitasEnriquecidasAsc = visitasRaw.map((v, idx) => {
+        const checkIn = new Date(v.checkInHora);
+        const fechaCol = getFechaColombia(checkIn);
+        diasOperativosSet.add(`${v.usuarioId}_${fechaCol}`);
+
+        let checkOut = v.checkOutHora ? new Date(v.checkOutHora) : null;
+        let durMin = Math.min(480, Math.max(0, v.duracionMin || 0));
+        if (checkOut && checkOut < checkIn) {
+          durMin = durMin > 1 ? durMin : 15;
+          checkOut = new Date(checkIn.getTime() + durMin * 60000);
+        } else if (checkOut && durMin <= 0) {
+          durMin = Math.min(480, Math.max(1, Math.round((checkOut - checkIn) / 60000)));
+        } else if (!checkOut) {
+          if (fechaCol !== hoyColombia) {
+            durMin = durMin > 0 ? durMin : 15;
+            checkOut = new Date(checkIn.getTime() + durMin * 60000);
+          } else {
+            durMin = Math.min(240, Math.max(1, Math.round((ahora - checkIn) / 60000)));
+          }
+        }
+        minutosVisitasTotal += durMin;
+
+        const grupoKey = `${v.usuarioId}_${fechaCol}`;
+        let tiempoTransitoAntesMin = 0;
+        if (ultimoCheckOutPorGrupo[grupoKey]) {
+          const diffT = Math.round((checkIn - new Date(ultimoCheckOutPorGrupo[grupoKey])) / 60000);
+          if (diffT > 0 && diffT <= 180) {
+            tiempoTransitoAntesMin = diffT;
+            minutosTransitoTotal += diffT;
+          }
+        }
+        if (checkOut) {
+          ultimoCheckOutPorGrupo[grupoKey] = checkOut;
+        }
+
+        let distanciaDesdeAnteriorKm = 0;
+        if (v.checkInLat != null && v.checkInLng != null) {
+          const prevC = ultimaCoordPorGrupo[grupoKey];
+          if (prevC) {
+            distanciaDesdeAnteriorKm = Number(this.calcularDistanciaKm(prevC.lat, prevC.lng, v.checkInLat, v.checkInLng).toFixed(2));
+            kmRecorridosVisitas += distanciaDesdeAnteriorKm;
+          }
+          ultimaCoordPorGrupo[grupoKey] = { lat: v.checkInLat, lng: v.checkInLng };
+        }
+
+        const lugarNombre = v.resultadoResumen || v.clienteExterno?.nombre || v.cliente?.nom || v.prospecto?.nombreComercial || 'Cliente Visitado';
+        let direccionReal = v.clienteExterno?.direccion || v.cliente?.direccion || '';
+        if (!direccionReal && v.observaciones && v.observaciones.includes('(') && v.observaciones.includes(')')) {
+          const m = v.observaciones.match(/\((.*?)\)/);
+          if (m && m[1] && !m[1].includes('Cierre por')) direccionReal = m[1];
+        }
+
+        const asesorNombre = `${v.usuario?.nombre || ''} ${v.usuario?.apellido || ''}`.trim() || v.usuario?.user || 'Asesor';
+        const estadoReal = checkOut ? 'Realizada' : 'En Sitio';
+
+        return {
+          ...v,
+          lugar: lugarNombre,
+          clienteNombre: lugarNombre,
+          direccion: direccionReal || 'Cartagena',
+          asesorNombre,
+          usuarioNombre: asesorNombre,
+          usuarioCargo: v.usuario?.cargo || 'Asesor Comercial',
+          usuarioFoto: v.usuario?.foto || null,
+          usuarioTelefono: v.usuario?.telefono || null,
+          fecha: fechaCol,
+          horaLlegada: formatHoraColombia(checkIn),
+          horaLlegadaColombia: formatHoraColombia(checkIn),
+          horaSalida: checkOut ? formatHoraColombia(checkOut) : 'En Sitio Ahora',
+          horaSalidaColombia: checkOut ? formatHoraColombia(checkOut) : null,
+          checkOutHora: checkOut ? checkOut.toISOString() : null,
+          duracionMin: durMin,
+          duracionTexto: durMin >= 60 ? `${Math.floor(durMin / 60)}h ${durMin % 60}m` : `${durMin} min`,
+          tiempoTransitoAntesMin,
+          tiempoTransitoAntesTexto: tiempoTransitoAntesMin > 0 ? `${tiempoTransitoAntesMin} min en traslado` : null,
+          distanciaDesdeAnteriorKm,
+          estado: estadoReal,
+          resultadoVisita: v.resultadoVisita || (checkOut ? 'Visita Exitosa' : 'En Sitio'),
+          resultado: v.resultadoVisita || (checkOut ? 'Visita Exitosa' : 'En Sitio'),
+          contacto: v.contactoAtendio || v.clienteExterno?.contacto || ''
+        };
+      });
+
+      const visitas = [...visitasEnriquecidasAsc].reverse();
+
+      // 3. Calcular Jornadas, Horas Efectivas y Distancia Real (100% consistente con Mapa en Vivo)
+      const totalJornadas = diasOperativosSet.size > 0 ? diasOperativosSet.size : jornadas.length;
+      const minutosTotalesEfectivos = minutosVisitasTotal;
+      const horasTotales = Number((minutosTotalesEfectivos / 60).toFixed(1));
+      const tiempoEfectivoTexto = minutosTotalesEfectivos >= 60
+        ? `${Math.floor(minutosTotalesEfectivos / 60)}h ${minutosTotalesEfectivos % 60}m`
+        : `${minutosTotalesEfectivos} min`;
+      const tiempoTransitoTexto = minutosTransitoTotal >= 60
+        ? `${Math.floor(minutosTransitoTotal / 60)}h ${minutosTransitoTotal % 60}m`
+        : `${minutosTransitoTotal} min`;
+
+      const kmTotales = Number(kmRecorridosVisitas.toFixed(1));
+
       const totalVisitas = visitas.length;
-      const visitasEfectivas = visitas.filter(v => v.estado === 'Realizada' || v.resultadoVisita === 'Venta Cerrada' || v.resultadoVisita === 'Cotización Solicitada' || v.resultadoVisita === 'Visita Exitosa').length;
-      const visitasProgramadas = visitas.filter(v => v.estado === 'Programada' || v.estado === 'En Curso').length;
+      const visitasEfectivas = visitas.filter(v => v.estado === 'Realizada' || Boolean(v.checkOutHora)).length;
+      const visitasEnCurso = visitas.filter(v => v.estado === 'En Sitio' || !v.checkOutHora).length;
+      const visitasProgramadas = await prisma.visitaCampo.count({
+        where: {
+          ...userWhere,
+          estado: 'Programada',
+          checkInHora: null
+        }
+      });
       const efectividadPct = totalVisitas > 0 ? Math.round((visitasEfectivas / totalVisitas) * 100) : 0;
 
-      // 3. Cotizaciones
-      const cotizacionesWhere = {
-        ...comWhere,
-        ...(periodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
-      };
+      // 4. Cotizaciones
       const cotizaciones = await prisma.cotizacionExternaCampo.findMany({
-        where: cotizacionesWhere,
+        where: {
+          ...comWhere,
+          ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+        },
         include: {
-          clienteExterno: { select: { id: true, nombre: true } }
+          clienteExterno: { select: { id: true, nombre: true } },
+          comercial: { select: { id: true, nombre: true, apellido: true } }
         },
         orderBy: { fecha: 'desc' }
       });
       const totalCotizaciones = cotizaciones.length;
       const montoCotizado = cotizaciones.reduce((acc, c) => acc + (c.total || 0), 0);
 
-      // 4. Ventas
-      const ventasWhere = {
-        ...comWhere,
-        ...(periodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
-      };
+      // 5. Ventas
       const ventas = await prisma.ventaExternaCampo.findMany({
-        where: ventasWhere,
+        where: {
+          ...comWhere,
+          ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+        },
         include: {
-          clienteExterno: { select: { id: true, nombre: true } }
+          clienteExterno: { select: { id: true, nombre: true } },
+          comercial: { select: { id: true, nombre: true, apellido: true } }
         },
         orderBy: { fecha: 'desc' }
       });
       const totalVentas = ventas.length;
       const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
 
-      // 5. Tareas/Actividades
+      // 6. Tareas y Rutas Asignadas
       const actividades = await prisma.actividadCampo.findMany({
         where: {
           ...userWhere,
-          ...(periodo !== 'todos' ? { fechaProgramada: { gte: inicio, lte: fin } } : {})
+          ...(modoPeriodo !== 'todos' ? { fechaProgramada: { gte: inicio, lte: fin } } : {})
         },
-        select: { id: true, titulo: true, estado: true, prioridad: true, fechaProgramada: true }
+        select: { id: true, codigo: true, titulo: true, estado: true, prioridad: true, fechaProgramada: true }
       });
       const totalTareas = actividades.length;
-      const tareasCumplidas = actividades.filter(a => a.estado === 'Completada').length;
+      const tareasCumplidas = actividades.filter(a => a.estado === 'Completada' || a.estado === 'Finalizada' || a.estado === 'Aprobada').length;
 
-      // 6. Jornada Activa Hoy (si existe)
-      const jornadaActivaHoy = jornadas.find(j => j.estado === 'Iniciada' && !j.horaFin) || null;
+      // 7. Jornada Activa Hoy (reconociendo todos los estados activos)
+      const jornadasActivasHoy = jornadasHoy.filter(
+        j => ['Iniciada', 'En Ruta', 'Activa', 'En Pausa'].includes(j.estado) && !j.horaFin && (!targetUserId || j.usuarioId === targetUserId)
+      );
+      const jornadaActivaHoy = jornadasActivasHoy[0] || null;
+
+      // 8. Construir flujo cronológico minuto a minuto (Eventos Reales en Vivo e Historial)
+      const eventosCronologicos = [];
+
+      // 8.1 Aperturas y Cierres de Jornada
+      jornadas.forEach(j => {
+        const nomAsesor = `${j.usuario?.nombre || ''} ${j.usuario?.apellido || ''}`.trim() || 'Asesor en Campo';
+        if (j.horaInicio) {
+          const dIni = new Date(j.horaInicio);
+          eventosCronologicos.push({
+            id: `EVT-JINI-${j.id}`,
+            tipoEvento: 'INICIO_JORNADA',
+            etiqueta: 'Inicio de Jornada en Campo',
+            icono: 'fa-play',
+            color: 'emerald',
+            timestamp: dIni.getTime(),
+            fechaIso: dIni.toISOString(),
+            fechaColombia: getFechaColombia(dIni),
+            horaColombia: formatHoraColombia(dIni),
+            usuarioId: j.usuarioId,
+            asesorNombre: nomAsesor,
+            usuarioCargo: j.usuario?.cargo || 'Asesor Comercial',
+            titulo: `${nomAsesor} inició turno laboral en campo`,
+            descripcion: `Inicio de jornada registrado${j.direccionInicio ? ` en ${j.direccionInicio}` : ''}.${j.bateriaInicio != null ? ` Batería real del dispositivo: ${j.bateriaInicio}%.` : ''}`,
+            lat: j.latInicio && j.latInicio !== 0 ? j.latInicio : null,
+            lng: j.lngInicio && j.lngInicio !== 0 ? j.lngInicio : null,
+            bateria: j.bateriaInicio != null ? j.bateriaInicio : null,
+            duracionMin: j.tiempoTotalMin || null
+          });
+        }
+        if (j.horaFin && j.estado === 'Finalizada') {
+          const dFin = new Date(j.horaFin);
+          eventosCronologicos.push({
+            id: `EVT-JFIN-${j.id}`,
+            tipoEvento: 'CIERRE_JORNADA',
+            etiqueta: 'Cierre de Jornada Laboral',
+            icono: 'fa-flag-checkered',
+            color: 'slate',
+            timestamp: dFin.getTime(),
+            fechaIso: dFin.toISOString(),
+            fechaColombia: getFechaColombia(dFin),
+            horaColombia: formatHoraColombia(dFin),
+            usuarioId: j.usuarioId,
+            asesorNombre: nomAsesor,
+            usuarioCargo: j.usuario?.cargo || 'Asesor Comercial',
+            titulo: `${nomAsesor} finalizó su jornada laboral`,
+            descripcion: `Turno cerrado con ${j.totalVisitas || 0} visitas atendidas y ${j.tiempoTotalMin || 0} min efectivos en terreno.`
+          });
+        }
+      });
+
+      // 8.2 Pausas por Hora de Almuerzo y Reactivación
+      pausasPeriodo.forEach(p => {
+        const uP = p.jornada?.usuario;
+        const nomAsesor = `${uP?.nombre || ''} ${uP?.apellido || ''}`.trim() || 'Asesor en Campo';
+        const dIni = new Date(p.horaInicio);
+        const dFin = p.horaFin ? new Date(p.horaFin) : null;
+        const durMin = p.duracionMin || (dFin ? Math.max(1, Math.round((dFin - dIni) / 60000)) : Math.max(1, Math.round((ahora - dIni) / 60000)));
+        const cumplio = durMin <= 60;
+
+        eventosCronologicos.push({
+          id: `EVT-ALM-${p.id}`,
+          tipoEvento: 'PAUSA_ALMUERZO',
+          etiqueta: 'Control Hora de Almuerzo',
+          icono: 'fa-utensils',
+          color: cumplio ? 'amber' : 'rose',
+          timestamp: dIni.getTime(),
+          fechaIso: dIni.toISOString(),
+          fechaColombia: getFechaColombia(dIni),
+          horaColombia: formatHoraColombia(dIni),
+          horaSalidaColombia: dFin ? formatHoraColombia(dFin) : 'En Almuerzo Ahora',
+          usuarioId: p.jornada?.usuarioId,
+          asesorNombre: nomAsesor,
+          titulo: `${nomAsesor} detuvo jornada por Hora de Almuerzo`,
+          descripcion: dFin
+            ? `Paró a las ${formatHoraColombia(dIni)} y reactivó jornada a las ${formatHoraColombia(dFin)} (${durMin} min detenido • ${cumplio ? 'Cumplió horario <= 60 min' : `Excedió por +${durMin - 60} min`}).`
+            : `En hora de almuerzo desde las ${formatHoraColombia(dIni)} (${durMin} min transcurridos).`,
+          duracionMin: durMin,
+          cumpleAlmuerzo: cumplio,
+          lat: p.lat || null,
+          lng: p.lng || null
+        });
+      });
+
+      // 8.3 Cada Parada / Visita a Cliente (Llegada, Traslado, Permanencia y Salida)
+      visitas.forEach(v => {
+        const dIn = new Date(v.checkInHora);
+        eventosCronologicos.push({
+          id: `EVT-VIS-${v.id}`,
+          visitaId: v.id,
+          codigo: v.codigo,
+          tipoEvento: 'VISITA_CAMPO',
+          etiqueta: v.estado === 'En Sitio' ? 'En Sitio con Cliente (En Vivo)' : 'Visita y Parada en Cliente',
+          icono: v.estado === 'En Sitio' ? 'fa-location-dot' : 'fa-circle-check',
+          color: v.estado === 'En Sitio' ? 'orange' : 'purple',
+          timestamp: dIn.getTime(),
+          fechaIso: dIn.toISOString(),
+          fechaColombia: v.fecha,
+          horaColombia: v.horaLlegada,
+          horaSalidaColombia: v.horaSalida,
+          usuarioId: v.usuarioId,
+          asesorNombre: v.asesorNombre,
+          usuarioCargo: v.usuarioCargo,
+          lugar: v.lugar,
+          direccion: v.direccion,
+          contacto: v.contacto,
+          titulo: `${v.lugar}`,
+          descripcion: v.actividadesRealizadas || v.observaciones || 'Gestión comercial realizada en punto del cliente',
+          observaciones: v.observaciones || '',
+          actividadesRealizadas: v.actividadesRealizadas || '',
+          resultado: v.resultadoVisita,
+          duracionMin: v.duracionMin,
+          duracionTexto: v.duracionTexto,
+          tiempoTransitoAntesMin: v.tiempoTransitoAntesMin,
+          tiempoTransitoAntesTexto: v.tiempoTransitoAntesTexto,
+          distanciaDesdeAnteriorKm: v.distanciaDesdeAnteriorKm,
+          lat: v.checkInLat,
+          lng: v.checkInLng,
+          evidencias: v.evidencias || [],
+          firmaCliente: v.firmaCliente || null,
+          visitaCompleta: v
+        });
+      });
+
+      // 8.4 Cotizaciones Emitidas en Campo
+      cotizaciones.forEach(c => {
+        const dCot = new Date(c.fecha || c.createdAt);
+        const nomAsesor = `${c.comercial?.nombre || ''} ${c.comercial?.apellido || ''}`.trim() || 'Asesor Comercial';
+        const nomCli = c.clienteExterno?.nombre || 'Cliente Comercial';
+        eventosCronologicos.push({
+          id: `EVT-COT-${c.id}`,
+          codigo: c.codigo,
+          tipoEvento: 'COTIZACION_EMITIDA',
+          etiqueta: 'Cotización Emitida en Campo',
+          icono: 'fa-file-invoice-dollar',
+          color: 'indigo',
+          timestamp: dCot.getTime(),
+          fechaIso: dCot.toISOString(),
+          fechaColombia: getFechaColombia(dCot),
+          horaColombia: formatHoraColombia(dCot),
+          usuarioId: c.comercialId,
+          asesorNombre: nomAsesor,
+          lugar: nomCli,
+          titulo: `Cotización ${c.codigo} emitida a ${nomCli}`,
+          descripcion: `Propuesta comercial generada por valor de $${Number(c.total || 0).toLocaleString('es-CO')} (Estado: ${c.estado || 'Enviada'}).`,
+          monto: c.total || 0
+        });
+      });
+
+      // 8.5 Ventas / Pedidos Cerrados en Campo
+      ventas.forEach(ve => {
+        const dVen = new Date(ve.fecha || ve.createdAt);
+        const nomAsesor = `${ve.comercial?.nombre || ''} ${ve.comercial?.apellido || ''}`.trim() || 'Asesor Comercial';
+        const nomCli = ve.clienteExterno?.nombre || 'Cliente Comercial';
+        eventosCronologicos.push({
+          id: `EVT-VEN-${ve.id}`,
+          codigo: ve.codigo,
+          tipoEvento: 'PEDIDO_CERRADO',
+          etiqueta: 'Venta Cerrada en Campo',
+          icono: 'fa-sack-dollar',
+          color: 'emerald',
+          timestamp: dVen.getTime(),
+          fechaIso: dVen.toISOString(),
+          fechaColombia: getFechaColombia(dVen),
+          horaColombia: formatHoraColombia(dVen),
+          usuarioId: ve.comercialId,
+          asesorNombre: nomAsesor,
+          lugar: nomCli,
+          titulo: `Pedido ${ve.codigo} cerrado con ${nomCli}`,
+          descripcion: `Venta cerrada por valor de $${Number(ve.valorVendido || 0).toLocaleString('es-CO')}.`,
+          monto: parseFloat(ve.valorVendido) || 0
+        });
+      });
+
+      eventosCronologicos.sort((a, b) => b.timestamp - a.timestamp);
+
+      // 9. Estado en Vivo por cada Asesor de Campo (para monitoreo directo del delegado)
+      const estadoAsesores = usuariosCampo
+        .filter(u => !targetUserId || u.id === targetUserId)
+        .map(u => {
+          const jHoy = jornadasHoy.find(j => j.usuarioId === u.id);
+          const uVisitas = visitas.filter(v => v.usuarioId === u.id);
+          const uVisitasHoy = uVisitas.filter(v => v.fecha === hoyColombia);
+          const paradaEnCursoHoy = uVisitasHoy.find(v => v.estado === 'En Sitio' || !v.checkOutHora);
+          const ultimaParada = uVisitas[0] || null;
+          const pausaActivaHoy = jHoy?.pausas?.find(p => !p.horaFin && jHoy.estado === 'En Pausa') || null;
+          const pingHoyConBat = pingsHoy.find(p => p.usuarioId === u.id && p.bateria != null);
+          const bateriaReal = pingHoyConBat?.bateria != null
+            ? Number(pingHoyConBat.bateria)
+            : (jHoy?.bateriaInicio != null ? Number(jHoy.bateriaInicio) : null);
+
+          const tieneTurnoActivo = Boolean(
+            (jHoy && ['Iniciada', 'En Ruta', 'Activa', 'En Pausa'].includes(jHoy.estado) && !jHoy.horaFin) ||
+            paradaEnCursoHoy
+          );
+
+          let estadoVivo = 'Fuera de Turno';
+          if (paradaEnCursoHoy) {
+            estadoVivo = 'Visitando Cliente';
+          } else if (pausaActivaHoy) {
+            estadoVivo = 'En Hora de Almuerzo';
+          } else if (tieneTurnoActivo) {
+            estadoVivo = 'En Ruta Activa';
+          } else if (jHoy && jHoy.horaFin) {
+            estadoVivo = 'Jornada Finalizada Hoy';
+          }
+
+          const minAsesor = uVisitas.reduce((acc, v) => acc + (v.duracionMin || 0), 0);
+          const minTransitoAsesor = uVisitas.reduce((acc, v) => acc + (v.tiempoTransitoAntesMin || 0), 0);
+          const kmAsesor = Number(uVisitas.reduce((acc, v) => acc + (v.distanciaDesdeAnteriorKm || 0), 0).toFixed(1));
+
+          return {
+            id: u.id,
+            nombre: `${u.nombre || ''} ${u.apellido || ''}`.trim() || u.user,
+            user: u.user,
+            cargo: u.cargo || 'Asesor Comercial',
+            foto: u.foto || null,
+            telefono: u.telefono || null,
+            enTurnoActivo: tieneTurnoActivo,
+            estado: estadoVivo,
+            horaInicioHoy: jHoy?.horaInicio ? formatHoraColombia(jHoy.horaInicio) : (paradaEnCursoHoy ? paradaEnCursoHoy.horaLlegada : null),
+            bateriaReal,
+            paradaActual: paradaEnCursoHoy ? {
+              codigo: paradaEnCursoHoy.codigo,
+              lugar: paradaEnCursoHoy.lugar,
+              direccion: paradaEnCursoHoy.direccion,
+              horaLlegada: paradaEnCursoHoy.horaLlegada,
+              duracionMin: paradaEnCursoHoy.duracionMin
+            } : null,
+            ultimaParada: ultimaParada ? {
+              codigo: ultimaParada.codigo,
+              lugar: ultimaParada.lugar,
+              direccion: ultimaParada.direccion,
+              fecha: ultimaParada.fecha,
+              horaLlegada: ultimaParada.horaLlegada,
+              horaSalida: ultimaParada.horaSalida,
+              duracionMin: ultimaParada.duracionMin
+            } : null,
+            totalVisitasPeriodo: uVisitas.length,
+            tiempoPeriodoMin: minAsesor,
+            tiempoPeriodoTexto: minAsesor >= 60 ? `${Math.floor(minAsesor / 60)}h ${minAsesor % 60}m` : `${minAsesor} min`,
+            kmPeriodo: kmAsesor,
+            lat: paradaEnCursoHoy?.checkInLat || u.lat || ultimaParada?.checkInLat || null,
+            lng: paradaEnCursoHoy?.checkInLng || u.lng || ultimaParada?.checkInLng || null
+          };
+        });
 
       res.json({
-        periodo,
+        periodo: modoPeriodo,
+        hoyColombia,
         fechaInicio: inicio.toISOString(),
         fechaFin: fin.toISOString(),
         usuarioId: targetUserId || 'TODOS',
         asesor: asesorInfo,
         jornadaActiva: jornadaActivaHoy,
+        estadoAsesores,
+        eventosCronologicos,
+        pausasAlmuerzo: pausasPeriodo,
         jornadas,
         visitas,
         cotizaciones,
@@ -3269,11 +3749,14 @@ class CampoController {
         kpis: {
           totalJornadas,
           horasTotales,
+          tiempoEfectivoTexto,
           kmTotales,
           totalVisitas,
           visitasEfectivas,
+          visitasEnCurso,
           visitasProgramadas,
           efectividadPct,
+          totalPausasAlmuerzo: pausasPeriodo.length,
           totalCotizaciones,
           montoCotizado,
           totalVentas,
@@ -3283,6 +3766,7 @@ class CampoController {
         }
       });
     } catch (err) {
+      console.error('[getResumenPeriodoComercial Error]', err);
       res.status(500).json({ error: err.message });
     }
   }
