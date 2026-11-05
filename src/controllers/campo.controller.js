@@ -1103,9 +1103,8 @@ class CampoController {
         const pingReciente = diffMs < 15 * 60 * 1000;
 
         // Batería: SOLO valor real si fue reportado, NUNCA inventar 90 o 95
-        const bateriaReal = (pingReciente && pingGps?.bateria != null)
-          ? Number(pingGps.bateria)
-          : (jActiva?.bateriaInicio != null ? Number(jActiva.bateriaInicio) : null);
+        const batPingNum = pingGps?.bateria != null ? Number(pingGps.bateria) : null;
+        const bateriaReal = (tieneJornadaActivaHoy && pingReciente && batPingNum !== null && batPingNum > 0 && batPingNum < 100) ? batPingNum : null;
 
         // En Vivo: Requiere reporte reciente de GPS Y estar en jornada activa hoy Y estar en línea
         const enVivo = Boolean(tieneJornadaActivaHoy && pingReciente && isOnlineReal);
@@ -3525,10 +3524,10 @@ class CampoController {
             asesorNombre: nomAsesor,
             usuarioCargo: j.usuario?.cargo || 'Asesor Comercial',
             titulo: `${nomAsesor} inició turno laboral en campo`,
-            descripcion: `Inicio de jornada registrado${j.direccionInicio ? ` en ${j.direccionInicio}` : ''}.${j.bateriaInicio != null ? ` Batería real del dispositivo: ${j.bateriaInicio}%.` : ''}`,
+            descripcion: `Inicio de jornada registrado${j.direccionInicio ? ` en ${j.direccionInicio}` : ''}.`,
             lat: j.latInicio && j.latInicio !== 0 ? j.latInicio : null,
             lng: j.lngInicio && j.lngInicio !== 0 ? j.lngInicio : null,
-            bateria: j.bateriaInicio != null ? j.bateriaInicio : null,
+            bateria: null,
             duracionMin: j.tiempoTotalMin || null
           });
         }
@@ -3688,15 +3687,18 @@ class CampoController {
           const paradaEnCursoHoy = uVisitasHoy.find(v => v.estado === 'En Sitio' || !v.checkOutHora);
           const ultimaParada = uVisitas[0] || null;
           const pausaActivaHoy = jHoy?.pausas?.find(p => !p.horaFin && jHoy.estado === 'En Pausa') || null;
-          const pingHoyConBat = pingsHoy.find(p => p.usuarioId === u.id && p.bateria != null);
-          const bateriaReal = pingHoyConBat?.bateria != null
-            ? Number(pingHoyConBat.bateria)
-            : (jHoy?.bateriaInicio != null ? Number(jHoy.bateriaInicio) : null);
-
           const tieneTurnoActivo = Boolean(
             (jHoy && ['Iniciada', 'En Ruta', 'Activa', 'En Pausa'].includes(jHoy.estado) && !jHoy.horaFin) ||
             paradaEnCursoHoy
           );
+          const pingHoyConBat = pingsHoy.find(p => p.usuarioId === u.id && p.bateria != null);
+          const pingBatReciente = pingHoyConBat?.timestamp
+            ? (ahora.getTime() - new Date(pingHoyConBat.timestamp).getTime()) < 10 * 60 * 1000
+            : false;
+          const batNum = pingHoyConBat?.bateria != null ? Number(pingHoyConBat.bateria) : null;
+          const bateriaReal = (tieneTurnoActivo && pingBatReciente && batNum !== null && batNum > 0 && batNum < 100)
+            ? batNum
+            : null;
 
           let estadoVivo = 'Fuera de Turno';
           if (paradaEnCursoHoy) {
@@ -5470,12 +5472,10 @@ class CampoController {
 
         // Batería 100% real reportada por el dispositivo HOY (nunca inventada ni de días anteriores)
         const ultimoPingHoyConBateria = [...pingsDeHoy].reverse().find(p => p.bateria != null);
-        const bateriaRealHoy = ultimoPingHoyConBateria?.bateria != null
-          ? Number(ultimoPingHoyConBateria.bateria)
-          : (j?.bateriaInicio != null ? Number(j.bateriaInicio) : null);
-        const bateriaHoraHoy = ultimoPingHoyConBateria?.timestamp
-          ? formatHoraColombia(ultimoPingHoyConBateria.timestamp)
-          : (j?.bateriaInicio != null && j?.horaInicio ? formatHoraColombia(j.horaInicio) : null);
+        const pingBatRecienteHoy = ultimoPingHoyConBateria?.timestamp ? (ahora.getTime() - new Date(ultimoPingHoyConBateria.timestamp).getTime()) < 10 * 60 * 1000 : false;
+        const batHoyNum = ultimoPingHoyConBateria?.bateria != null ? Number(ultimoPingHoyConBateria.bateria) : null;
+        const bateriaRealHoy = (enTurnoActivo && pingBatRecienteHoy && batHoyNum !== null && batHoyNum > 0 && batHoyNum < 100) ? batHoyNum : null;
+        const bateriaHoraHoy = (bateriaRealHoy !== null && ultimoPingHoyConBateria?.timestamp) ? formatHoraColombia(ultimoPingHoyConBateria.timestamp) : null;
 
         const horaInicioHoyStr = j?.horaInicio
           ? formatHoraColombia(j.horaInicio)
