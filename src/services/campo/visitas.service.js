@@ -96,10 +96,22 @@ class VisitasService {
         cotizacion: true,
         venta: true
       },
-      orderBy: { horaEstimada: 'asc' }
+      orderBy: [
+        { checkInHora: 'desc' },
+        { fechaProgramada: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      take: 300
     });
 
-    return visitas;
+    return visitas.map(v => {
+      const nombreLugar = v.resultadoResumen || v.clienteExterno?.nombre || v.cliente?.nom || v.prospecto?.nombreComercial || 'Cliente en Terreno';
+      return {
+        ...v,
+        lugar: nombreLugar,
+        clienteNombre: nombreLugar
+      };
+    });
   }
 
   /**

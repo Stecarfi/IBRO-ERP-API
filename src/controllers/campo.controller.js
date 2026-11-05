@@ -1267,13 +1267,6 @@ class CampoController {
   async actualizarSeguimiento(req, res) {
     try {
       const { id } = req.params;
-      const seg = await prisma.seguimientoCampo.findUnique({ where: { id } });
-      if (!seg) return res.status(404).json({ error: 'Seguimiento no encontrado.' });
-
-      if (!this.esDelegado(req.user) && seg.usuarioId !== req.user.id) {
-        return res.status(403).json({ error: 'No autorizado para modificar este seguimiento.' });
-      }
-
       const {
         resultado,
         observaciones,
@@ -1284,6 +1277,32 @@ class CampoController {
         tipoAccion,
         estado
       } = req.body;
+
+      if (String(id).startsWith('SEG-VIS-')) {
+        const visitaId = String(id).replace('SEG-VIS-', '');
+        const vis = await prisma.visitaCampo.findUnique({ where: { id: visitaId } });
+        if (!vis) return res.status(404).json({ error: 'Registro de visita no encontrado.' });
+        if (!this.esDelegado(req.user) && vis.usuarioId !== req.user.id) {
+          return res.status(403).json({ error: 'No autorizado para modificar este seguimiento.' });
+        }
+        const visActualizada = await prisma.visitaCampo.update({
+          where: { id: visitaId },
+          data: {
+            ...(observaciones !== undefined ? { actividadesRealizadas: String(observaciones).trim(), observaciones: String(observaciones).trim() } : {}),
+            ...(compromisos !== undefined ? { compromisos: compromisos ? String(compromisos).trim() : null } : {}),
+            ...(resultado !== undefined || estado !== undefined ? { resultadoVisita: resultado !== undefined ? String(resultado).trim() : String(estado).trim() } : {}),
+            ...(tipo || tipoAccion ? { tipoVisita: tipo || tipoAccion } : {})
+          }
+        });
+        return res.json({ success: true, seguimiento: visActualizada });
+      }
+
+      const seg = await prisma.seguimientoCampo.findUnique({ where: { id } });
+      if (!seg) return res.status(404).json({ error: 'Seguimiento no encontrado.' });
+
+      if (!this.esDelegado(req.user) && seg.usuarioId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para modificar este seguimiento.' });
+      }
 
       const dataUpdate = {};
       if (resultado !== undefined || estado !== undefined) {
