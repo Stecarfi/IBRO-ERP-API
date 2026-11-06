@@ -259,12 +259,24 @@ class AuditoriaService {
         });
       }
 
-      // 4. Sincronizar flag isOnline en User con la realidad del frontend
+      // 4. Sincronizar flag isOnline y lastLogin real del día en User con la realidad del frontend
+      const needsTodayLoginSync =
+        actionUpper === 'LOGIN' ||
+        actionUpper === 'SESION_CONECTADA' ||
+        !targetUser.lastLogin ||
+        new Date(targetUser.lastLogin) < startOfDay;
+      const effectiveLoginIso =
+        actionUpper === 'LOGIN'
+          ? now.toISOString()
+          : activeSession?.fechaInicio
+            ? new Date(activeSession.fechaInicio).toISOString()
+            : now.toISOString();
+
       await prisma.user.update({
         where: { id: targetUser.id },
         data: {
           isOnline: sessionEstado === 'EN_LINEA',
-          ...(actionUpper === 'LOGIN' ? { lastLogin: now.toISOString() } : {})
+          ...(needsTodayLoginSync ? { lastLogin: effectiveLoginIso } : {})
         }
       });
     } catch (sessionErr) {
@@ -512,6 +524,7 @@ class AuditoriaService {
       activeTodayUsers,
       inactivosPendientes,
       inactivosProlongados,
+      usuarios: [...onlineUsers, ...activeTodayUsers, ...inactivosPendientes, ...inactivosProlongados],
       totalHabilitados: allUsers.length,
       kpis: {
         enLinea: onlineUsers.length,

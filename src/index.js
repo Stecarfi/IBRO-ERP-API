@@ -1796,6 +1796,10 @@ app.get('/api/db', authenticateToken, async (req, res) => {
   res.setHeader('Expires', '0');
   try {
     const users = await prisma.user.findMany({
+      where: {
+        id: { not: '1' },
+        user: { notIn: ['admin', 'ADMIN'] }
+      },
       select: {
         id: true, nombre: true, apellido: true, cedula: true, tipoDoc: true,
         correo: true, cargo: true, telefono: true, observaciones: true,
@@ -2611,9 +2615,14 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Faltan datos de ubicación' });
   }
 
+  // Ignorar usuario técnico de pruebas 'admin' (id: '1')
+  if (String(targetId) === '1' || String(targetUser || '').trim().toLowerCase() === 'admin') {
+    return res.json({ success: true, ignored: true });
+  }
+
   const parsedLat = parseFloat(lat);
   const parsedLng = parseFloat(lng);
-  if (isNaN(parsedLat) || isNaN(parsedLng) || parsedLat < -90 || parsedLat > 90 || parsedLng < -180 || parsedLng > 180) {
+  if (isNaN(parsedLat) || isNaN(parsedLng) || parsedLat < -90 || parsedLat > 90 || parsedLng < -180 || parsedLng > 180 || (parsedLat === 0 && parsedLng === 0)) {
     return res.status(400).json({ error: 'Coordenadas numéricas inválidas o fuera de rango geográfico' });
   }
 
@@ -2623,8 +2632,19 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
     if (targetUser) whereConditions.push({ user: { equals: String(targetUser), mode: 'insensitive' } });
 
     const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const fechaHoyCol = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
+    const startOfDayCol = new Date(`${fechaHoyCol}T05:00:00.000Z`);
+
     const bateriaNum = req.body.bateria !== undefined && req.body.bateria !== null ? parseInt(req.body.bateria) : null;
     const velocidadNum = req.body.velocidad !== undefined && req.body.velocidad !== null ? parseFloat(req.body.velocidad) : 0;
+
+    const existingUser = await prisma.user.findFirst({
+      where: { OR: whereConditions },
+      select: { id: true, user: true, lastLogin: true }
+    });
+
+    const shouldSyncTodayLogin = !existingUser?.lastLogin || new Date(existingUser.lastLogin) < startOfDayCol;
 
     await prisma.user.updateMany({
       where: { OR: whereConditions },
@@ -2632,24 +2652,28 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
         isOnline: true,
         lat: parsedLat,
         lng: parsedLng,
-        lastLocationUpdate: now
+        lastLocationUpdate: now,
+        ...(shouldSyncTodayLogin ? { lastLogin: nowIso } : {})
       }
     });
 
     if (io) {
       io.emit('LOCATION_UPDATE', {
-        user: targetUser,
-        id: targetId,
+        user: existingUser?.user || targetUser,
+        id: existingUser?.id || targetId,
         lat: parsedLat,
         lng: parsedLng,
         lastLocationUpdate: now,
+        ubicacionHoy: true,
+        gpsReciente: true,
+        enLinea: true,
         isOnline: true,
         bateria: bateriaNum,
         velocidad: velocidadNum
       });
       io.emit('CAMPO_TELEMETRIA_UPDATE', {
-        usuarioId: targetId,
-        user: targetUser,
+        usuarioId: existingUser?.id || targetId,
+        user: existingUser?.user || targetUser,
         lat: parsedLat,
         lng: parsedLng,
         lastLocationUpdate: now,
@@ -2659,17 +2683,38 @@ app.post('/api/location/update', authenticateToken, async (req, res) => {
       });
     }
 
-    res.json({ success: true, lat: parsedLat, lng: parsedLng });
+    res.json({ success: true, lat: parsedLat, lng: parsedLng, lastLocationUpdate: now });
   } catch (error) {
     console.error('Error actualizando ubicación:', error);
     res.status(500).json({ error: 'Error del servidor', details: error.message });
   }
 });
 
-// GET /api/location/users: Obtener la ubicación de todos los usuarios
+// GET /api/location/users: Obtener ubicación real e inicio de sesión real de colaboradores (excluyendo 'admin' de prueba)
 app.get('/api/location/users', authenticateToken, async (req, res) => {
   try {
+    const ahora = new Date();
+    const fechaHoyCol = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' }).format(ahora);
+    const startOfDay = new Date(`${fechaHoyCol}T05:00:00.000Z`);
+    const endOfDay = new Date(startOfDay.getTime() + 24 * 3600 * 1000 - 1);
+
+    let dataPresencia = null;
+    try {
+      dataPresencia = await auditoriaService.obtenerSesionesActivas(ahora);
+    } catch (ePres) {
+      console.warn('[/api/location/users] Error consultando auditoriaService:', ePres?.message);
+    }
+    const presenciaMap = new Map();
+    (dataPresencia?.usuarios || []).forEach(p => {
+      presenciaMap.set(String(p.id), p);
+    });
+
     const users = await prisma.user.findMany({
+      where: {
+        isLocked: false,
+        id: { not: '1' },
+        user: { notIn: ['admin', 'ADMIN'] }
+      },
       select: {
         id: true,
         nombre: true,
@@ -2679,20 +2724,139 @@ app.get('/api/location/users', authenticateToken, async (req, res) => {
         cargo: true,
         foto: true,
         telefono: true,
+        correo: true,
         isOnline: true,
+        lastLogin: true,
         lat: true,
         lng: true,
-        lastLocationUpdate: true
+        lastLocationUpdate: true,
+        esComercialCampo: true,
+        esDelegadoGerencia: true,
+        jornadas: {
+          where: {
+            horaInicio: { gte: startOfDay, lte: endOfDay }
+          },
+          orderBy: { horaInicio: 'desc' },
+          take: 1
+        },
+        visitas: {
+          where: {
+            checkInHora: { gte: startOfDay, lte: endOfDay },
+            NOT: { codigo: { startsWith: ' MOV-PAUSA-' } }
+          },
+          include: {
+            cliente: { select: { nom: true } },
+            prospecto: { select: { nombreComercial: true } }
+          },
+          orderBy: { checkInHora: 'desc' },
+          take: 1
+        }
       },
-      where: {
-        lat: { not: null },
-        lng: { not: null }
-      }
+      orderBy: { nombre: 'asc' }
     });
-    const mappedUsers = users.map(u => ({
-      ...u,
-      username: u.user
-    }));
+
+    const formatHoraCol = (d) => {
+      if (!d) return null;
+      try {
+        return new Date(d).toLocaleTimeString('es-CO', {
+          timeZone: 'America/Bogota',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    const mappedUsers = users.map(u => {
+      const pres = presenciaMap.get(String(u.id)) || null;
+      const locTs = u.lastLocationUpdate ? Number(u.lastLocationUpdate) : null;
+      const hasValidCoords = u.lat !== null && u.lng !== null && Number.isFinite(Number(u.lat)) && Number.isFinite(Number(u.lng)) && (Number(u.lat) !== 0 || Number(u.lng) !== 0);
+      const ubicacionHoy = Boolean(hasValidCoords && locTs && locTs >= startOfDay.getTime() && locTs <= endOfDay.getTime());
+      const gpsReciente = Boolean(hasValidCoords && locTs && (ahora.getTime() - locTs) <= 15 * 60 * 1000);
+
+      const jornadaHoy = (u.jornadas || [])[0] || null;
+      const enTurnoActivo = Boolean(jornadaHoy && !jornadaHoy.horaFin && jornadaHoy.estado !== 'Finalizada');
+      const ultimaVisitaHoy = (u.visitas || [])[0] || null;
+      const enVisitaActiva = Boolean(enTurnoActivo && ultimaVisitaHoy && !ultimaVisitaHoy.checkOutHora && ultimaVisitaHoy.estado === 'En Curso');
+
+      const loginDateFromUser = u.lastLogin ? new Date(u.lastLogin) : null;
+      const loginTodayFromUser = loginDateFromUser && !isNaN(loginDateFromUser.getTime()) && loginDateFromUser >= startOfDay ? loginDateFromUser.toISOString() : null;
+
+      const inicioSesionHoy = pres?.primerIngreso
+        ? new Date(pres.primerIngreso).toISOString()
+        : (loginTodayFromUser || (jornadaHoy?.horaInicio ? new Date(jornadaHoy.horaInicio).toISOString() : (ubicacionHoy ? new Date(locTs).toISOString() : null)));
+
+      const ultimoInicioSesion = inicioSesionHoy
+        || (pres?.ultimoAccesoHistorico ? new Date(pres.ultimoAccesoHistorico).toISOString() : null)
+        || (loginDateFromUser && !isNaN(loginDateFromUser.getTime()) ? loginDateFromUser.toISOString() : null);
+
+      const ultimaActividad = pres?.ultimoAccesoHoy
+        ? new Date(pres.ultimoAccesoHoy).toISOString()
+        : (ubicacionHoy ? new Date(locTs).toISOString() : ultimoInicioSesion);
+
+      const enLinea = Boolean(
+        pres?.isOnline ||
+        enTurnoActivo ||
+        (gpsReciente && pres?.estadoPresencia !== 'DESCONECTADO')
+      );
+
+      const estadoPresencia = enLinea
+        ? 'EN_LINEA'
+        : (inicioSesionHoy ? (pres?.estadoPresencia === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO_HOY') : 'DESCONECTADO');
+
+      const estadoOperativo = enVisitaActiva
+        ? 'Visitando Cliente'
+        : enTurnoActivo
+          ? (jornadaHoy.estado === 'En pausa' ? 'En Pausa' : 'En Ruta')
+          : enLinea
+            ? 'En Línea'
+            : inicioSesionHoy
+              ? 'Activo Hoy'
+              : 'Fuera de Turno';
+
+      const lugarVisita = ultimaVisitaHoy
+        ? (ultimaVisitaHoy.cliente?.nom || ultimaVisitaHoy.prospecto?.nombreComercial || (ultimaVisitaHoy.notas || '').split('\n')[0] || 'Punto en campo')
+        : null;
+
+      return {
+        id: u.id,
+        user: u.user,
+        username: u.user,
+        nombre: (u.nombre || '').trim(),
+        apellido: (u.apellido || '').trim(),
+        nombreCompleto: `${(u.nombre || '').trim()} ${(u.apellido || '').trim()}`.trim(),
+        roleId: u.roleId,
+        cargo: (u.cargo || '').trim() || 'Colaborador',
+        foto: u.foto,
+        telefono: u.telefono,
+        correo: u.correo,
+        esComercialCampo: Boolean(u.esComercialCampo),
+        esDelegadoGerencia: Boolean(u.esDelegadoGerencia),
+        isOnline: enLinea,
+        enLinea,
+        estadoPresencia,
+        estadoOperativo,
+        enTurnoActivo,
+        horaInicioHoy: formatHoraCol(jornadaHoy?.horaInicio || inicioSesionHoy),
+        inicioSesionHoy,
+        ultimoInicioSesion,
+        ultimaActividad,
+        lat: hasValidCoords ? Number(u.lat) : null,
+        lng: hasValidCoords ? Number(u.lng) : null,
+        lastLocationUpdate: hasValidCoords ? locTs : null,
+        ubicacionHoy,
+        gpsReciente,
+        clienteActual: enVisitaActiva ? lugarVisita : null,
+        ultimoPuntoHoy: lugarVisita,
+        dispositivo: pres?.evidencia?.dispositivo && pres.evidencia.dispositivo !== 'N/A' ? pres.evidencia.dispositivo : null,
+        navegador: pres?.evidencia?.navegador && pres.evidencia.navegador !== 'N/A' ? pres.evidencia.navegador : null,
+        so: pres?.evidencia?.so && pres.evidencia.so !== 'N/A' ? pres.evidencia.so : null,
+        moduloActual: pres?.evidencia?.ultimoEventoModulo && pres.evidencia.ultimoEventoModulo !== 'General' ? pres.evidencia.ultimoEventoModulo : null
+      };
+    });
+
     res.json(mappedUsers);
   } catch (error) {
     console.error('Error obteniendo ubicaciones:', error);
