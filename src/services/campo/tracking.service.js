@@ -40,22 +40,63 @@ class TrackingService {
       timestamp = new Date()
     } = data;
 
-    // Validación cinemática de velocidad extrema (descarte de saltos falsos)
+    const latNum = parseFloat(lat);
+    const lngNum = parseFloat(lng);
     const velocidadNum = parseFloat(velocidad) || 0;
     const mockDetectado = esSimulado || velocidadNum > 160;
-    const enMovimiento = velocidadNum > 6; // Mayor a 6 km/h se considera movimiento activo
+    const enMovimiento = velocidadNum > 6;
+
+    // Auto-vincular con la jornada activa de hoy si no se envió jornadaId
+    let resolvedJornadaId = jornadaId || null;
+    try {
+      const { startOfDay } = getColombiaDayBounds(new Date());
+      const jActiva = await prisma.jornadaLaboral.findFirst({
+        where: {
+          usuarioId,
+          horaInicio: { gte: startOfDay },
+          estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] }
+        },
+        orderBy: { horaInicio: 'desc' }
+      });
+      if (jActiva) {
+        if (!resolvedJornadaId) resolvedJornadaId = jActiva.id;
+        // Actualizar distancia acumulada en vivo si hay movimiento válido
+        if (!Number.isNaN(latNum) && !Number.isNaN(lngNum) && (latNum !== 0 || lngNum !== 0)) {
+          const ultimoPuntoJornada = await prisma.rastreoUbicacion.findFirst({
+            where: { jornadaId: jActiva.id },
+            orderBy: { timestamp: 'desc' }
+          });
+          const refLat = ultimoPuntoJornada?.lat || jActiva.latInicio;
+          const refLng = ultimoPuntoJornada?.lng || jActiva.lngInicio;
+          if (refLat && refLng) {
+            const distM = geofenceService.calcularDistanciaMetros(refLat, refLng, latNum, lngNum);
+            if (distM >= 15 && distM < 25000) {
+              const nuevaDistKm = Number(((Number(jActiva.distanciaKm) || 0) + (distM / 1000)).toFixed(2));
+              const durMin = Math.max(1, Math.round((Date.now() - new Date(jActiva.horaInicio).getTime()) / 60000));
+              await prisma.jornadaLaboral.update({
+                where: { id: jActiva.id },
+                data: {
+                  distanciaKm: nuevaDistKm,
+                  tiempoTotalMin: durMin
+                }
+              }).catch(() => {});
+            }
+          }
+        }
+      }
+    } catch (e) {}
 
     // 1. Guardar breadcrumb en base de datos
     const breadcrumb = await prisma.rastreoUbicacion.create({
       data: {
         usuarioId,
-        jornadaId: jornadaId || null,
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
+        jornadaId: resolvedJornadaId,
+        lat: latNum,
+        lng: lngNum,
         precision: precision ? parseFloat(precision) : null,
         velocidad: velocidadNum,
         rumbo: rumbo ? parseFloat(rumbo) : null,
-        bateria: bateria ? parseInt(bateria) : null,
+        bateria: bateria != null && bateria !== '' ? parseInt(bateria) : null,
         esSimulado: mockDetectado,
         enMovimiento,
         redTipo: redTipo || 'Online',
@@ -64,14 +105,14 @@ class TrackingService {
       }
     });
 
-    // 2. Actualizar posición instantánea en modelo User para compatibilidad con módulos existentes
+    // 2. Actualizar posición instantánea en modelo User para compatibilidad con todos los módulos
     const nowTimestamp = Date.now();
     await prisma.user.update({
       where: { id: usuarioId },
       data: {
         isOnline: true,
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
+        lat: latNum,
+        lng: lngNum,
         lastLocationUpdate: nowTimestamp
       }
     });
@@ -90,8 +131,8 @@ class TrackingService {
         cargo: userRecord?.cargo || 'Colaborador',
         foto: userRecord?.foto || null,
         roleId: userRecord?.roleId,
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
+        lat: latNum,
+        lng: lngNum,
         precision,
         velocidad: velocidadNum,
         bateria,
@@ -102,11 +143,11 @@ class TrackingService {
       };
 
       io.emit('CAMPO_TELEMETRIA_UPDATE', payload);
-      // Compatibilidad con visor radar existente
       io.emit('LOCATION_UPDATE', {
         user: userRecord?.user,
-        lat: parseFloat(lat),
-        lng: parseFloat(lng),
+        usuarioId,
+        lat: latNum,
+        lng: lngNum,
         lastLocationUpdate: nowTimestamp
       });
     }
@@ -138,13 +179,11 @@ class TrackingService {
       sincronizadoEn: new Date()
     }));
 
-    // Transacción masiva
     await prisma.rastreoUbicacion.createMany({
       data: itemsToInsert,
       skipDuplicates: true
     });
 
-    // Actualizar última coordenada con el punto más reciente del lote
     const ultimoPunto = itemsToInsert.sort((a, b) => b.timestamp - a.timestamp)[0];
     if (ultimoPunto) {
       await prisma.user.update({
@@ -157,7 +196,6 @@ class TrackingService {
       });
     }
 
-    // Notificar actualización general
     if (io) {
       io.emit('CAMPO_BATCH_SYNC', { usuarioId, cantidad: itemsToInsert.length });
     }
@@ -169,7 +207,7 @@ class TrackingService {
    * Consulta el recorrido cronológico de un colaborador para un día específico
    */
   async getHistorialRecorrido(usuarioId, fechaStr) {
-    const { startOfDay, endOfDay, colombiaStr } = getColombiaDayBounds(fechaStr || new Date());
+    const { startOfDay, endOfDay } = getColombiaDayBounds(fechaStr || new Date());
 
     const puntos = await prisma.rastreoUbicacion.findMany({
       where: {
@@ -182,10 +220,8 @@ class TrackingService {
       orderBy: { timestamp: 'asc' }
     });
 
-    // Calcular distancia total recorrida y detectar paradas prolongadas
     let distanciaTotalM = 0;
     const paradas = [];
-    let puntoParadaInicio = null;
 
     for (let i = 1; i < puntos.length; i++) {
       const pAnterior = puntos[i - 1];
@@ -199,7 +235,6 @@ class TrackingService {
       );
       distanciaTotalM += dist;
 
-      // Detección de parada (menos de 20m de desplazamiento y más de 10 min entre puntos)
       const diffMin = (new Date(pActual.timestamp) - new Date(pAnterior.timestamp)) / 60000;
       if (dist < 20 && diffMin >= 10) {
         paradas.push({
@@ -251,12 +286,8 @@ class TrackingService {
         lng: true,
         lastLocationUpdate: true,
         jornadas: {
-          where: {
-            estado: { in: ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'] },
-            horaInicio: { gte: startOfDay }
-          },
           orderBy: { horaInicio: 'desc' },
-          take: 1,
+          take: 3,
           include: {
             visitas: {
               where: { estado: 'En Curso' },
@@ -272,19 +303,67 @@ class TrackingService {
       }
     });
 
+    const userIds = users.map(u => u.id);
+    const ultimosRastreos = userIds.length > 0
+      ? await prisma.rastreoUbicacion.findMany({
+          where: { usuarioId: { in: userIds } },
+          orderBy: { timestamp: 'desc' },
+          take: 100
+        }).catch(() => [])
+      : [];
+    const ultimoPingPorUsuario = {};
+    for (const r of ultimosRastreos) {
+      if (r.usuarioId && !ultimoPingPorUsuario[r.usuarioId]) {
+        ultimoPingPorUsuario[r.usuarioId] = r;
+      }
+    }
+
     const ahora = Date.now();
     return users.map(u => {
-      const jornadaActiva = u.jornadas[0] || null;
-      const visitaEnCurso = jornadaActiva?.visitas[0] || null;
-      const ultimoPing = jornadaActiva?.ubicaciones?.[0] || null;
+      const jornadaActiva = (u.jornadas || []).find(j =>
+        ['Iniciada', 'En Pausa', 'En Ruta', 'Activa'].includes(j.estado) &&
+        new Date(j.horaInicio) >= startOfDay
+      ) || null;
+      const ultimaJornada = (u.jornadas || [])[0] || null;
+      const visitaEnCurso = jornadaActiva?.visitas?.[0] || null;
+      const ultimoPing = ultimoPingPorUsuario[u.id] || jornadaActiva?.ubicaciones?.[0] || null;
 
-      // Inactividad máxima para considerar ping en vivo: 5 minutos (Cero simulación)
-      const updateTime = ultimoPing?.timestamp
-        ? new Date(ultimoPing.timestamp).getTime()
-        : (u.lastLocationUpdate ? Number(u.lastLocationUpdate) : null);
+      // Resolver coordenada GPS más reciente entre ping, última jornada y User
+      const candidatosGps = [];
+      if (ultimoPing?.lat && ultimoPing?.lng) {
+        candidatosGps.push({
+          lat: Number(ultimoPing.lat),
+          lng: Number(ultimoPing.lng),
+          ts: new Date(ultimoPing.timestamp).getTime()
+        });
+      }
+      if (ultimaJornada?.latFin && ultimaJornada?.lngFin && ultimaJornada?.horaFin) {
+        candidatosGps.push({
+          lat: Number(ultimaJornada.latFin),
+          lng: Number(ultimaJornada.lngFin),
+          ts: new Date(ultimaJornada.horaFin).getTime()
+        });
+      }
+      if (ultimaJornada?.latInicio && ultimaJornada?.lngInicio && ultimaJornada?.horaInicio) {
+        candidatosGps.push({
+          lat: Number(ultimaJornada.latInicio),
+          lng: Number(ultimaJornada.lngInicio),
+          ts: new Date(ultimaJornada.horaInicio).getTime()
+        });
+      }
+      if (u.lat && u.lng) {
+        candidatosGps.push({
+          lat: Number(u.lat),
+          lng: Number(u.lng),
+          ts: u.lastLocationUpdate ? Number(u.lastLocationUpdate) : 0
+        });
+      }
+      candidatosGps.sort((a, b) => b.ts - a.ts);
+      const mejorGps = candidatosGps[0] || null;
 
+      const updateTime = mejorGps?.ts || (u.lastLocationUpdate ? Number(u.lastLocationUpdate) : null);
       const diffMs = updateTime ? (ahora - updateTime) : Infinity;
-      const pingReciente = Boolean(updateTime && diffMs < 5 * 60 * 1000);
+      const pingReciente = Boolean(updateTime && diffMs < 15 * 60 * 1000);
 
       let estadoOperativo = 'Inactivo';
       let estado = 'Fuera de Turno';
@@ -316,13 +395,17 @@ class TrackingService {
         foto: u.foto,
         roleId: u.roleId,
         isOnline: Boolean(jornadaActiva && pingReciente),
-        lat: ultimoPing?.lat ?? u.lat,
-        lng: ultimoPing?.lng ?? u.lng,
+        lat: mejorGps ? mejorGps.lat : u.lat,
+        lng: mejorGps ? mejorGps.lng : u.lng,
         lastLocationUpdate: updateTime,
         enVivo,
         estadoOperativo,
         estado,
         jornadaId: jornadaActiva?.id || null,
+        ultimaJornadaFecha: ultimaJornada?.horaInicio || null,
+        ultimaJornadaFin: ultimaJornada?.horaFin || null,
+        ultimaJornadaDuracionMin: ultimaJornada?.tiempoTotalMin || null,
+        ultimaJornadaDistanciaKm: ultimaJornada?.distanciaKm || null,
         bateria: (pingReciente && ultimoPing?.bateria != null)
           ? Number(ultimoPing.bateria)
           : (jornadaActiva?.bateriaInicio != null ? Number(jornadaActiva.bateriaInicio) : null),

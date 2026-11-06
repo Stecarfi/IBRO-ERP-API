@@ -1957,30 +1957,34 @@ class CampoController {
 
       const hoyCol = getFechaColombia(new Date());
 
-      // Enriquecer cada ruta con el progreso real de sus paradas en VisitaCampo y su estado oficial (Pendiente, En Curso, Finalizada)
-      const rutasEnriquecidas = await Promise.all(rutas.map(async (r) => {
-        const fechaProgStr = r.fechaProgramada ? getFechaColombia(r.fechaProgramada) : getFechaColombia(r.createdAt);
-        const startDayCol = new Date(`${fechaProgStr}T00:00:00-05:00`);
-        const endDayCol = new Date(`${fechaProgStr}T23:59:59.999-05:00`);
-
-        const [paradasExplicitas, visitasRealesDia] = await Promise.all([
-          r.codigo
-            ? prisma.visitaCampo.findMany({
-                where: {
-                  usuarioId: r.usuarioId,
-                  observaciones: { contains: `[Ruta ${r.codigo}]` }
-                },
-                orderBy: { createdAt: 'asc' }
-              }).catch(() => [])
-            : Promise.resolve([]),
-          prisma.visitaCampo.findMany({
-            where: {
-              usuarioId: r.usuarioId,
-              checkInHora: { gte: startDayCol, lte: endDayCol }
+      // Optimización: 1 sola consulta en lote a VisitaCampo para todas las rutas (evita N*2 consultas y agotamiento del pool de Prisma)
+      const rutaUserIds = Array.from(new Set(rutas.map(r => r.usuarioId).filter(Boolean)));
+      const todasVisitasUsuarios = rutaUserIds.length > 0
+        ? await prisma.visitaCampo.findMany({
+            where: { usuarioId: { in: rutaUserIds } },
+            include: {
+              clienteExterno: { select: { id: true, nombre: true, direccion: true, telefono: true, contacto: true } },
+              cliente: { select: { id: true, nom: true, direccion: true, tel: true } }
             },
-            orderBy: { checkInHora: 'asc' }
+            orderBy: { createdAt: 'asc' }
           }).catch(() => [])
-        ]);
+        : [];
+
+      // Enriquecer cada ruta con el progreso real de sus paradas en VisitaCampo y su estado oficial (Pendiente, En Curso, Finalizada)
+      const rutasEnriquecidas = rutas.map((r) => {
+        const fechaProgStr = r.fechaProgramada ? getFechaColombia(r.fechaProgramada) : getFechaColombia(r.createdAt);
+
+        const paradasExplicitas = r.codigo
+          ? todasVisitasUsuarios.filter(p =>
+              p.usuarioId === r.usuarioId &&
+              String(p.observaciones || '').includes(`[Ruta ${r.codigo}]`)
+            )
+          : [];
+        const visitasRealesDia = todasVisitasUsuarios.filter(v =>
+          v.usuarioId === r.usuarioId &&
+          v.checkInHora &&
+          getFechaColombia(v.checkInHora) === fechaProgStr
+        );
 
         const paradasMap = new Map();
         paradasExplicitas.forEach(p => {
@@ -2056,14 +2060,29 @@ class CampoController {
             id: p.id,
             codigo: p.codigo,
             orden: idx + 1,
-            lugar: p.resultadoResumen || 'Parada en ruta',
+            lugar: p.resultadoResumen || p.clienteExterno?.nombre || p.cliente?.nom || 'Parada en ruta',
+            direccion: p.clienteExterno?.direccion || p.cliente?.direccion || p.observaciones || '',
+            contacto: p.contactoAtendio || p.clienteExterno?.contacto || '',
+            telefonoContacto: p.clienteExterno?.telefono || p.cliente?.tel || '',
+            motivo: p.tipoVisita || 'Parada en Ruta',
             estado: p.checkOutHora ? 'Realizada' : (p.checkInHora ? 'En Curso' : 'Pendiente'),
+            fecha: p.checkInHora ? getFechaColombia(p.checkInHora) : fechaProgStr,
+            checkInHora: p.checkInHora || null,
+            checkOutHora: p.checkOutHora || null,
             horaLlegada: p.checkInHora ? formatHoraColombia(p.checkInHora) : null,
             horaSalida: p.checkOutHora ? formatHoraColombia(p.checkOutHora) : null,
-            duracionMin: p.duracionMin || 0
+            duracionMin: p.duracionMin || 0,
+            resultado: p.resultadoVisita || (p.checkOutHora ? 'Completada' : (p.checkInHora ? 'En Curso' : 'Pendiente')),
+            actividadesRealizadas: p.actividadesRealizadas || '',
+            observaciones: p.observaciones || '',
+            compromisos: p.compromisos || '',
+            lat: p.checkInLat || null,
+            lng: p.checkInLng || null,
+            evidencias: Array.isArray(p.evidencias) ? p.evidencias : [],
+            firmaCliente: p.firmaCliente || null
           }))
         };
-      }));
+      });
 
       res.json(rutasEnriquecidas);
     } catch (err) {
@@ -2947,6 +2966,10 @@ class CampoController {
         where: {
           usuarioId: { in: comercialesIds },
           fechaProgramada: { gte: startOfDay, lte: endOfDay }
+        },
+        select: {
+          id: true,
+          estado: true
         }
       });
       const actAsignadasCount = actividadesHoy.length;
@@ -3775,9 +3798,20 @@ class CampoController {
 
       const visitas = [...visitasEnriquecidasAsc].reverse();
 
-      // 3. Calcular Jornadas, Horas Efectivas y Distancia Real (100% consistente con Mapa en Vivo)
-      const totalJornadas = diasOperativosSet.size > 0 ? diasOperativosSet.size : jornadas.length;
-      const minutosTotalesEfectivos = minutosVisitasTotal;
+      // 3. Calcular Jornadas, Horas Efectivas y Distancia Real (consolidando turnos JornadaLaboral + visitas en campo)
+      let minutosTurnosTotal = 0;
+      let kmTurnosTotal = 0;
+      jornadas.forEach(j => {
+        if (j.horaInicio) {
+          diasOperativosSet.add(`${j.usuarioId}_${getFechaColombia(j.horaInicio)}`);
+        }
+        const durJ = j.tiempoTotalMin || (j.horaFin ? Math.max(1, Math.round((new Date(j.horaFin) - new Date(j.horaInicio)) / 60000)) : Math.max(1, Math.round((ahora - new Date(j.horaInicio)) / 60000)));
+        minutosTurnosTotal += durJ;
+        kmTurnosTotal += Number(j.distanciaKm) || 0;
+      });
+
+      const totalJornadas = Math.max(diasOperativosSet.size, jornadas.length);
+      const minutosTotalesEfectivos = Math.max(minutosVisitasTotal, minutosTurnosTotal);
       const horasTotales = Number((minutosTotalesEfectivos / 60).toFixed(1));
       const tiempoEfectivoTexto = minutosTotalesEfectivos >= 60
         ? `${Math.floor(minutosTotalesEfectivos / 60)}h ${minutosTotalesEfectivos % 60}m`
@@ -3786,7 +3820,7 @@ class CampoController {
         ? `${Math.floor(minutosTransitoTotal / 60)}h ${minutosTransitoTotal % 60}m`
         : `${minutosTransitoTotal} min`;
 
-      const kmTotales = Number(kmRecorridosVisitas.toFixed(1));
+      const kmTotales = Number(Math.max(kmRecorridosVisitas, kmTurnosTotal).toFixed(2));
 
       const totalVisitas = visitas.length;
       const visitasEfectivas = visitas.filter(v => v.estado === 'Realizada' || Boolean(v.checkOutHora)).length;
@@ -3830,13 +3864,29 @@ class CampoController {
       const totalVentas = ventas.length;
       const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
 
-      // 6. Tareas y Rutas Asignadas
+      // 6. Tareas y Rutas Asignadas (con comentarios para trazabilidad minuto a minuto)
       const actividades = await prisma.actividadCampo.findMany({
         where: {
           ...userWhere,
           ...(modoPeriodo !== 'todos' ? { fechaProgramada: { gte: inicio, lte: fin } } : {})
         },
-        select: { id: true, codigo: true, titulo: true, estado: true, prioridad: true, fechaProgramada: true }
+        select: {
+          id: true,
+          codigo: true,
+          titulo: true,
+          descripcion: true,
+          estado: true,
+          prioridad: true,
+          fechaProgramada: true,
+          fechaFinalizacion: true,
+          horaEstimada: true,
+          usuarioId: true,
+          asignadoPorId: true,
+          comentarios: true,
+          createdAt: true,
+          usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } }
+        },
+        orderBy: { fechaProgramada: 'desc' }
       });
       const totalTareas = actividades.length;
       const tareasCumplidas = actividades.filter(a => a.estado === 'Completada' || a.estado === 'Finalizada' || a.estado === 'Aprobada').length;
@@ -3853,6 +3903,8 @@ class CampoController {
       // 8.1 Aperturas y Cierres de Jornada
       jornadas.forEach(j => {
         const nomAsesor = `${j.usuario?.nombre || ''} ${j.usuario?.apellido || ''}`.trim() || 'Asesor en Campo';
+        const durJMin = j.tiempoTotalMin || (j.horaFin ? Math.max(1, Math.round((new Date(j.horaFin) - new Date(j.horaInicio)) / 60000)) : Math.max(1, Math.round((ahora - new Date(j.horaInicio)) / 60000)));
+        const durJTexto = durJMin >= 60 ? `${Math.floor(durJMin / 60)}h ${durJMin % 60}m` : `${durJMin} min`;
         if (j.horaInicio) {
           const dIni = new Date(j.horaInicio);
           eventosCronologicos.push({
@@ -3865,18 +3917,21 @@ class CampoController {
             fechaIso: dIni.toISOString(),
             fechaColombia: getFechaColombia(dIni),
             horaColombia: formatHoraColombia(dIni),
+            horaSalidaColombia: j.horaFin ? formatHoraColombia(j.horaFin) : 'En Turno',
             usuarioId: j.usuarioId,
             asesorNombre: nomAsesor,
             usuarioCargo: j.usuario?.cargo || 'Asesor Comercial',
             titulo: `${nomAsesor} inició turno laboral en campo`,
-            descripcion: `Inicio de jornada registrado${j.direccionInicio ? ` en ${j.direccionInicio}` : ''}.`,
+            descripcion: `Inicio de jornada registrado a las ${formatHoraColombia(dIni)}${j.horaFin ? ` → Cierre: ${formatHoraColombia(j.horaFin)} (${durJTexto})` : ` (${durJTexto} en curso)`}${j.distanciaKm ? ` • Recorrido GPS: ${Number(j.distanciaKm).toFixed(2)} km` : ''}${j.direccionInicio && !j.direccionInicio.includes('Sin señal') ? ` • ${j.direccionInicio}` : ''}.`,
             lat: j.latInicio && j.latInicio !== 0 ? j.latInicio : null,
             lng: j.lngInicio && j.lngInicio !== 0 ? j.lngInicio : null,
-            bateria: null,
-            duracionMin: j.tiempoTotalMin || null
+            bateria: j.bateriaInicio || null,
+            duracionMin: durJMin,
+            duracionTexto: durJTexto,
+            distanciaKm: Number(j.distanciaKm || 0)
           });
         }
-        if (j.horaFin && j.estado === 'Finalizada') {
+        if (j.horaFin) {
           const dFin = new Date(j.horaFin);
           eventosCronologicos.push({
             id: `EVT-JFIN-${j.id}`,
@@ -3891,10 +3946,69 @@ class CampoController {
             usuarioId: j.usuarioId,
             asesorNombre: nomAsesor,
             usuarioCargo: j.usuario?.cargo || 'Asesor Comercial',
-            titulo: `${nomAsesor} finalizó su jornada laboral`,
-            descripcion: `Turno cerrado con ${j.totalVisitas || 0} visitas atendidas y ${j.tiempoTotalMin || 0} min efectivos en terreno.`
+            titulo: `${nomAsesor} finalizó su jornada laboral (${durJTexto})`,
+            descripcion: `Turno realizado de ${formatHoraColombia(j.horaInicio)} a ${formatHoraColombia(dFin)} (${durJTexto} efectivos en terreno${j.distanciaKm ? ` • ${Number(j.distanciaKm).toFixed(2)} km recorridos` : ''}${j.observaciones ? ` • Obs: ${j.observaciones}` : ''}).`,
+            lat: (j.latFin && j.latFin !== 0) ? j.latFin : ((j.latInicio && j.latInicio !== 0) ? j.latInicio : null),
+            lng: (j.lngFin && j.lngFin !== 0) ? j.lngFin : ((j.lngInicio && j.lngInicio !== 0) ? j.lngInicio : null),
+            duracionMin: durJMin,
+            duracionTexto: durJTexto,
+            distanciaKm: Number(j.distanciaKm || 0)
           });
         }
+      });
+
+      // 8.1b Eventos de Rutas y Tareas Asignadas (Inicio de Ruta, Observaciones del Asesor, Cierre de Ruta)
+      actividades.forEach(act => {
+        const nomAsesor = `${act.usuario?.nombre || ''} ${act.usuario?.apellido || ''}`.trim() || 'Asesor Comercial';
+        const esRuta = String(act.codigo || '').startsWith('RUT-') || String(act.titulo || '').toLowerCase().includes('ruta');
+        const comentariosArr = Array.isArray(act.comentarios) ? act.comentarios : [];
+        comentariosArr.forEach((c, idx) => {
+          if (!c || !c.fecha) return;
+          const dEvt = new Date(c.fecha);
+          if (isNaN(dEvt.getTime())) return;
+          if (modoPeriodo !== 'todos' && (dEvt < inicio || dEvt > fin)) return;
+          if (c.accion === 'CREACION') return;
+
+          let etiquetaEvt = esRuta ? 'Gestión de Ruta Asignada' : 'Gestión de Tarea Operativa';
+          let iconoEvt = 'fa-route';
+          let colorEvt = 'blue';
+          if (c.accion === 'INICIAR_RUTA') {
+            etiquetaEvt = 'Inicio de Ruta Asignada';
+            iconoEvt = 'fa-route';
+            colorEvt = 'emerald';
+          } else if (c.accion === 'CIERRE_RUTA' || c.estadoNuevo === 'Finalizada' || c.estadoNuevo === 'Completada') {
+            etiquetaEvt = esRuta ? 'Cierre de Ruta por Asesor' : 'Tarea Finalizada por Asesor';
+            iconoEvt = 'fa-circle-check';
+            colorEvt = 'indigo';
+          } else if (c.accion === 'OBSERVACION_ASESOR') {
+            etiquetaEvt = 'Observación del Asesor en Ruta';
+            iconoEvt = 'fa-comment-dots';
+            colorEvt = 'purple';
+          } else if (c.rol === 'delegado') {
+            etiquetaEvt = 'Directriz / Revisión del Delegado';
+            iconoEvt = 'fa-user-shield';
+            colorEvt = 'amber';
+          }
+
+          eventosCronologicos.push({
+            id: `EVT-ACT-${act.id}-${idx}`,
+            codigo: act.codigo,
+            tipoEvento: esRuta ? 'GESTION_RUTA' : 'GESTION_TAREA',
+            etiqueta: etiquetaEvt,
+            icono: iconoEvt,
+            color: colorEvt,
+            timestamp: dEvt.getTime(),
+            fechaIso: dEvt.toISOString(),
+            fechaColombia: getFechaColombia(dEvt),
+            horaColombia: formatHoraColombia(dEvt),
+            usuarioId: act.usuarioId,
+            asesorNombre: nomAsesor,
+            usuarioCargo: act.usuario?.cargo || 'Asesor Comercial',
+            lugar: act.titulo,
+            titulo: `${act.codigo ? `[${act.codigo}] ` : ''}${act.titulo}`,
+            descripcion: c.observacionGeneral || c.texto || `Cambio de estado a ${c.estadoNuevo || act.estado}`
+          });
+        });
       });
 
       // 8.2 Pausas por Hora de Almuerzo y Reactivación
@@ -4027,6 +4141,8 @@ class CampoController {
         .filter(u => !targetUserId || u.id === targetUserId)
         .map(u => {
           const jHoy = jornadasHoy.find(j => j.usuarioId === u.id);
+          const uJornadas = jornadas.filter(j => j.usuarioId === u.id);
+          const ultJ = uJornadas[0] || jHoy || null;
           const uVisitas = visitas.filter(v => v.usuarioId === u.id);
           const uVisitasHoy = uVisitas.filter(v => v.fecha === hoyColombia);
           const paradaEnCursoHoy = uVisitasHoy.find(v => v.estado === 'En Sitio' || !v.checkOutHora);
@@ -4056,9 +4172,33 @@ class CampoController {
             estadoVivo = 'Jornada Finalizada Hoy';
           }
 
-          const minAsesor = uVisitas.reduce((acc, v) => acc + (v.duracionMin || 0), 0);
-          const minTransitoAsesor = uVisitas.reduce((acc, v) => acc + (v.tiempoTransitoAntesMin || 0), 0);
-          const kmAsesor = Number(uVisitas.reduce((acc, v) => acc + (v.distanciaDesdeAnteriorKm || 0), 0).toFixed(1));
+          const minVisitasAsesor = uVisitas.reduce((acc, v) => acc + (v.duracionMin || 0), 0);
+          const minTurnosAsesor = uJornadas.reduce((acc, j) => {
+            const dMin = j.tiempoTotalMin || (j.horaFin ? Math.max(1, Math.round((new Date(j.horaFin) - new Date(j.horaInicio)) / 60000)) : Math.max(1, Math.round((ahora - new Date(j.horaInicio)) / 60000)));
+            return acc + dMin;
+          }, 0);
+          const minAsesor = Math.max(minVisitasAsesor, minTurnosAsesor);
+          const kmVisitasAsesor = Number(uVisitas.reduce((acc, v) => acc + (v.distanciaDesdeAnteriorKm || 0), 0).toFixed(1));
+          const kmTurnosAsesor = Number(uJornadas.reduce((acc, j) => acc + (Number(j.distanciaKm) || 0), 0).toFixed(2));
+          const kmAsesor = Math.max(kmVisitasAsesor, kmTurnosAsesor);
+
+          const historialTurnos = uJornadas.map(j => {
+            const dMin = j.tiempoTotalMin || (j.horaFin ? Math.max(1, Math.round((new Date(j.horaFin) - new Date(j.horaInicio)) / 60000)) : Math.max(1, Math.round((ahora - new Date(j.horaInicio)) / 60000)));
+            return {
+              id: j.id,
+              fecha: getFechaColombia(j.horaInicio),
+              horaInicio: formatHoraColombia(j.horaInicio),
+              horaFin: j.horaFin ? formatHoraColombia(j.horaFin) : 'En Turno',
+              duracionMin: dMin,
+              duracionTexto: dMin >= 60 ? `${Math.floor(dMin / 60)}h ${dMin % 60}m` : `${dMin} min`,
+              distanciaKm: Number(j.distanciaKm || 0),
+              estado: j.estado,
+              latInicio: j.latInicio || null,
+              lngInicio: j.lngInicio || null,
+              latFin: j.latFin || null,
+              lngFin: j.lngFin || null
+            };
+          });
 
           return {
             id: u.id,
@@ -4071,6 +4211,9 @@ class CampoController {
             estado: estadoVivo,
             horaInicioHoy: jHoy?.horaInicio ? formatHoraColombia(jHoy.horaInicio) : (paradaEnCursoHoy ? paradaEnCursoHoy.horaLlegada : null),
             bateriaReal,
+            ultimoTurno: historialTurnos[0] || null,
+            historialTurnos,
+            totalTurnosPeriodo: uJornadas.length,
             paradaActual: paradaEnCursoHoy ? {
               codigo: paradaEnCursoHoy.codigo,
               lugar: paradaEnCursoHoy.lugar,
@@ -4090,9 +4233,11 @@ class CampoController {
             totalVisitasPeriodo: uVisitas.length,
             tiempoPeriodoMin: minAsesor,
             tiempoPeriodoTexto: minAsesor >= 60 ? `${Math.floor(minAsesor / 60)}h ${minAsesor % 60}m` : `${minAsesor} min`,
+            tiempoEnClientesMin: minVisitasAsesor,
+            tiempoEnTurnosMin: minTurnosAsesor,
             kmPeriodo: kmAsesor,
-            lat: paradaEnCursoHoy?.checkInLat || u.lat || ultimaParada?.checkInLat || null,
-            lng: paradaEnCursoHoy?.checkInLng || u.lng || ultimaParada?.checkInLng || null
+            lat: paradaEnCursoHoy?.checkInLat || ultJ?.latFin || ultJ?.latInicio || u.lat || ultimaParada?.checkInLat || null,
+            lng: paradaEnCursoHoy?.checkInLng || ultJ?.lngFin || ultJ?.lngInicio || u.lng || ultimaParada?.checkInLng || null
           };
         });
 
@@ -4299,11 +4444,50 @@ class CampoController {
         }).catch(() => null);
       }
 
+      // Resolver ruta asignada (explícita por rutaCodigo/rutaId o ruta en curso/del día del asesor)
+      let resolvedRutaCodigo = req.body.rutaCodigo || null;
+      if (!resolvedRutaCodigo && req.body.rutaId) {
+        const rAct = await prisma.actividadCampo.findUnique({ where: { id: req.body.rutaId }, select: { codigo: true } }).catch(() => null);
+        if (rAct?.codigo) resolvedRutaCodigo = rAct.codigo;
+      }
+      if (!resolvedRutaCodigo) {
+        const rutasUsuario = await prisma.actividadCampo.findMany({
+          where: {
+            usuarioId: targetUserId,
+            OR: [
+              { codigo: { startsWith: 'RUT-' } },
+              { titulo: { contains: 'Ruta', mode: 'insensitive' } }
+            ]
+          },
+          orderBy: { fechaProgramada: 'desc' },
+          take: 10
+        }).catch(() => []);
+        const fechaParadaStr = getFechaColombia(ahora);
+        const rutaDeEsaFecha = rutasUsuario.find(r => getFechaColombia(r.fechaProgramada || r.createdAt) === fechaParadaStr);
+        const rutaEnCurso = rutasUsuario.find(r => ['En Curso', 'En ejecucion', 'En Progreso'].includes(r.estado));
+        const rutaElegida = rutaDeEsaFecha || rutaEnCurso || null;
+        if (rutaElegida?.codigo) {
+          resolvedRutaCodigo = rutaElegida.codigo;
+          if (rutaElegida.estado === 'Pendiente') {
+            await prisma.actividadCampo.update({
+              where: { id: rutaElegida.id },
+              data: { estado: 'En Curso' }
+            }).catch(() => {});
+          }
+        }
+      }
+
+      const prefijoRutaObs = resolvedRutaCodigo ? `[Ruta ${resolvedRutaCodigo}] ` : '';
+
       let nuevoMovimiento;
       let codigo;
 
       if (paradaProgramada) {
         codigo = paradaProgramada.codigo;
+        const obsPrev = paradaProgramada.observaciones || '';
+        const obsConRuta = (resolvedRutaCodigo && !obsPrev.includes(`[Ruta ${resolvedRutaCodigo}]`))
+          ? `${prefijoRutaObs}${obsPrev}`
+          : obsPrev;
         nuevoMovimiento = await prisma.visitaCampo.update({
           where: { id: paradaProgramada.id },
           data: {
@@ -4323,7 +4507,7 @@ class CampoController {
             resultadoResumen: String(lugar).trim(),
             actividadesRealizadas: (actividadesRealizadas || '').trim() || paradaProgramada.actividadesRealizadas || null,
             resultadoVisita: resultado || (checkOutDate ? 'Completada' : null),
-            observaciones: notas ? `${paradaProgramada.observaciones || ''} | ${notas}`.trim() : (paradaProgramada.observaciones || `Llegada a ${String(lugar).trim()}`),
+            observaciones: notas ? `${obsConRuta} | ${notas}`.trim() : (obsConRuta || `${prefijoRutaObs}Llegada a ${String(lugar).trim()}`),
             contactoAtendio: contacto ? String(contacto).trim() : paradaProgramada.contactoAtendio,
             firmaCliente: req.body.firmaCliente || paradaProgramada.firmaCliente || null,
             evidencias: Array.isArray(req.body.evidencias) ? req.body.evidencias : (paradaProgramada.evidencias || [])
@@ -4337,6 +4521,11 @@ class CampoController {
       } else {
         const count = await prisma.visitaCampo.count();
         codigo = `MOV-${Date.now().toString().slice(-6)}-${String(count + 1).slice(-3)}`;
+
+        const baseObs = (notas || `Llegada a ${String(lugar).trim()}${direccion ? ` (${String(direccion).trim()})` : ''}`).trim();
+        const obsFinal = (resolvedRutaCodigo && !baseObs.includes(`[Ruta ${resolvedRutaCodigo}]`))
+          ? `${prefijoRutaObs}${baseObs}`
+          : baseObs;
 
         nuevoMovimiento = await prisma.visitaCampo.create({
           data: {
@@ -4359,7 +4548,7 @@ class CampoController {
             resultadoResumen: String(lugar).trim(),
             actividadesRealizadas: (actividadesRealizadas || '').trim() || null,
             resultadoVisita: resultado || (checkOutDate ? 'Completada' : null),
-            observaciones: (notas || `Llegada a ${String(lugar).trim()}${direccion ? ` (${String(direccion).trim()})` : ''}`).trim(),
+            observaciones: obsFinal,
             contactoAtendio: contacto ? String(contacto).trim() : null,
             firmaCliente: req.body.firmaCliente || null,
             evidencias: Array.isArray(req.body.evidencias) ? req.body.evidencias : []
@@ -4372,8 +4561,20 @@ class CampoController {
         });
       }
 
-      // Actualizar posición en vivo del usuario SOLO si hay coordenadas reales
+      // Actualizar posición en vivo del usuario y guardar punto en rastreoUbicacion si hay coordenadas reales
       if (numLat !== null && numLng !== null) {
+        await prisma.rastreoUbicacion.create({
+          data: {
+            usuarioId: targetUserId,
+            jornadaId: resolvedJornadaId,
+            lat: numLat,
+            lng: numLng,
+            precision: precision ? parseFloat(precision) : null,
+            enMovimiento: false,
+            timestamp: ahora
+          }
+        }).catch(() => {});
+
         await prisma.user.update({
           where: { id: targetUserId },
           data: {
@@ -5219,9 +5420,9 @@ class CampoController {
     try {
       await autoCerrarJornadasVencidas(prisma);
 
-      const { fecha, periodo, usuarioId, desde, hasta } = req.query;
+      const { fecha, periodo, usuarioId, desde, hasta } = req.query || {};
       const esDel = this.esDelegado(req.user);
-      const esGerencial = req.query.modulo === 'control_gerencial' || req.headers['x-modulo'] === 'control_gerencial' || esDel;
+      const esGerencial = req.query?.modulo === 'control_gerencial' || req.headers?.['x-modulo'] === 'control_gerencial' || esDel;
       const targetUserId = esGerencial ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : (usuarioId && usuarioId !== 'TODOS' ? usuarioId : req.user?.id);
 
       const ahora = new Date();
@@ -5350,10 +5551,15 @@ class CampoController {
         }),
         prisma.jornadaLaboral.findMany({
           where: {
-            usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds }
+            usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
+            ...(modoPeriodo !== 'todos' && where.checkInHora ? { horaInicio: where.checkInHora } : {})
+          },
+          include: {
+            usuario: { select: { id: true, nombre: true, apellido: true, user: true, cargo: true, foto: true } },
+            pausas: { orderBy: { horaInicio: 'desc' } }
           },
           orderBy: { horaInicio: 'desc' },
-          take: 50
+          take: 200
         }),
         prisma.rastreoUbicacion.findMany({
           where: {
@@ -5452,10 +5658,68 @@ class CampoController {
         }
       });
       const ultimaJornadaPorUsuario = new Map();
-      ultimasJornadasHist.forEach(j => {
+      const turnosPorUsuarioMap = new Map();
+      const turnosFormateados = (ultimasJornadasHist || []).map(j => {
         if (!ultimaJornadaPorUsuario.has(j.usuarioId)) {
           ultimaJornadaPorUsuario.set(j.usuarioId, j);
         }
+        const dIni = new Date(j.horaInicio);
+        const dFin = j.horaFin ? new Date(j.horaFin) : null;
+        const fechaTurno = getFechaColombia(dIni);
+        const esTurnoDeHoy = fechaTurno === hoyColombia;
+        const enCurso = esTurnoDeHoy && !dFin && ['Iniciada', 'En Ruta', 'Activa', 'En Pausa'].includes(j.estado);
+        let durMin = j.tiempoTotalMin != null ? Number(j.tiempoTotalMin) : 0;
+        if (enCurso) {
+          durMin = Math.max(1, Math.round((ahora - dIni) / 60000));
+        } else if (dFin && durMin <= 0) {
+          durMin = Math.max(1, Math.round((dFin - dIni) / 60000));
+        }
+        const durTexto = durMin >= 60 ? `${Math.floor(durMin / 60)}h ${durMin % 60}m` : `${durMin} min`;
+        const fechaLegible = new Intl.DateTimeFormat('es-CO', {
+          timeZone: 'America/Bogota',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric'
+        }).format(dIni);
+        const uInfo = j.usuario || usuariosCampo.find(u => u.id === j.usuarioId) || {};
+        const nomAsesorJ = `${uInfo.nombre || ''} ${uInfo.apellido || ''}`.trim() || uInfo.user || 'Asesor';
+
+        const turnoItem = {
+          id: j.id,
+          usuarioId: j.usuarioId,
+          asesorNombre: nomAsesorJ,
+          usuarioCargo: uInfo.cargo || 'Asesor Comercial',
+          usuarioFoto: uInfo.foto || null,
+          colorIndex: advisorColorMap[j.usuarioId] !== undefined ? advisorColorMap[j.usuarioId] : 0,
+          fecha: fechaTurno,
+          fechaLegible,
+          esDeHoy: esTurnoDeHoy,
+          enCurso,
+          horaInicioIso: dIni.toISOString(),
+          horaInicio: formatHoraColombia(dIni),
+          horaFinIso: dFin ? dFin.toISOString() : null,
+          horaFin: dFin ? formatHoraColombia(dFin) : (enCurso ? 'En Turno Ahora' : 'Cierre Automático'),
+          duracionMin: durMin,
+          duracionTexto: durTexto,
+          distanciaKm: Number(j.distanciaKm || 0),
+          bateriaInicio: j.bateriaInicio != null ? Number(j.bateriaInicio) : null,
+          bateriaFin: j.bateriaFin != null ? Number(j.bateriaFin) : null,
+          latInicio: (j.latInicio && j.latInicio !== 0) ? Number(j.latInicio) : null,
+          lngInicio: (j.lngInicio && j.lngInicio !== 0) ? Number(j.lngInicio) : null,
+          latFin: (j.latFin && j.latFin !== 0) ? Number(j.latFin) : null,
+          lngFin: (j.lngFin && j.lngFin !== 0) ? Number(j.lngFin) : null,
+          direccionInicio: j.direccionInicio || '',
+          direccionFin: j.direccionFin || '',
+          estado: enCurso ? 'En Turno / En Ruta' : (j.estado || 'Finalizada'),
+          observaciones: j.observaciones || '',
+          dispositivo: j.dispositivo || 'Web / Móvil'
+        };
+
+        if (!turnosPorUsuarioMap.has(j.usuarioId)) {
+          turnosPorUsuarioMap.set(j.usuarioId, []);
+        }
+        turnosPorUsuarioMap.get(j.usuarioId).push(turnoItem);
+        return turnoItem;
       });
       const pingPorUsuario = new Map();
       ultimosPings.forEach(p => {
@@ -5854,6 +6118,8 @@ class CampoController {
           direccion: direccionLugar,
           motivo: item.tipoVisita || 'Visita Comercial',
           contacto: item.contactoAtendio || item.clienteExterno?.contacto || '',
+          telefonoContacto: item.clienteExterno?.telefono || item.cliente?.tel || item.prospecto?.contactoTelefono || '',
+          compromisos: item.compromisos || '',
           checkInHora: checkInDate.toISOString(),
           horaLlegada: formatHoraColombia(checkInDate),
           horaLlegadaColombia: formatHoraColombia(checkInDate),
@@ -5920,8 +6186,15 @@ class CampoController {
           estadoColor = 'blue';
         }
 
-        const tiempoEnCampoMin = uMovs.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
-        const tiempoHoyMin = uMovsHoy.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
+        const uTurnos = turnosPorUsuarioMap.get(u.id) || [];
+        const turnoHoyObj = uTurnos.find(t => t.esDeHoy) || null;
+        const ultimoTurnoObj = uTurnos[0] || null;
+        const tiempoEnClientesMin = uMovs.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
+        const tiempoEnTurnosMin = uTurnos.reduce((acc, t) => acc + (t.duracionMin || 0), 0);
+        const tiempoEnCampoMin = Math.max(tiempoEnClientesMin, tiempoEnTurnosMin);
+        const tiempoHoyClientesMin = uMovsHoy.reduce((acc, m) => acc + (m.duracionMin || 0), 0);
+        const tiempoHoyMin = Math.max(tiempoHoyClientesMin, turnoHoyObj?.duracionMin || 0);
+        const distanciaTotalKm = Number(uTurnos.reduce((acc, t) => acc + (Number(t.distanciaKm) || 0), 0).toFixed(2));
         const completadas = uMovs.filter(m => m.estado === 'Realizada').length;
         const efectividadPct = uMovs.length > 0 ? Math.round((completadas / uMovs.length) * 100) : 0;
         const anomaliasAsesor = anomaliasGlobales.filter(a => a.usuarioId === u.id);
@@ -5930,33 +6203,68 @@ class CampoController {
         const pingGps = pingPorUsuario.get(u.id);
         const pingsDeHoy = pingsHoyPorUsuario.get(u.id) || [];
 
-        // Resolver coordenadas en tiempo real del operador (parada activa > último ping reciente > ubicación del usuario > inicio de turno > última parada real)
-        let latReal = null;
-        let lngReal = null;
+        // Resolver coordenadas en tiempo real del operador priorizando el evento GPS con timestamp más reciente real
+        const candidatosCoord = [];
         if (paradaActiva?.checkInLat && paradaActiva?.checkInLng) {
-          latReal = Number(paradaActiva.checkInLat);
-          lngReal = Number(paradaActiva.checkInLng);
-        } else if (pingGps?.lat != null && pingGps?.lng != null && (pingGps.lat !== 0 || pingGps.lng !== 0)) {
-          latReal = Number(pingGps.lat);
-          lngReal = Number(pingGps.lng);
-        } else if (u.lat != null && u.lng != null && (u.lat !== 0 || u.lng !== 0)) {
-          latReal = Number(u.lat);
-          lngReal = Number(u.lng);
-        } else if (j?.latInicio != null && j?.lngInicio != null && (j.latInicio !== 0 || j.lngInicio !== 0)) {
-          latReal = Number(j.latInicio);
-          lngReal = Number(j.lngInicio);
-        } else if (ultimaParada && (ultimaParada.checkInLat || ultimaParada.checkOutLat)) {
-          latReal = Number(ultimaParada.checkInLat || ultimaParada.checkOutLat);
-          lngReal = Number(ultimaParada.checkInLng || ultimaParada.checkOutLng);
+          candidatosCoord.push({
+            lat: Number(paradaActiva.checkInLat),
+            lng: Number(paradaActiva.checkInLng),
+            ts: new Date(paradaActiva.checkInHora).getTime() + 1000000 // prioridad en sitio activo
+          });
         }
+        if (pingGps?.lat != null && pingGps?.lng != null && (pingGps.lat !== 0 || pingGps.lng !== 0)) {
+          candidatosCoord.push({
+            lat: Number(pingGps.lat),
+            lng: Number(pingGps.lng),
+            ts: pingGps.timestamp ? new Date(pingGps.timestamp).getTime() : 0
+          });
+        }
+        if (ultJ?.latFin != null && ultJ?.lngFin != null && (ultJ.latFin !== 0 || ultJ.lngFin !== 0) && ultJ.horaFin) {
+          candidatosCoord.push({
+            lat: Number(ultJ.latFin),
+            lng: Number(ultJ.lngFin),
+            ts: new Date(ultJ.horaFin).getTime()
+          });
+        }
+        if (ultJ?.latInicio != null && ultJ?.lngInicio != null && (ultJ.latInicio !== 0 || ultJ.lngInicio !== 0) && ultJ.horaInicio) {
+          candidatosCoord.push({
+            lat: Number(ultJ.latInicio),
+            lng: Number(ultJ.lngInicio),
+            ts: new Date(ultJ.horaInicio).getTime()
+          });
+        }
+        if (ultimaParada && (ultimaParada.checkOutLat || ultimaParada.checkInLat)) {
+          candidatosCoord.push({
+            lat: Number(ultimaParada.checkOutLat || ultimaParada.checkInLat),
+            lng: Number(ultimaParada.checkOutLng || ultimaParada.checkInLng),
+            ts: new Date(ultimaParada.checkOutHora || ultimaParada.checkInHora).getTime()
+          });
+        }
+        if (u.lat != null && u.lng != null && (u.lat !== 0 || u.lng !== 0)) {
+          candidatosCoord.push({
+            lat: Number(u.lat),
+            lng: Number(u.lng),
+            ts: u.lastLocationUpdate ? Number(u.lastLocationUpdate) : 0
+          });
+        }
+        candidatosCoord.sort((a, b) => b.ts - a.ts);
+        const mejorCoord = candidatosCoord[0] || null;
+        const latReal = mejorCoord ? mejorCoord.lat : null;
+        const lngReal = mejorCoord ? mejorCoord.lng : null;
 
         const coordsObj = (latReal != null && lngReal != null && !isNaN(latReal) && !isNaN(lngReal))
           ? { lat: latReal, lng: lngReal }
           : null;
 
+        // Determinar texto de última actividad/ubicación comparando la fecha real del último turno vs última parada
+        const tsUltTurno = ultJ?.horaFin ? new Date(ultJ.horaFin).getTime() : (ultJ?.horaInicio ? new Date(ultJ.horaInicio).getTime() : 0);
+        const tsUltParada = ultimaParada?.checkInHora ? new Date(ultimaParada.checkInHora).getTime() : 0;
+
         let textoUbicacion = 'Sin reporte GPS';
         if (paradaActiva) {
           textoUbicacion = `En sitio: ${paradaActiva.lugar} (desde ${paradaActiva.horaLlegadaColombia})`;
+        } else if (ultimoTurnoObj && tsUltTurno > tsUltParada) {
+          textoUbicacion = `Último turno: ${ultimoTurnoObj.fechaLegible} (${ultimoTurnoObj.horaInicio} → ${ultimoTurnoObj.horaFin} • ${ultimoTurnoObj.duracionTexto}${ultimoTurnoObj.distanciaKm ? ` • ${ultimoTurnoObj.distanciaKm} km` : ''})`;
         } else if (ultimaParada) {
           textoUbicacion = `Última parada: ${ultimaParada.lugar} (${ultimaParada.fecha} • ${ultimaParada.horaLlegadaColombia})`;
         } else if (coordsObj) {
@@ -6043,19 +6351,17 @@ class CampoController {
           almuerzoHoy,
           ultimoAlmuerzo,
           historialAlmuerzos: pausasAsesor,
-          ultimoTurno: ultJ ? {
-            id: ultJ.id,
-            fecha: getFechaColombia(ultJ.horaInicio),
-            horaInicio: formatHoraColombia(ultJ.horaInicio),
-            horaFin: ultJ.horaFin ? formatHoraColombia(ultJ.horaFin) : null,
-            estado: ultJ.estado
-          } : null,
+          turnoHoy: turnoHoyObj,
+          ultimoTurno: ultimoTurnoObj,
+          historialTurnos: uTurnos,
+          totalTurnos: uTurnos.length,
+          distanciaTotalKm,
           ubicacionActual: textoUbicacion,
           direccionActual: paradaActiva ? paradaActiva.direccion : (ultimaParada ? ultimaParada.direccion : ''),
           coordenadasActuales: coordsObj,
           lat: coordsObj ? coordsObj.lat : null,
           lng: coordsObj ? coordsObj.lng : null,
-          lastLocationUpdate: pingGps?.timestamp || (u.lastLocationUpdate ? new Date(Number(u.lastLocationUpdate)).toISOString() : null),
+          lastLocationUpdate: mejorCoord?.ts ? new Date(mejorCoord.ts).toISOString() : (pingGps?.timestamp || (u.lastLocationUpdate ? new Date(Number(u.lastLocationUpdate)).toISOString() : null)),
           totalVisitas: uMovs.length,
           totalParadas: uMovs.length,
           visitasHoy: uMovsHoy.length,
@@ -6063,6 +6369,10 @@ class CampoController {
           visitasEnCurso: paradaActiva ? 1 : 0,
           tiempoEnCampoMin,
           tiempoEnCampoFormateado: tiempoEnCampoMin >= 60 ? `${Math.floor(tiempoEnCampoMin / 60)}h ${tiempoEnCampoMin % 60}m` : `${tiempoEnCampoMin}m`,
+          tiempoEnClientesMin,
+          tiempoEnClientesFormateado: tiempoEnClientesMin >= 60 ? `${Math.floor(tiempoEnClientesMin / 60)}h ${tiempoEnClientesMin % 60}m` : `${tiempoEnClientesMin}m`,
+          tiempoEnTurnosMin,
+          tiempoEnTurnosFormateado: tiempoEnTurnosMin >= 60 ? `${Math.floor(tiempoEnTurnosMin / 60)}h ${tiempoEnTurnosMin % 60}m` : `${tiempoEnTurnosMin}m`,
           tiempoHoyMin,
           tiempoHoyFormateado: tiempoHoyMin >= 60 ? `${Math.floor(tiempoHoyMin / 60)}h ${tiempoHoyMin % 60}m` : `${tiempoHoyMin}m`,
           efectividadPct,
@@ -6073,9 +6383,13 @@ class CampoController {
             lugar: paradaActiva.lugar,
             direccion: paradaActiva.direccion,
             motivo: paradaActiva.motivo,
+            contacto: paradaActiva.contacto || '',
+            telefonoContacto: paradaActiva.telefonoContacto || '',
             checkInHora: paradaActiva.checkInHora,
             horaLlegada: paradaActiva.horaLlegadaColombia,
             duracionMin: paradaActiva.duracionMin,
+            actividadesRealizadas: paradaActiva.actividadesRealizadas || '',
+            observaciones: paradaActiva.observaciones || '',
             lat: paradaActiva.checkInLat,
             lng: paradaActiva.checkInLng
           } : null,
@@ -6085,12 +6399,21 @@ class CampoController {
             lugar: ultimaParada.lugar,
             direccion: ultimaParada.direccion,
             motivo: ultimaParada.motivo,
+            contacto: ultimaParada.contacto || '',
+            telefonoContacto: ultimaParada.telefonoContacto || '',
             fecha: ultimaParada.fecha,
             checkInHora: ultimaParada.checkInHora,
             checkOutHora: ultimaParada.checkOutHora,
             horaLlegada: ultimaParada.horaLlegadaColombia,
             horaSalida: ultimaParada.horaSalidaColombia || 'En Sitio',
+            duracionMin: ultimaParada.duracionMin,
             duracionTexto: ultimaParada.duracionTexto,
+            resultado: ultimaParada.resultado,
+            actividadesRealizadas: ultimaParada.actividadesRealizadas || '',
+            observaciones: ultimaParada.observaciones || '',
+            compromisos: ultimaParada.compromisos || '',
+            evidencias: ultimaParada.evidencias || [],
+            firmaCliente: ultimaParada.firmaCliente || null,
             lat: ultimaParada.checkInLat,
             lng: ultimaParada.checkInLng
           } : null,
@@ -6238,6 +6561,7 @@ class CampoController {
         productividadPorAsesor,
         evolucionDiaria,
         evolucionMensual,
+        turnos: turnosFormateados,
         rutasAsignadas,
         pausasAlmuerzo,
         ventasDia,

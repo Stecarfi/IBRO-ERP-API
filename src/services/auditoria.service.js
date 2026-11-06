@@ -79,6 +79,12 @@ function getColombiaDayBounds(targetDate = new Date()) {
 }
 
 class AuditoriaService {
+  constructor() {
+    this._sesionesCache = null;
+    this._sesionesCacheTs = 0;
+    this._sesionesInFlight = null;
+  }
+
   /**
    * Registra actividad oficial del sistema/backend (Login, Logout, etc.)
    */
@@ -283,6 +289,10 @@ class AuditoriaService {
       console.warn('[AuditoriaService] Error actualizando AuditoriaSesion:', sessionErr.message);
     }
 
+    // Invalidar caché de lectura para que cualquier cambio de presencia se refleje al instante
+    this._sesionesCache = null;
+    this._sesionesCacheTs = 0;
+
     return {
       success: true,
       eventId: auditRecord.id,
@@ -330,6 +340,30 @@ class AuditoriaService {
    * PROHIBIDO ALTERAR O INVENTAR HORAS O ESTADOS.
    */
   async obtenerSesionesActivas(fechaReferencia = new Date()) {
+    const nowMs = Date.now();
+    if (this._sesionesCache && (nowMs - this._sesionesCacheTs) < 2500) {
+      return this._sesionesCache;
+    }
+    if (this._sesionesInFlight) {
+      return this._sesionesInFlight;
+    }
+
+    this._sesionesInFlight = this._obtenerSesionesActivasImpl(fechaReferencia)
+      .then((res) => {
+        this._sesionesCache = res;
+        this._sesionesCacheTs = Date.now();
+        this._sesionesInFlight = null;
+        return res;
+      })
+      .catch((err) => {
+        this._sesionesInFlight = null;
+        throw err;
+      });
+
+    return this._sesionesInFlight;
+  }
+
+  async _obtenerSesionesActivasImpl(fechaReferencia = new Date()) {
     const now = fechaReferencia instanceof Date ? fechaReferencia : new Date(fechaReferencia);
     const { startOfDay, endOfDay } = getColombiaDayBounds(now);
     const tresDiasMs = 3 * 24 * 3600 * 1000;
@@ -345,46 +379,102 @@ class AuditoriaService {
       orderBy: { nombre: 'asc' }
     });
 
+    const userIds = allUsers.map(u => u.id);
+
+    // Consultas en lote (1 sola ronda a BD en lugar de N*5 consultas secuenciales)
+    const [
+      allAuditsToday,
+      allSessionsToday,
+      allJornadasToday,
+      allVisitasCounts,
+      lastHistoricAudits
+    ] = await Promise.all([
+      prisma.auditoria.findMany({
+        where: {
+          userId: { in: userIds },
+          fecha: { gte: startOfDay, lte: endOfDay }
+        },
+        orderBy: { fecha: 'asc' }
+      }),
+      prisma.auditoriaSesion?.findMany
+        ? prisma.auditoriaSesion.findMany({
+            where: {
+              userId: { in: userIds },
+              fechaInicio: { gte: startOfDay, lte: endOfDay }
+            },
+            orderBy: { fechaInicio: 'desc' }
+          })
+        : Promise.resolve([]),
+      prisma.jornadaLaboral.findMany({
+        where: {
+          usuarioId: { in: userIds },
+          horaInicio: { gte: startOfDay, lte: endOfDay }
+        },
+        orderBy: { horaInicio: 'desc' }
+      }),
+      prisma.visitaCampo.groupBy({
+        by: ['usuarioId'],
+        where: {
+          usuarioId: { in: userIds },
+          checkInHora: { gte: startOfDay, lte: endOfDay }
+        },
+        _count: { _all: true }
+      }),
+      prisma.auditoria.findMany({
+        where: { userId: { in: userIds } },
+        distinct: ['userId'],
+        orderBy: { fecha: 'desc' },
+        select: { userId: true, fecha: true }
+      })
+    ]);
+
+    const auditsByUser = new Map();
+    for (const a of allAuditsToday) {
+      const k = String(a.userId);
+      if (!auditsByUser.has(k)) auditsByUser.set(k, []);
+      auditsByUser.get(k).push(a);
+    }
+
+    const sessionByUser = new Map();
+    for (const s of allSessionsToday) {
+      const k = String(s.userId);
+      if (!sessionByUser.has(k)) sessionByUser.set(k, s);
+    }
+
+    const jornadaByUser = new Map();
+    for (const j of allJornadasToday) {
+      const k = String(j.usuarioId);
+      if (!jornadaByUser.has(k)) jornadaByUser.set(k, j);
+    }
+
+    const visitasCountByUser = new Map();
+    for (const vc of allVisitasCounts) {
+      visitasCountByUser.set(String(vc.usuarioId), vc._count?._all || 0);
+    }
+
+    const historicAuditByUser = new Map();
+    for (const ha of lastHistoricAudits) {
+      historicAuditByUser.set(String(ha.userId), ha);
+    }
+
     const onlineUsers = [];
     const activeTodayUsers = [];
     const inactivosPendientes = [];
     const inactivosProlongados = [];
 
     for (const u of allUsers) {
+      const uKey = String(u.id);
       // 1. Obtener todos los eventos reales generados por el frontend hoy
-      const auditsToday = await prisma.auditoria.findMany({
-        where: {
-          userId: u.id,
-          fecha: { gte: startOfDay, lte: endOfDay }
-        },
-        orderBy: { fecha: 'asc' }
-      });
+      const auditsToday = auditsByUser.get(uKey) || [];
 
       // 2. Sesión registrada hoy
-      const sessionToday = prisma.auditoriaSesion?.findFirst ? await prisma.auditoriaSesion.findFirst({
-        where: {
-          userId: u.id,
-          fechaInicio: { gte: startOfDay, lte: endOfDay }
-        },
-        orderBy: { fechaInicio: 'desc' }
-      }) : null;
+      const sessionToday = sessionByUser.get(uKey) || null;
 
       // 3. Jornada laboral iniciada hoy (estrictamente en la fecha actual)
-      const jornadaToday = await prisma.jornadaLaboral.findFirst({
-        where: {
-          usuarioId: u.id,
-          horaInicio: { gte: startOfDay, lte: endOfDay }
-        },
-        orderBy: { horaInicio: 'desc' }
-      });
+      const jornadaToday = jornadaByUser.get(uKey) || null;
 
       // 4. Visitas en campo registradas hoy
-      const visitasHoy = await prisma.visitaCampo.count({
-        where: {
-          usuarioId: u.id,
-          checkInHora: { gte: startOfDay, lte: endOfDay }
-        }
-      });
+      const visitasHoy = visitasCountByUser.get(uKey) || 0;
 
       // EVENTOS DE HOY
       const hasAuditsToday = auditsToday.length > 0;
@@ -420,10 +510,7 @@ class AuditoriaService {
       // Último acceso histórico si no entró hoy (Reconciliar con la fecha más reciente entre auditoría y lastLogin)
       let ultimoAccesoHistorico = null;
       if (!ultimoAccesoHoy) {
-        const lastHistoricAudit = await prisma.auditoria.findFirst({
-          where: { userId: u.id },
-          orderBy: { fecha: 'desc' }
-        });
+        const lastHistoricAudit = historicAuditByUser.get(uKey) || null;
         const lastLoginDate = u.lastLogin ? new Date(u.lastLogin) : null;
         const auditTime = lastHistoricAudit ? new Date(lastHistoricAudit.fecha).getTime() : 0;
         const loginTime = lastLoginDate ? lastLoginDate.getTime() : 0;

@@ -406,6 +406,51 @@ class JornadaService {
     const parsedLngFin = lng !== null && lng !== undefined && lng !== '' ? parseFloat(lng) : NaN;
     const hasValidGpsFin = !Number.isNaN(parsedLatFin) && !Number.isNaN(parsedLngFin) && (parsedLatFin !== 0 || parsedLngFin !== 0);
 
+    if (hasValidGpsFin) {
+      await prisma.rastreoUbicacion.create({
+        data: {
+          usuarioId,
+          jornadaId: jornada.id,
+          lat: parsedLatFin,
+          lng: parsedLngFin,
+          bateria: bateriaFin !== null && bateriaFin !== undefined && bateriaFin !== '' ? parseInt(bateriaFin) : null,
+          enMovimiento: false,
+          timestamp: horaFin
+        }
+      }).catch(() => {});
+
+      await prisma.user.update({
+        where: { id: usuarioId },
+        data: {
+          lat: parsedLatFin,
+          lng: parsedLngFin,
+          lastLocationUpdate: Date.now()
+        }
+      }).catch(() => {});
+
+      if (puntos.length > 0) {
+        const lastP = puntos[puntos.length - 1];
+        distanciaTotalM += geofenceService.calcularDistanciaMetros(
+          lastP.lat,
+          lastP.lng,
+          parsedLatFin,
+          parsedLngFin
+        );
+      } else if (jornada.latInicio && jornada.lngInicio) {
+        distanciaTotalM += geofenceService.calcularDistanciaMetros(
+          jornada.latInicio,
+          jornada.lngInicio,
+          parsedLatFin,
+          parsedLngFin
+        );
+      }
+    }
+
+    const distanciaKmFinal = Math.max(
+      Number(jornada.distanciaKm) || 0,
+      Number((distanciaTotalM / 1000).toFixed(2))
+    );
+
     const jornadaCerrada = await prisma.jornadaLaboral.update({
       where: { id: jornada.id },
       data: {
@@ -421,7 +466,7 @@ class JornadaService {
         tiempoEfectivoMin,
         tiempoDetenidoMin,
         tiempoTransitoMin,
-        distanciaKm: Number((distanciaTotalM / 1000).toFixed(2)),
+        distanciaKm: distanciaKmFinal,
         totalVisitas: jornada.visitas.length,
         observaciones,
         cumplimientoHorarioPct

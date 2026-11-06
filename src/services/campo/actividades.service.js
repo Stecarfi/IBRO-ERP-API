@@ -16,9 +16,10 @@ class ActividadesService {
     }
     const cargoStr = String(userObject?.cargo || '').toLowerCase();
     const esDelegado = Boolean(userObject?.esDelegadoGerencia);
-    const roleId = String(userObject?.roleId || '');
+    const roleId = String(userObject?.roleId || userObject?.role?.id || '');
+    const userName = String(userObject?.user || '').toLowerCase();
 
-    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
+    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', 'asiadm', 'stecarfi05', 'dircomercial'].includes(userName) || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
       roleStr.includes(r) || cargoStr.includes(r)
     );
 
@@ -318,6 +319,30 @@ class ActividadesService {
       textoEvento = comentarioEfectivo || 'Tarea ejecutada y marcada como completada en terreno.';
     }
 
+    const cleanEvidenciaItem = (ev) => {
+      if (!ev || typeof ev !== 'object') return ev;
+      const copy = { ...ev };
+      if (copy.url && copy.base64 && copy.url === copy.base64) {
+        delete copy.base64;
+      }
+      return copy;
+    };
+
+    const incomingClean = incomingEvidencias.map(cleanEvidenciaItem);
+    const lightEvidenciasForComment = incomingClean.map(ev => {
+      if (ev && typeof ev === 'object') {
+        return {
+          id: ev.id,
+          nombre: ev.nombre,
+          tipo: ev.tipo,
+          esImagen: ev.esImagen,
+          tamano: ev.tamano,
+          fecha: ev.fecha
+        };
+      }
+      return ev;
+    });
+
     const eventoAuditoria = {
       fecha: new Date().toISOString(),
       usuarioId,
@@ -328,15 +353,24 @@ class ActividadesService {
       estadoNuevo: nuevoEstado,
       texto: textoEvento,
       observacionGeneral: (accionEvento === 'CIERRE_RUTA' || accionEvento === 'EJECUCION') ? textoEvento : undefined,
-      evidencias: incomingEvidencias.length > 0 ? incomingEvidencias : undefined
+      evidencias: lightEvidenciasForComment.length > 0 ? lightEvidenciasForComment : undefined
     };
 
     existingComments.push(eventoAuditoria);
     updateData.comentarios = existingComments;
 
-    if (incomingEvidencias.length > 0) {
-      const existingEvidencias = Array.isArray(actividad.evidencias) ? actividad.evidencias : [];
-      updateData.evidencias = [...existingEvidencias, ...incomingEvidencias];
+    if (incomingClean.length > 0) {
+      const existingEvidencias = (Array.isArray(actividad.evidencias) ? actividad.evidencias : []).map(cleanEvidenciaItem);
+      const merged = [];
+      const seenKeys = new Set();
+      for (const ev of [...existingEvidencias, ...incomingClean]) {
+        const key = (ev && typeof ev === 'object') ? (ev.id || ev.nombre || JSON.stringify(ev).slice(0, 120)) : String(ev);
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          merged.push(ev);
+        }
+      }
+      updateData.evidencias = merged;
     }
 
     const actividadActualizada = await prisma.actividadCampo.update({
