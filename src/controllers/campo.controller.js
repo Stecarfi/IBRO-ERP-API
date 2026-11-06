@@ -354,12 +354,47 @@ class CampoController {
       });
 
       const io = req.app?.get ? req.app.get('io') : null;
+
+      // Si al finalizar la jornada el asesor envía observación de su ruta del día y/o solicita cambiar su estado a Finalizada
+      const rutaIdCierre = req.body?.rutaId || null;
+      const obsRutaDia = (req.body?.observacionRuta || req.body?.observacionCierreRuta || '').trim();
+      const finalizarRutaAlCerrarJornada = req.body?.finalizarRuta !== undefined ? Boolean(req.body.finalizarRuta) : true;
+      let rutaActualizadaEnCierre = null;
+
+      if (rutaIdCierre && (obsRutaDia || finalizarRutaAlCerrarJornada)) {
+        try {
+          if (finalizarRutaAlCerrarJornada) {
+            const resRuta = await actividadesService.actualizarEstado(req.user.id, rutaIdCierre, {
+              estado: 'Finalizada',
+              accion: 'CIERRE_RUTA',
+              observacionGeneral: obsRutaDia || parsed.observaciones || 'Jornada finalizada. Solicitud de cierre de ruta enviada para aprobación del Delegado.',
+              comentario: obsRutaDia || parsed.observaciones || 'Jornada finalizada. Solicitud de cierre de ruta enviada para aprobación del Delegado.'
+            });
+            if (resRuta?.success) rutaActualizadaEnCierre = resRuta.actividad;
+          } else if (obsRutaDia) {
+            const resCom = await actividadesService.agregarComentario(req.user.id, rutaIdCierre, obsRutaDia, {
+              esDelegado: false,
+              solicitarCierre: false
+            });
+            if (resCom?.success) rutaActualizadaEnCierre = resCom.actividad;
+          }
+
+          if (io && rutaActualizadaEnCierre) {
+            io.emit('CAMPO_RUTA_UPDATE', { accion: 'CIERRE_RUTA', ruta: rutaActualizadaEnCierre, observacionCierre: obsRutaDia });
+            io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'ESTADO', actividad: rutaActualizadaEnCierre, tarea: rutaActualizadaEnCierre });
+          }
+        } catch (errRutaCierre) {
+          console.warn('[finalizarJornada] Error actualizando ruta al finalizar jornada:', errRutaCierre?.message);
+        }
+      }
+
       if (io) {
         io.emit('CAMPO_JORNADA_UPDATE', {
           accion: 'FIN',
           usuarioId: req.user.id,
           usuarioNombre: `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user,
           jornada: result.jornada,
+          rutaActualizada: rutaActualizadaEnCierre,
           timestamp: Date.now()
         });
         io.emit('db_update', { type: 'CAMPO_JORNADA_UPDATE', timestamp: Date.now() });
@@ -368,10 +403,12 @@ class CampoController {
       await this.registrarAuditoria(req.user.id, 'CAMPO_JORNADA_FIN', {
         jornadaId: parsed.jornadaId,
         tiempoTotalMin: result.jornada?.tiempoTotalMin,
-        distanciaKm: result.jornada?.distanciaKm
+        distanciaKm: result.jornada?.distanciaKm,
+        rutaIdCierre,
+        observacionRuta: obsRutaDia || undefined
       });
 
-      res.json(result);
+      res.json({ ...result, rutaActualizada: rutaActualizadaEnCierre });
     } catch (err) {
       res.status(400).json({ error: this.formatearError(err, 'No fue posible finalizar la jornada laboral.') });
     }
@@ -680,8 +717,28 @@ class CampoController {
   async agregarComentarioActividad(req, res) {
     try {
       const { id } = req.params;
-      const result = await actividadesService.agregarComentario(req.user.id, id, req.body.texto);
+      const textoComentario = (req.body?.texto || req.body?.comentario || req.body?.observacion || '').trim();
+      const actPrev = await prisma.actividadCampo.findUnique({ where: { id }, select: { usuarioId: true } }).catch(() => null);
+      const esComentarioDeDelegado = Boolean(
+        req.body?.rol === 'delegado' ||
+        (this.esDelegado(req.user) && actPrev && String(actPrev.usuarioId) !== String(req.user.id))
+      );
+
+      const result = await actividadesService.agregarComentario(req.user.id, id, textoComentario, {
+        esDelegado: esComentarioDeDelegado,
+        solicitarCierre: Boolean(req.body?.solicitarCierre),
+        nuevoEstado: req.body?.nuevoEstado || req.body?.estado || null
+      });
       if (!result.success) return res.status(400).json(result);
+
+      const io = req.app ? req.app.get('io') : null;
+      if (io) {
+        io.emit('CAMPO_ACTIVIDAD_UPDATE', { accion: 'COMENTARIO', actividad: result.actividad, tarea: result.actividad });
+        io.emit('CAMPO_TAREA_UPDATE', { accion: 'COMENTARIO', tarea: result.actividad, actividad: result.actividad });
+        io.emit('CAMPO_RUTA_UPDATE', { accion: 'COMENTARIO', ruta: result.actividad });
+        io.emit('db_update', { type: 'CAMPO_RUTA_UPDATE', timestamp: Date.now() });
+      }
+
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -1950,21 +2007,23 @@ class CampoController {
           ? 100
           : Math.min(100, Math.round((paradasCompletadasRuta / totalParadasRuta) * 100));
 
-        // Extraer observación general de cierre de ruta dejada por el asesor
+        // Extraer observaciones del asesor y comentarios del Delegado
+        const obsEnriquecidas = actividadesService.enriquecerObservacionesActividad(r);
         const comentariosArr = Array.isArray(r.comentarios) ? r.comentarios : [];
         const comentarioCierreObj = [...comentariosArr].reverse().find(c =>
           c.accion === 'CIERRE_RUTA' ||
           c.accion === 'EJECUCION' ||
+          c.accion === 'OBSERVACION_ASESOR' ||
           c.estadoNuevo === 'Finalizada' ||
           c.estadoNuevo === 'Completada' ||
           Boolean(c.observacionGeneral)
         );
-        const observacionCierre = comentarioCierreObj?.observacionGeneral || comentarioCierreObj?.texto || '';
+        const observacionCierre = obsEnriquecidas.observacionCierre || comentarioCierreObj?.observacionGeneral || comentarioCierreObj?.texto || '';
         const fechaHoraCierre = r.fechaFinalizacion
           ? formatHoraColombia(r.fechaFinalizacion)
           : (comentarioCierreObj?.fecha ? formatHoraColombia(comentarioCierreObj.fecha) : null);
 
-        // Normalizar estrictamente a los 3 estados oficiales: Pendiente, En Curso, Finalizada
+        // Normalizar estrictamente a los 3 estados oficiales para la operación en campo: Pendiente, En Curso, Finalizada
         let estadoOficial = 'Pendiente';
         if (['Finalizada', 'Completada', 'Aprobada'].includes(r.estado)) {
           estadoOficial = 'Finalizada';
@@ -1978,8 +2037,12 @@ class CampoController {
 
         return {
           ...r,
+          ...obsEnriquecidas,
           estado: estadoOficial,
           estadoOriginal: r.estado,
+          solicitudCambioEstado: r.estado === 'Finalizada' || r.estado === 'Completada',
+          aprobadaPorDelegado: r.estado === 'Aprobada',
+          enCorreccion: r.estado === 'En Corrección',
           fechaColombia: fechaProgStr,
           esRutaDeHoy: fechaProgStr === hoyCol,
           observacionCierre,

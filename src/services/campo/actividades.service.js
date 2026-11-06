@@ -63,7 +63,60 @@ class ActividadesService {
       }
     });
 
-    return { success: true, actividades };
+    const actividadesEnriquecidas = actividades.map(a => this.enriquecerObservacionesActividad(a));
+
+    return { success: true, actividades: actividadesEnriquecidas };
+  }
+
+  /**
+   * Extrae y clasifica las observaciones del asesor asignado y los comentarios del Delegado
+   */
+  enriquecerObservacionesActividad(act) {
+    if (!act) return act;
+    const comentariosArr = Array.isArray(act.comentarios) ? act.comentarios : [];
+    const observacionesAsesor = comentariosArr.filter(c => {
+      if (!c || !c.texto) return false;
+      if (['CREACION', 'INICIAR_RUTA', 'APROBACION', 'SOLICITUD_CORRECCION', 'REAPERTURA', 'REASIGNACION', 'MODIFICACION', 'COMENTARIO_DELEGADO', 'SOLICITUD_ACCION_DELEGADO'].includes(c.accion)) {
+        return false;
+      }
+      if (c.rol === 'delegado') return false;
+      if (c.rol === 'asesor' || ['OBSERVACION_ASESOR', 'CIERRE_RUTA', 'EJECUCION', 'SOLICITUD_CIERRE'].includes(c.accion) || Boolean(c.observacionGeneral)) {
+        return true;
+      }
+      if (c.usuarioId && act.usuarioId && String(c.usuarioId) === String(act.usuarioId)) {
+        return true;
+      }
+      return false;
+    });
+
+    const comentariosDelegado = comentariosArr.filter(c => {
+      if (!c || !c.texto) return false;
+      if (c.accion === 'CREACION' || c.accion === 'INICIAR_RUTA') return false;
+      if (c.rol === 'delegado' || ['COMENTARIO_DELEGADO', 'APROBACION', 'SOLICITUD_CORRECCION', 'REAPERTURA'].includes(c.accion)) {
+        return true;
+      }
+      if (c.usuarioId && act.usuarioId && String(c.usuarioId) !== String(act.usuarioId)) {
+        return true;
+      }
+      return false;
+    });
+
+    const ultimaObservacionAsesor = observacionesAsesor.length > 0 ? observacionesAsesor[observacionesAsesor.length - 1] : null;
+    const ultimoComentarioDelegado = comentariosDelegado.length > 0 ? comentariosDelegado[comentariosDelegado.length - 1] : null;
+    const observacionCierre = ultimaObservacionAsesor?.observacionGeneral || ultimaObservacionAsesor?.texto || '';
+    const solicitudCambioEstado = act.estado === 'Finalizada' || act.estado === 'Completada';
+    const aprobadaPorDelegado = act.estado === 'Aprobada';
+
+    return {
+      ...act,
+      observacionesAsesor,
+      ultimaObservacionAsesor,
+      comentariosDelegado,
+      ultimoComentarioDelegado,
+      observacionCierre,
+      solicitudCambioEstado,
+      aprobadaPorDelegado
+    };
   }
 
   /**
@@ -345,36 +398,140 @@ class ActividadesService {
       console.error('Error generando notificación de estado:', errNotif);
     }
 
-    return { success: true, actividad: actividadActualizada };
+    return { success: true, actividad: this.enriquecerObservacionesActividad(actividadActualizada) };
   }
 
   /**
-   * Añadir comentario a la actividad
+   * Añadir observación del asesor o comentario del Delegado a la actividad / ruta
    */
-  async agregarComentario(usuarioId, actividadId, texto) {
+  async agregarComentario(usuarioId, actividadId, texto, opciones = {}) {
     if (!texto || !texto.trim()) {
-      return { success: false, error: 'El texto del comentario es obligatorio.' };
+      return { success: false, error: 'El texto de la observación o comentario es obligatorio.' };
     }
 
     const actividad = await prisma.actividadCampo.findUnique({
-      where: { id: actividadId }
+      where: { id: actividadId },
+      include: {
+        usuario: { select: { id: true, nombre: true, apellido: true, user: true } },
+        asignadoPor: { select: { id: true, nombre: true, apellido: true, user: true } }
+      }
     });
 
-    if (!actividad) return { success: false, error: 'Actividad no encontrada.' };
+    if (!actividad) return { success: false, error: 'Actividad o ruta no encontrada.' };
 
-    const comentarios = Array.isArray(actividad.comentarios) ? actividad.comentarios : [];
-    comentarios.push({
+    let userName = 'Colaborador';
+    let userRecord = null;
+    try {
+      userRecord = await prisma.user.findUnique({
+        where: { id: usuarioId },
+        select: { id: true, nombre: true, apellido: true, user: true, cargo: true, roleId: true, esDelegadoGerencia: true }
+      });
+      if (userRecord) {
+        userName = `${userRecord.nombre || ''} ${userRecord.apellido || ''}`.trim() || userRecord.user || 'Colaborador';
+      }
+    } catch (e) {}
+
+    const esRuta = (actividad.codigo || '').startsWith('RUT-') || (actividad.titulo || '').toLowerCase().startsWith('ruta:');
+    const esAutorDelegado = Boolean(
+      opciones.esDelegado ||
+      (String(actividad.usuarioId) !== String(usuarioId) && (
+        userRecord?.esDelegadoGerencia ||
+        String(userRecord?.roleId) === '1' ||
+        /delegad|gerent|director|admin/i.test(String(userRecord?.cargo || ''))
+      ))
+    );
+
+    const solicitarCierre = Boolean(
+      opciones.solicitarCierre ||
+      opciones.nuevoEstado === 'Finalizada' ||
+      opciones.nuevoEstado === 'Completada'
+    );
+
+    const comentarios = Array.isArray(actividad.comentarios) ? [...actividad.comentarios] : [];
+    const nuevoEstadoAplicado = solicitarCierre
+      ? (esRuta ? 'Finalizada' : 'Completada')
+      : (opciones.nuevoEstado || actividad.estado);
+
+    const nuevoComentario = {
+      id: `COM-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`,
       fecha: new Date().toISOString(),
       usuarioId,
-      texto: texto.trim()
-    });
+      usuario: userName,
+      rol: esAutorDelegado ? 'delegado' : 'asesor',
+      accion: solicitarCierre
+        ? (esRuta ? 'CIERRE_RUTA' : 'EJECUCION')
+        : (esAutorDelegado ? 'COMENTARIO_DELEGADO' : 'OBSERVACION_ASESOR'),
+      tipo: esAutorDelegado ? 'comentario_delegado' : 'observacion_asesor',
+      estadoAnterior: actividad.estado,
+      estadoNuevo: nuevoEstadoAplicado,
+      texto: texto.trim(),
+      observacionGeneral: !esAutorDelegado ? texto.trim() : undefined
+    };
+
+    comentarios.push(nuevoComentario);
+
+    const updateData = { comentarios };
+    if (solicitarCierre || (opciones.nuevoEstado && opciones.nuevoEstado !== actividad.estado)) {
+      updateData.estado = nuevoEstadoAplicado;
+      if (['Finalizada', 'Completada', 'Aprobada'].includes(nuevoEstadoAplicado)) {
+        updateData.fechaFinalizacion = new Date();
+      }
+    }
 
     const actualizada = await prisma.actividadCampo.update({
       where: { id: actividadId },
-      data: { comentarios }
+      data: updateData,
+      include: {
+        usuario: { select: { id: true, nombre: true, apellido: true, cargo: true } },
+        asignadoPor: { select: { id: true, nombre: true, apellido: true } }
+      }
     });
 
-    return { success: true, actividad: actualizada };
+    // Generar notificación cruzada inmediata (Asesor <-> Delegado)
+    try {
+      const notifId = `NOTIF-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`;
+      if (esAutorDelegado && actividad.usuarioId && String(actividad.usuarioId) !== String(usuarioId)) {
+        await prisma.notificacion.create({
+          data: {
+            id: notifId,
+            paraId: actividad.usuarioId,
+            titulo: `💬 Comentario del Delegado en ${esRuta ? 'Ruta' : 'Tarea'} (${actividad.codigo})`,
+            mensaje: `El Delegado ${userName} comentó sobre "${actividad.titulo}": "${texto.trim()}"`,
+            de: userName,
+            tipo: 'comentario_delegado',
+            fecha: new Date(),
+            leida: false,
+            targetModule: 'comercial_campo'
+          }
+        });
+      } else if (!esAutorDelegado && actividad.asignadoPorId && String(actividad.asignadoPorId) !== String(usuarioId)) {
+        await prisma.notificacion.create({
+          data: {
+            id: notifId,
+            paraId: actividad.asignadoPorId,
+            titulo: solicitarCierre
+              ? `✅ Solicitud de Cierre en ${esRuta ? 'Ruta' : 'Tarea'} (${actividad.codigo})`
+              : `📝 Nueva Observación en ${esRuta ? 'Ruta' : 'Tarea'} (${actividad.codigo})`,
+            mensaje: solicitarCierre
+              ? `El asesor ${userName} marcó como Finalizada "${actividad.titulo}" (Pendiente de Aprobación). Observación: "${texto.trim()}"`
+              : `El asesor ${userName} registró una observación del día en "${actividad.titulo}": "${texto.trim()}"`,
+            de: userName,
+            tipo: solicitarCierre ? 'cumplimiento_asignacion' : 'observacion_asesor',
+            fecha: new Date(),
+            leida: false,
+            targetModule: 'control_gerencial'
+          }
+        });
+      }
+    } catch (errNotif) {
+      console.error('Error generando notificación de comentario/observación:', errNotif);
+    }
+
+    return {
+      success: true,
+      actividad: this.enriquecerObservacionesActividad(actualizada),
+      comentario: nuevoComentario
+    };
   }
 }
 
