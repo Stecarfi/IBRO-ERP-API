@@ -24,10 +24,11 @@ class ActividadesService {
     );
 
     const where = {
-      // Excluir rutas de las actividades estándar para que no se dupliquen con /campo/rutas
+      // Excluir rutas e informes semanales de las actividades estándar
       NOT: [
         { codigo: { startsWith: 'RUT-' } },
-        { titulo: { startsWith: 'Ruta:' } }
+        { titulo: { startsWith: 'Ruta:' } },
+        { codigo: { startsWith: 'INF-' } }
       ]
     };
 

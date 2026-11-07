@@ -178,4 +178,12 @@ router.delete('/movimientos-dia', (req, res) => campoController.eliminarMovimien
 router.delete('/movimientos', (req, res) => campoController.eliminarMovimientosDia(req, res));
 router.delete('/movimientos/:id', (req, res) => campoController.eliminarMovimiento(req, res));
 
+// 17. Plataforma de Informes Semanales de Ruta (Editor Corporativo Tipo Word)
+router.get('/informes-semanales/datos-semana', (req, res) => campoController.getDatosSemanaInforme(req, res));
+router.get('/informes-semanales', (req, res) => campoController.getInformesSemanales(req, res));
+router.post('/informes-semanales', (req, res) => campoController.guardarInformeSemanal(req, res));
+router.put('/informes-semanales/:id', (req, res) => campoController.guardarInformeSemanal(req, res));
+router.put('/informes-semanales/:id/revision', (req, res) => campoController.revisarInformeSemanal(req, res));
+router.delete('/informes-semanales/:id', (req, res) => campoController.eliminarInformeSemanal(req, res));
+
 module.exports = router;
