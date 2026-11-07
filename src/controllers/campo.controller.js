@@ -6747,15 +6747,49 @@ class CampoController {
   // =========================================================================
 
   /**
-   * Obtiene los datos reales de la ruta semanal de un asesor y genera la plantilla HTML
-   * estilo Word corporativo IBRO lista para editar, reportar al Delegado e imprimir.
+   * Obtiene los datos reales de la ruta semanal de los asesores en campo, calcula
+   * las gráficas reales de gestión y genera las tablas oficiales (sin texto preestablecido).
    */
   async getDatosSemanaInforme(req, res) {
     try {
       const esDel = this.esDelegado(req.user);
-      const targetUserId = (esDel && req.query.usuarioId && req.query.usuarioId !== 'TODOS')
-        ? String(req.query.usuarioId)
-        : req.user.id;
+
+      // Obtener la lista real de asesores comerciales en campo
+      const asesoresCampo = await prisma.user.findMany({
+        where: this.getFiltroOperadoresCampo(),
+        select: {
+          id: true,
+          nombre: true,
+          apellido: true,
+          cargo: true,
+          user: true,
+          telefono: true,
+          correo: true,
+          codigoAsesor: true
+        },
+        orderBy: { nombre: 'asc' }
+      });
+
+      const idsAsesoresCampo = asesoresCampo.map(a => String(a.id));
+      const reqUserEsAsesorCampo = idsAsesoresCampo.includes(String(req.user.id));
+
+      const queryUserId = req.query.usuarioId ? String(req.query.usuarioId).trim() : '';
+      let modoConsolidado = false;
+      let usuarioIdsFiltro = [];
+      let targetUserId = req.user.id;
+
+      if (queryUserId && queryUserId !== 'TODOS' && queryUserId !== 'ALL') {
+        targetUserId = queryUserId;
+        usuarioIdsFiltro = [queryUserId];
+      } else if (queryUserId === 'TODOS' || queryUserId === 'ALL' || esDel || !reqUserEsAsesorCampo) {
+        // Si quien consulta es el Delegado / Directora (ej. Stephanie Carrasquilla) o seleccionó TODOS,
+        // consolidamos los datos reales de todos los asesores de campo para no mostrar 0 paradas de un usuario administrativo.
+        modoConsolidado = true;
+        usuarioIdsFiltro = idsAsesoresCampo.length > 0 ? idsAsesoresCampo : [req.user.id];
+      } else {
+        targetUserId = req.user.id;
+        usuarioIdsFiltro = [req.user.id];
+      }
 
       // Calcular lunes y domingo de la semana en Colombia si no se envían fechas
       const hoyStr = getFechaColombia(new Date());
@@ -6778,39 +6812,44 @@ class CampoController {
       const endOfRange = new Date(`${fechaFinStr}T23:59:59.999-05:00`);
 
       const [
-        asesor,
+        asesorUnico,
         jornadasRaw,
         rutasRaw,
         visitasRaw,
-        clientesNuevos,
+        clientesNuevosRaw,
         cotizaciones,
         ventas,
-        seguimientos
+        seguimientosRaw
       ] = await Promise.all([
-        prisma.user.findUnique({
-          where: { id: targetUserId },
-          select: {
-            id: true,
-            nombre: true,
-            apellido: true,
-            cargo: true,
-            user: true,
-            telefono: true,
-            correo: true,
-            codigoAsesor: true
-          }
-        }),
+        !modoConsolidado
+          ? prisma.user.findUnique({
+              where: { id: targetUserId },
+              select: {
+                id: true,
+                nombre: true,
+                apellido: true,
+                cargo: true,
+                user: true,
+                telefono: true,
+                correo: true,
+                codigoAsesor: true
+              }
+            })
+          : Promise.resolve(null),
         prisma.jornadaLaboral.findMany({
           where: {
-            usuarioId: targetUserId,
+            usuarioId: { in: usuarioIdsFiltro },
             horaInicio: { gte: startOfRange, lte: endOfRange }
           },
-          include: { pausas: true },
+          include: {
+            pausas: true,
+            usuario: { select: { id: true, nombre: true, apellido: true, cargo: true, user: true } }
+          },
           orderBy: { horaInicio: 'asc' }
         }).catch(() => []),
         prisma.actividadCampo.findMany({
           where: {
-            usuarioId: targetUserId,
+            usuarioId: { in: usuarioIdsFiltro },
             AND: [
               { NOT: { codigo: { startsWith: 'INF-' } } },
               {
@@ -6827,28 +6866,21 @@ class CampoController {
               }
             ]
           },
-          select: {
-            id: true,
-            codigo: true,
-            titulo: true,
-            descripcion: true,
-            estado: true,
-            fechaProgramada: true,
-            fechaFinalizacion: true,
-            comentarios: true,
-            createdAt: true
+          include: {
+            usuario: { select: { id: true, nombre: true, apellido: true, cargo: true, user: true } }
           },
           orderBy: { fechaProgramada: 'asc' }
         }).catch(() => []),
         prisma.visitaCampo.findMany({
           where: {
-            usuarioId: targetUserId,
+            usuarioId: { in: usuarioIdsFiltro },
             OR: [
               { checkInHora: { gte: startOfRange, lte: endOfRange } },
               { checkInHora: null, fechaProgramada: { gte: startOfRange, lte: endOfRange } }
             ]
           },
           include: {
+            usuario: { select: { id: true, nombre: true, apellido: true, cargo: true, user: true } },
             clienteExterno: { select: { id: true, nombre: true, nitDoc: true, telefono: true, direccion: true, contacto: true } },
             cliente: { select: { id: true, nom: true, tel: true, direccion: true } }
           },
@@ -6856,14 +6888,14 @@ class CampoController {
         }).catch(() => []),
         prisma.clienteExternoCampo.findMany({
           where: {
-            comercialId: targetUserId,
+            comercialId: { in: usuarioIdsFiltro },
             createdAt: { gte: startOfRange, lte: endOfRange }
           },
           orderBy: { createdAt: 'asc' }
         }).catch(() => []),
         prisma.cotizacionExternaCampo.findMany({
           where: {
-            comercialId: targetUserId,
+            comercialId: { in: usuarioIdsFiltro },
             fecha: { gte: startOfRange, lte: endOfRange }
           },
           include: {
@@ -6873,7 +6905,7 @@ class CampoController {
         }).catch(() => []),
         prisma.ventaExternaCampo.findMany({
           where: {
-            comercialId: targetUserId,
+            comercialId: { in: usuarioIdsFiltro },
             fecha: { gte: startOfRange, lte: endOfRange }
           },
           include: {
@@ -6883,7 +6915,7 @@ class CampoController {
         }).catch(() => []),
         prisma.seguimientoCampo.findMany({
           where: {
-            usuarioId: targetUserId,
+            usuarioId: { in: usuarioIdsFiltro },
             fechaHora: { gte: startOfRange, lte: endOfRange }
           },
           include: {
@@ -6894,32 +6926,19 @@ class CampoController {
         }).catch(() => [])
       ]);
 
-      const asesorNombre = asesor
-        ? (`${asesor.nombre || ''} ${asesor.apellido || ''}`.trim() || asesor.user)
-        : (`${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user);
-      const asesorCargo = asesor?.cargo || req.user.cargo || 'Asesor Comercial en Campo';
+      const formatUserName = (u) => {
+        if (!u) return 'Asesor Comercial';
+        return `${u.nombre || ''} ${u.apellido || ''}`.trim() || u.user || 'Asesor Comercial';
+      };
 
-      const ahora = new Date();
-      // Procesar Turnos de la semana
-      const turnosSemana = jornadasRaw.map(j => {
-        const dMin = j.tiempoTotalMin || (j.horaFin ? Math.max(1, Math.round((new Date(j.horaFin) - new Date(j.horaInicio)) / 60000)) : Math.max(1, Math.round((ahora - new Date(j.horaInicio)) / 60000)));
-        const pausaAlmuerzo = (j.pausas || [])[0] || null;
-        return {
-          id: j.id,
-          fecha: getFechaColombia(j.horaInicio),
-          horaInicio: formatHoraColombia(j.horaInicio),
-          horaFin: j.horaFin ? formatHoraColombia(j.horaFin) : 'En Turno',
-          duracionMin: dMin,
-          duracionTexto: dMin >= 60 ? `${Math.floor(dMin / 60)}h ${dMin % 60}m` : `${dMin} min`,
-          distanciaKm: Number((j.distanciaKm || 0).toFixed(2)),
-          estado: j.estado,
-          almuerzoTexto: pausaAlmuerzo
-            ? `${formatHoraColombia(pausaAlmuerzo.horaInicio)} - ${pausaAlmuerzo.horaFin ? formatHoraColombia(pausaAlmuerzo.horaFin) : 'En curso'}`
-            : 'Sin pausa'
-        };
-      });
+      const asesorNombre = modoConsolidado
+        ? `Equipo Comercial en Campo (${asesoresCampo.map(a => formatUserName(a)).join(', ')})`
+        : (asesorUnico ? formatUserName(asesorUnico) : formatUserName(req.user));
+      const asesorCargo = modoConsolidado
+        ? 'Consolidado Operativo de Asesores en Terreno'
+        : (asesorUnico?.cargo || req.user.cargo || 'Asesor Comercial en Campo');
 
-      // Procesar Paradas reales de la semana (excluyendo placeholders numéricos sin checkInHora)
+      // 1. Procesar Paradas reales de la semana primero (para cruzar tiempos reales con turnos y rutas)
       const paradasSemana = visitasRaw
         .filter(v => {
           const nom = String(v.resultadoResumen || '').trim();
@@ -6927,56 +6946,241 @@ class CampoController {
           return true;
         })
         .map((v, idx) => {
-          const lugar = v.resultadoResumen || v.clienteExterno?.nombre || v.cliente?.nom || 'Cliente en Terreno';
+          const lugar = (v.resultadoResumen || v.clienteExterno?.nombre || v.cliente?.nom || 'Cliente en Terreno').trim();
           const dMin = v.duracionMin || (v.checkInHora && v.checkOutHora
             ? Math.max(1, Math.round((new Date(v.checkOutHora) - new Date(v.checkInHora)) / 60000))
             : 0);
+          const obsLimpia = String(v.observaciones || '').replace(/\[Ruta [^\]]+\]\s*/g, '').trim();
+          const actLimpia = String(v.actividadesRealizadas || '').replace(/\[Ruta [^\]]+\]\s*/g, '').trim();
+          const textoGestion = actLimpia || obsLimpia || 'Visita comercial realizada en sitio';
+          const requiereSeguimiento = Boolean(
+            v.compromisos ||
+            /seguimiento|interesad|cotiza|llamar|pendiente|enviar|propuesta|visitar|diciembre|agenda/i.test(`${textoGestion} ${obsLimpia}`)
+          );
           return {
             id: v.id,
             numero: idx + 1,
             codigo: v.codigo || `PAR-${idx + 1}`,
+            usuarioId: v.usuarioId,
+            asesorNombre: formatUserName(v.usuario),
             fecha: getFechaColombia(v.checkInHora || v.fechaProgramada || v.createdAt),
+            checkInIso: v.checkInHora ? new Date(v.checkInHora).toISOString() : null,
+            checkOutIso: v.checkOutHora ? new Date(v.checkOutHora).toISOString() : null,
             horaLlegada: v.checkInHora ? formatHoraColombia(v.checkInHora) : 'Programada',
-            horaSalida: v.checkOutHora ? formatHoraColombia(v.checkOutHora) : (v.checkInHora ? 'En Sitio' : '--'),
+            horaSalida: v.checkOutHora ? formatHoraColombia(v.checkOutHora) : (v.checkInHora ? 'Completada' : '--'),
             duracionMin: dMin,
             duracionTexto: dMin > 0 ? `${dMin} min` : '--',
             lugar,
-            contacto: v.contactoAtendio || v.clienteExterno?.contacto || '--',
+            contacto: v.contactoAtendio || v.clienteExterno?.contacto || lugar,
             telefono: v.clienteExterno?.telefono || v.cliente?.tel || '--',
-            direccion: (v.observaciones || '').replace(/\[Ruta [^\]]+\]\s*/g, '') || v.clienteExterno?.direccion || v.cliente?.direccion || '--',
+            direccion: obsLimpia || v.clienteExterno?.direccion || v.cliente?.direccion || '--',
             tipoVisita: v.tipoVisita || 'Comercial',
             resultado: v.resultadoVisita || v.estado || 'Realizada',
-            actividades: v.actividadesRealizadas || v.observaciones || 'Gestión comercial en sitio',
-            compromisos: v.compromisos || ''
+            actividades: textoGestion,
+            observaciones: obsLimpia,
+            compromisos: v.compromisos || (requiereSeguimiento ? obsLimpia || textoGestion : ''),
+            requiereSeguimiento
           };
         });
 
-      // Procesar Rutas Asignadas en la semana
+      // 2. Procesar Turnos Reales de la semana (corrigiendo cierres automáticos de medianoche y sumando días con ruta real en terreno)
+      const ahora = new Date();
+      const turnosMap = new Map();
+
+      jornadasRaw.forEach(j => {
+        const fechaJ = getFechaColombia(j.horaInicio);
+        const key = `${j.usuarioId}_${fechaJ}`;
+        const paradasDelDia = paradasSemana.filter(p => String(p.usuarioId) === String(j.usuarioId) && p.fecha === fechaJ);
+
+        const esCierreMedianoche = j.estado === 'Cierre Automatico' ||
+          (j.horaFin && /12:00\s*a\.?\s*m\.?/i.test(formatHoraColombia(j.horaFin)));
+
+        let horaFinTexto = j.horaFin ? formatHoraColombia(j.horaFin) : (fechaJ === hoyStr ? 'En Turno Activo' : 'Jornada Finalizada');
+        let dMin = j.tiempoTotalMin || 0;
+        let estadoTurno = j.estado === 'Cierre Automatico' ? 'Jornada Finalizada' : (j.estado || 'Finalizada');
+
+        if (esCierreMedianoche) {
+          if (paradasDelDia.length > 0) {
+            const ultimaParada = paradasDelDia[paradasDelDia.length - 1];
+            horaFinTexto = ultimaParada.horaSalida !== '--' ? ultimaParada.horaSalida : ultimaParada.horaLlegada;
+            const finRef = ultimaParada.checkOutIso || ultimaParada.checkInIso;
+            if (finRef) {
+              const calcMin = Math.round((new Date(finRef) - new Date(j.horaInicio)) / 60000);
+              dMin = calcMin > 0 ? calcMin : paradasDelDia.reduce((acc, p) => acc + (p.duracionMin || 0), 0);
+            } else {
+              dMin = paradasDelDia.reduce((acc, p) => acc + (p.duracionMin || 0), 0);
+            }
+          } else {
+            // Si fue un turno sin paradas que se cerró automáticamente a medianoche, no inventar 10h 0m
+            return;
+          }
+        } else if (!dMin && j.horaFin) {
+          dMin = Math.max(1, Math.round((new Date(j.horaFin) - new Date(j.horaInicio)) / 60000));
+        } else if (!dMin && !j.horaFin && fechaJ === hoyStr) {
+          dMin = Math.max(1, Math.round((ahora - new Date(j.horaInicio)) / 60000));
+        }
+
+        const pausaAlmuerzo = (j.pausas || [])[0] || null;
+        let almuerzoTexto = 'Sin pausa registrada';
+        if (pausaAlmuerzo) {
+          if (pausaAlmuerzo.horaFin) {
+            almuerzoTexto = `${formatHoraColombia(pausaAlmuerzo.horaInicio)} - ${formatHoraColombia(pausaAlmuerzo.horaFin)}`;
+          } else if (fechaJ === hoyStr && j.estado === 'Activa') {
+            almuerzoTexto = `${formatHoraColombia(pausaAlmuerzo.horaInicio)} - En curso`;
+          } else {
+            almuerzoTexto = `${formatHoraColombia(pausaAlmuerzo.horaInicio)} (Registrada)`;
+          }
+        }
+
+        turnosMap.set(key, {
+          id: j.id,
+          usuarioId: j.usuarioId,
+          asesorNombre: formatUserName(j.usuario),
+          fecha: fechaJ,
+          horaInicio: formatHoraColombia(j.horaInicio),
+          horaFin: horaFinTexto,
+          duracionMin: dMin,
+          duracionTexto: dMin >= 60 ? `${Math.floor(dMin / 60)}h ${dMin % 60}m` : `${dMin} min`,
+          distanciaKm: Number((j.distanciaKm || 0).toFixed(2)),
+          paradasCount: paradasDelDia.length,
+          estado: estadoTurno,
+          almuerzoTexto
+        });
+      });
+
+      // Agregar jornadas operativas reales de días en que el asesor registró paradas en terreno pero no pulsó "Iniciar Jornada"
+      const gruposParadasPorAsesorDia = new Map();
+      paradasSemana.forEach(p => {
+        const key = `${p.usuarioId}_${p.fecha}`;
+        if (!gruposParadasPorAsesorDia.has(key)) gruposParadasPorAsesorDia.set(key, []);
+        gruposParadasPorAsesorDia.get(key).push(p);
+      });
+
+      gruposParadasPorAsesorDia.forEach((listaParadas, key) => {
+        if (turnosMap.has(key) || listaParadas.length === 0) return;
+        const primera = listaParadas[0];
+        const ultima = listaParadas[listaParadas.length - 1];
+        const minEnClientes = listaParadas.reduce((acc, p) => acc + (p.duracionMin || 0), 0);
+        let spanMin = minEnClientes;
+        if (primera.checkInIso && (ultima.checkOutIso || ultima.checkInIso)) {
+          const diff = Math.round((new Date(ultima.checkOutIso || ultima.checkInIso) - new Date(primera.checkInIso)) / 60000);
+          if (diff > minEnClientes) spanMin = diff;
+        }
+        turnosMap.set(key, {
+          id: `TERRENO-${key}`,
+          usuarioId: primera.usuarioId,
+          asesorNombre: primera.asesorNombre,
+          fecha: primera.fecha,
+          horaInicio: primera.horaLlegada,
+          horaFin: ultima.horaSalida !== '--' ? ultima.horaSalida : ultima.horaLlegada,
+          duracionMin: spanMin,
+          duracionTexto: spanMin >= 60 ? `${Math.floor(spanMin / 60)}h ${spanMin % 60}m` : `${spanMin} min`,
+          distanciaKm: 0,
+          paradasCount: listaParadas.length,
+          estado: `Recorrido en Terreno (${listaParadas.length} paradas)`,
+          almuerzoTexto: 'En ruta comercial'
+        });
+      });
+
+      const turnosSemana = Array.from(turnosMap.values()).sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+      // 3. Procesar Rutas Asignadas en la semana con su avance real de paradas
       const rutasSemana = rutasRaw.map(r => {
         const obsEnriq = actividadesService.enriquecerObservacionesActividad(r);
         const fProg = getFechaColombia(r.fechaProgramada || r.createdAt);
-        const paradasDeRuta = paradasSemana.filter(p => p.fecha === fProg || String(p.actividades || '').includes(r.codigo));
+        const paradasDeRuta = paradasSemana.filter(p =>
+          String(p.usuarioId) === String(r.usuarioId) &&
+          (p.fecha === fProg || String(p.actividades || '').includes(r.codigo) || String(p.observaciones || '').includes(r.codigo))
+        );
+        const matchMeta = String(r.descripcion || '').match(/Meta de paradas:\s*(\d+)|Paradas:\s*(\d+)/i);
+        const metaParadas = matchMeta ? Math.max(1, parseInt(matchMeta[1] || matchMeta[2], 10)) : Math.max(1, paradasDeRuta.length || 1);
+        const pctAvance = Math.min(100, Math.round((paradasDeRuta.length / metaParadas) * 100));
+        const finalizadaReal = ['Finalizada', 'Completada', 'Aprobada'].includes(r.estado) || pctAvance >= 100;
+
         return {
           id: r.id,
           codigo: r.codigo || 'RUT',
+          usuarioId: r.usuarioId,
+          asesorNombre: formatUserName(r.usuario),
           nombreRuta: (r.titulo || '').replace(/^Ruta:\s*/i, '') || 'Ruta Comercial',
           fecha: fProg,
-          estado: ['Finalizada', 'Completada', 'Aprobada'].includes(r.estado)
-            ? (r.estado === 'Aprobada' ? 'Aprobada por Delegado' : 'Finalizada')
-            : (['En Curso', 'En ejecucion'].includes(r.estado) || paradasDeRuta.length > 0 ? 'En Curso' : 'Pendiente'),
+          estado: r.estado === 'Aprobada'
+            ? 'Aprobada por Delegado'
+            : (finalizadaReal ? 'Cumplida en Terreno' : (['En Curso', 'En ejecucion'].includes(r.estado) || paradasDeRuta.length > 0 ? 'En Curso' : 'Pendiente')),
           instrucciones: r.descripcion || '',
           paradasEjecutadas: paradasDeRuta.length,
+          metaParadas,
+          pctAvance,
+          finalizadaReal,
           observacionAsesor: obsEnriq.observacionCierre || '',
           comentarioDelegado: obsEnriq.ultimoComentarioDelegado?.texto || ''
         };
       });
+
+      // 4. Consolidar Clientes Gestionados y Compromisos de Seguimiento reales (de CRM + Paradas en Terreno)
+      const clientesUnicosMap = new Map();
+      clientesNuevosRaw.forEach(cli => {
+        const key = String(cli.nombre || cli.id).trim().toLowerCase();
+        clientesUnicosMap.set(key, {
+          id: cli.id,
+          codigo: cli.codigo || 'CLI',
+          fecha: getFechaColombia(cli.createdAt),
+          nombre: cli.nombre,
+          contacto: cli.contacto || '--',
+          telefono: cli.telefono || '--',
+          etapa: cli.etapaEmbudo || 'Prospecto',
+          detalle: cli.notas || cli.direccion || 'Cliente registrado en CRM de campo'
+        });
+      });
+
+      paradasSemana.forEach(p => {
+        const key = String(p.lugar || '').trim().toLowerCase();
+        if (!key || clientesUnicosMap.has(key)) return;
+        clientesUnicosMap.set(key, {
+          id: p.id,
+          codigo: p.codigo,
+          fecha: p.fecha,
+          nombre: p.lugar,
+          contacto: p.contacto || p.lugar,
+          telefono: p.telefono || '--',
+          etapa: p.requiereSeguimiento ? 'En Seguimiento' : p.resultado,
+          detalle: `${p.actividades}${p.observaciones && p.observaciones !== p.actividades ? ` — ${p.observaciones}` : ''}`
+        });
+      });
+
+      const clientesNuevos = Array.from(clientesUnicosMap.values());
+
+      const seguimientosConsolidados = [
+        ...seguimientosRaw.map(s => ({
+          id: s.id,
+          fecha: getFechaColombia(s.fechaHora),
+          cliente: s.clienteExterno?.nombre || s.cliente?.nom || 'Cliente en Seguimiento',
+          tipo: s.tipoSeguimiento || 'Seguimiento Comercial',
+          detalle: s.descripcion || s.compromiso || 'Seguimiento programado',
+          resultado: s.resultado || 'En gestión'
+        })),
+        ...paradasSemana
+          .filter(p => p.requiereSeguimiento)
+          .map(p => ({
+            id: `SEG-${p.id}`,
+            fecha: p.fecha,
+            cliente: p.lugar,
+            asesorNombre: p.asesorNombre,
+            tipo: 'Seguimiento de Visita en Ruta',
+            detalle: p.compromisos || p.observaciones || p.actividades,
+            resultado: p.resultado
+          }))
+      ];
 
       const tiempoTotalRutaMin = turnosSemana.reduce((acc, t) => acc + (t.duracionMin || 0), 0);
       const tiempoTotalClientesMin = paradasSemana.reduce((acc, p) => acc + (p.duracionMin || 0), 0);
       const distanciaTotalKm = Number(turnosSemana.reduce((acc, t) => acc + (t.distanciaKm || 0), 0).toFixed(2));
       const montoCotizado = cotizaciones.reduce((acc, c) => acc + (Number(c.valorCotizado) || 0), 0);
       const montoVendido = ventas.reduce((acc, v) => acc + (Number(v.valorVendido) || 0), 0);
-      const rutasFinalizadasCount = rutasSemana.filter(r => r.estado.includes('Finalizada') || r.estado.includes('Aprobada')).length;
+      const rutasFinalizadasCount = rutasSemana.filter(r => r.finalizadaReal).length;
+      const cumplimientoRutasPct = rutasSemana.length > 0
+        ? Math.round(rutasSemana.reduce((acc, r) => acc + (r.finalizadaReal ? 100 : r.pctAvance), 0) / rutasSemana.length)
+        : 0;
 
       const kpisSemana = {
         fechaInicio: fechaInicioStr,
@@ -6987,59 +7191,194 @@ class CampoController {
         distanciaTotalKm,
         totalRutasAsignadas: rutasSemana.length,
         rutasFinalizadas: rutasFinalizadasCount,
-        cumplimientoRutasPct: rutasSemana.length > 0 ? Math.round((rutasFinalizadasCount / rutasSemana.length) * 100) : 100,
+        cumplimientoRutasPct,
         totalParadas: paradasSemana.length,
         paradasRealizadas: paradasSemana.filter(p => p.horaSalida !== '--' && p.horaSalida !== 'Programada').length,
         tiempoTotalClientesMin,
         tiempoTotalClientesTexto: tiempoTotalClientesMin >= 60 ? `${Math.floor(tiempoTotalClientesMin / 60)}h ${tiempoTotalClientesMin % 60}m` : `${tiempoTotalClientesMin} min`,
         totalClientesNuevos: clientesNuevos.length,
-        totalSeguimientos: seguimientos.length,
+        totalSeguimientos: seguimientosConsolidados.length,
         totalCotizaciones: cotizaciones.length,
         montoCotizado,
         totalVentas: ventas.length,
         montoVendido
       };
 
-      // Construir documento HTML corporativo estilo Word pre-alimentado con toda la información real de la ruta semanal
+      // =========================================================================
+      // 5. CONSTRUIR DATOS DE GRÁFICAS REALES DE LA GESTIÓN SEMANAL (graficasSemana)
+      // =========================================================================
+      const nombresDias = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+      const nombresDiasLargos = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+      const diasSemana = [];
+      const cursorDia = new Date(`${fechaInicioStr}T12:00:00-05:00`);
+      const finDiaRef = new Date(`${fechaFinStr}T12:00:00-05:00`);
+      while (cursorDia <= finDiaRef && diasSemana.length < 14) {
+        const fStr = getFechaColombia(cursorDia);
+        const dIdx = cursorDia.getDay();
+        const paradasDia = paradasSemana.filter(p => p.fecha === fStr);
+        const minDia = paradasDia.reduce((acc, p) => acc + (p.duracionMin || 0), 0);
+        const segDia = paradasDia.filter(p => p.requiereSeguimiento).length;
+        const turnosDia = turnosSemana.filter(t => t.fecha === fStr).length;
+        diasSemana.push({
+          fecha: fStr,
+          diaCorto: `${nombresDias[dIdx]} ${fStr.slice(8, 10)}`,
+          diaNombre: `${nombresDiasLargos[dIdx]} ${fStr}`,
+          paradas: paradasDia.length,
+          minutosClientes: minDia,
+          seguimientos: segDia,
+          turnos: turnosDia
+        });
+        cursorDia.setDate(cursorDia.getDate() + 1);
+      }
+
+      const maxParadasDia = Math.max(1, ...diasSemana.map(d => d.paradas));
+      const maxMinutosDia = Math.max(1, ...diasSemana.map(d => d.minutosClientes));
+
+      const porAsesor = asesoresCampo.map(a => {
+        const uId = String(a.id);
+        const paradasAsesor = paradasSemana.filter(p => String(p.usuarioId) === uId);
+        const minAsesor = paradasAsesor.reduce((acc, p) => acc + (p.duracionMin || 0), 0);
+        const rutasAsesor = rutasSemana.filter(r => String(r.usuarioId) === uId);
+        const turnosAsesor = turnosSemana.filter(t => String(t.usuarioId) === uId);
+        const segAsesor = paradasAsesor.filter(p => p.requiereSeguimiento).length;
+        const ventasAsesor = ventas.filter(v => String(v.comercialId) === uId).length;
+        return {
+          id: uId,
+          nombre: formatUserName(a),
+          cargo: a.cargo || 'Asesor Comercial',
+          paradas: paradasAsesor.length,
+          minutosClientes: minAsesor,
+          tiempoTexto: minAsesor >= 60 ? `${Math.floor(minAsesor / 60)}h ${minAsesor % 60}m` : `${minAsesor} min`,
+          rutasAsignadas: rutasAsesor.length,
+          turnos: turnosAsesor.length,
+          seguimientos: segAsesor,
+          ventas: ventasAsesor
+        };
+      }).filter(a => modoConsolidado || String(a.id) === String(targetUserId));
+
+      const maxParadasAsesor = Math.max(1, ...porAsesor.map(a => a.paradas));
+
+      const graficasSemana = {
+        porDia: diasSemana,
+        porAsesor,
+        indicadoresGestion: [
+          {
+            label: 'Paradas y Visitas Realizadas en Terreno',
+            valor: `${kpisSemana.totalParadas} visitas`,
+            porcentaje: kpisSemana.totalParadas > 0 ? 100 : 0,
+            color: '#002060'
+          },
+          {
+            label: 'Tiempo Efectivo Frente a Clientes vs. Tiempo en Ruta',
+            valor: `${kpisSemana.tiempoTotalClientesTexto} / ${kpisSemana.tiempoTotalRutaTexto}`,
+            porcentaje: kpisSemana.tiempoTotalRutaMin > 0
+              ? Math.min(100, Math.round((kpisSemana.tiempoTotalClientesMin / kpisSemana.tiempoTotalRutaMin) * 100))
+              : (kpisSemana.tiempoTotalClientesMin > 0 ? 100 : 0),
+            color: '#0f766e'
+          },
+          {
+            label: 'Cumplimiento de Rutas Asignadas por el Delegado',
+            valor: `${kpisSemana.rutasFinalizadas}/${kpisSemana.totalRutasAsignadas} rutas (${kpisSemana.cumplimientoRutasPct}%)`,
+            porcentaje: kpisSemana.cumplimientoRutasPct,
+            color: '#1d4ed8'
+          },
+          {
+            label: 'Clientes con Compromiso de Seguimiento Comercial',
+            valor: `${kpisSemana.totalSeguimientos} de ${kpisSemana.totalClientesNuevos} clientes`,
+            porcentaje: kpisSemana.totalClientesNuevos > 0
+              ? Math.min(100, Math.round((kpisSemana.totalSeguimientos / kpisSemana.totalClientesNuevos) * 100))
+              : 0,
+            color: '#d97706'
+          }
+        ]
+      };
+
+      // =========================================================================
+      // 6. GENERAR BLOQUES HTML DE GRÁFICAS Y TABLAS REALES (CERO TEXTO PREESTABLECIDO)
+      // =========================================================================
+      const barrasDiariasHtml = diasSemana.map(d => {
+        const alturaPct = d.paradas > 0 ? Math.max(14, Math.round((d.paradas / maxParadasDia) * 100)) : 4;
+        const barColor = d.paradas > 0 ? 'linear-gradient(180deg, #1d4ed8 0%, #002060 100%)' : '#e2e8f0';
+        return `
+          <td style="vertical-align:bottom;text-align:center;padding:4px 6px;width:${Math.floor(100 / Math.max(1, diasSemana.length))}%;">
+            <div style="font-size:10px;font-weight:900;color:${d.paradas > 0 ? '#002060' : '#94a3b8'};margin-bottom:4px;">
+              ${d.paradas} vis.
+            </div>
+            <div style="height:110px;display:flex;align-items:flex-end;justify-content:center;background:#f8fafc;border-radius:6px;padding:4px 6px;border:1px solid #e2e8f0;">
+              <div style="width:100%;max-width:34px;height:${alturaPct}%;background:${barColor};border-radius:4px 4px 0 0;"></div>
+            </div>
+            <div style="font-size:10px;font-weight:800;color:#1e293b;margin-top:5px;">${d.diaCorto}</div>
+            <div style="font-size:9px;color:#0f766e;font-weight:700;">${d.minutosClientes} min</div>
+          </td>`;
+      }).join('');
+
+      const barrasIndicadoresHtml = graficasSemana.indicadoresGestion.map(ind => `
+        <div style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:#1e293b;margin-bottom:3px;">
+            <span>${ind.label}</span>
+            <span style="color:${ind.color};">${ind.valor} (${ind.porcentaje}%)</span>
+          </div>
+          <div style="width:100%;height:11px;background:#e2e8f0;border-radius:999px;overflow:hidden;">
+            <div style="width:${Math.max(ind.porcentaje, ind.porcentaje > 0 ? 6 : 0)}%;height:100%;background:${ind.color};border-radius:999px;"></div>
+          </div>
+        </div>
+      `).join('');
+
+      const barrasAsesoresHtml = porAsesor.map(a => {
+        const pct = a.paradas > 0 ? Math.max(10, Math.round((a.paradas / maxParadasAsesor) * 100)) : 0;
+        return `
+          <div style="margin-bottom:9px;">
+            <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;color:#0f172a;margin-bottom:3px;">
+              <span>${a.nombre} <span style="font-weight:600;color:#64748b;font-size:10px;">(${a.cargo})</span></span>
+              <span style="color:#002060;">${a.paradas} paradas • ${a.tiempoTexto} en clientes • ${a.rutasAsignadas} rutas</span>
+            </div>
+            <div style="width:100%;height:10px;background:#e2e8f0;border-radius:999px;overflow:hidden;">
+              <div style="width:${pct}%;height:100%;background:#0284c7;border-radius:999px;"></div>
+            </div>
+          </div>`;
+      }).join('');
+
       const filasTurnosHtml = turnosSemana.length > 0
         ? turnosSemana.map((t, i) => `
             <tr>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;font-weight:700;">${i + 1}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${t.fecha}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#002060;">${t.asesorNombre}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;">${t.horaInicio}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;">${t.horaFin}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#0f766e;">${t.duracionTexto}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;">${t.almuerzoTexto}</td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;">${t.distanciaKm} km</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${t.estado}</td>
             </tr>`).join('')
-        : `<tr><td colspan="8" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">No se registraron turnos iniciados en el rango de fechas seleccionado (${fechaInicioStr} a ${fechaFinStr}).</td></tr>`;
+        : `<tr><td colspan="8" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">Sin turnos registrados en el periodo (${fechaInicioStr} a ${fechaFinStr}).</td></tr>`;
 
       const filasRutasHtml = rutasSemana.length > 0
         ? rutasSemana.map(r => `
             <tr>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-family:monospace;font-weight:700;color:#1e40af;">${r.codigo}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${r.fecha}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#002060;">${r.asesorNombre}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${r.nombreRuta}</td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;font-weight:700;">${r.paradasEjecutadas}</td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${r.estado}</td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;">${r.observacionAsesor || r.instrucciones || 'Ruta ejecutada según programación.'}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;font-weight:700;">${r.paradasEjecutadas} paradas (${r.pctAvance}%)</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:${r.finalizadaReal ? '#047857' : '#b45309'};">${r.estado}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;">${r.observacionAsesor || r.instrucciones || '--'}</td>
             </tr>`).join('')
-        : `<tr><td colspan="6" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">Sin rutas asignadas formalmente por el Delegado en este periodo.</td></tr>`;
+        : `<tr><td colspan="7" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">Sin rutas asignadas en este periodo.</td></tr>`;
 
       const filasParadasHtml = paradasSemana.length > 0
         ? paradasSemana.map(p => `
             <tr>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;font-weight:700;">${p.numero}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;white-space:nowrap;font-weight:700;">${p.fecha}<br/><span style="font-size:10px;color:#0f766e;">${p.horaLlegada} → ${p.horaSalida}</span></td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#0f172a;">${p.lugar}<br/><span style="font-size:10px;color:#64748b;font-weight:400;">Contacto: ${p.contacto} (${p.telefono})</span></td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;font-weight:700;">${p.duracionTexto}</td>
-              <td style="border:1px solid #cbd5e1;padding:6px 8px;">${p.actividades}${p.compromisos ? `<br/><strong>Compromiso:</strong> ${p.compromisos}` : ''}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#002060;">${p.asesorNombre}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#0f172a;">${p.lugar}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;font-weight:700;color:#0369a1;">${p.duracionTexto}</td>
+              <td style="border:1px solid #cbd5e1;padding:6px 8px;">${p.actividades}${p.observaciones && p.observaciones !== p.actividades ? `<br/><span style="color:#475569;font-size:10.5px;">Obs: ${p.observaciones}</span>` : ''}</td>
               <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#047857;">${p.resultado}</td>
             </tr>`).join('')
-        : `<tr><td colspan="6" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">No se registraron paradas o visitas en terreno durante este rango semanal.</td></tr>`;
+        : `<tr><td colspan="7" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">Sin paradas registradas en este rango semanal.</td></tr>`;
 
-      const filasComercialHtml = (ventas.length > 0 || cotizaciones.length > 0 || clientesNuevos.length > 0)
+      const filasComercialHtml = (ventas.length > 0 || cotizaciones.length > 0 || seguimientosConsolidados.length > 0)
         ? [
             ...ventas.map(v => `
               <tr>
@@ -7047,7 +7386,7 @@ class CampoController {
                 <td style="border:1px solid #cbd5e1;padding:6px 8px;">${getFechaColombia(v.fecha || v.createdAt)}</td>
                 <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${v.clienteExterno?.nombre || 'Cliente Comercial'}</td>
                 <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;font-weight:800;color:#047857;">$${Number(v.valorVendido || 0).toLocaleString('es-CO')}</td>
-                <td style="border:1px solid #cbd5e1;padding:6px 8px;">${v.productosVendidos || v.observaciones || 'Pedido en firme'}</td>
+                <td style="border:1px solid #cbd5e1;padding:6px 8px;">${v.productosVendidos || v.observaciones || '--'}</td>
               </tr>`),
             ...cotizaciones.map(c => `
               <tr>
@@ -7057,31 +7396,28 @@ class CampoController {
                 <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;font-weight:700;color:#1e40af;">$${Number(c.valorCotizado || 0).toLocaleString('es-CO')}</td>
                 <td style="border:1px solid #cbd5e1;padding:6px 8px;">Estado: ${c.estado || 'Enviada'} — ${c.descripcionProductos || ''}</td>
               </tr>`),
-            ...clientesNuevos.map(cli => `
+            ...seguimientosConsolidados.map(s => `
               <tr>
-                <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#7c3aed;">NUEVO CLIENTE (${cli.codigo || 'CLI'})</td>
-                <td style="border:1px solid #cbd5e1;padding:6px 8px;">${getFechaColombia(cli.createdAt)}</td>
-                <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${cli.nombre}</td>
-                <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;">Fase: ${cli.etapaEmbudo || 'Prospecto'}</td>
-                <td style="border:1px solid #cbd5e1;padding:6px 8px;">Contacto: ${cli.contacto || '--'} (${cli.telefono || '--'}) • ${cli.ciudad || ''}</td>
+                <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#b45309;">SEGUIMIENTO CLIENTE</td>
+                <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;">${s.fecha}</td>
+                <td style="border:1px solid #cbd5e1;padding:6px 8px;font-weight:700;color:#0f172a;">${s.cliente}</td>
+                <td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;font-weight:700;color:#002060;">${s.resultado || 'En Seguimiento'}</td>
+                <td style="border:1px solid #cbd5e1;padding:6px 8px;">${s.detalle}</td>
               </tr>`)
           ].join('')
-        : `<tr><td colspan="5" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">Sin ventas, cotizaciones o clientes nuevos registrados en este corte semanal.</td></tr>`;
+        : `<tr><td colspan="5" style="border:1px solid #cbd5e1;padding:10px;text-align:center;color:#64748b;">Sin ventas, cotizaciones o compromisos de seguimiento registrados en este corte semanal.</td></tr>`;
 
-      const plantillaHtml = `
-        <div style="font-family:'Segoe UI',Arial,sans-serif;color:#0f172a;line-height:1.55;font-size:12.5px;">
-          <h2 style="color:#002060;font-size:15px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:0 0 10px 0;">
-            1. Resumen Ejecutivo de Operación en Campo y Ruta Semanal
+      const tablasDatosHtml = `
+        <div style="font-family:'Segoe UI',Arial,sans-serif;color:#0f172a;line-height:1.5;font-size:12px;">
+          <h2 style="color:#002060;font-size:14px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:0 0 10px 0;">
+            1. Indicadores Reales de Operación en Campo (${fechaInicioStr} al ${fechaFinStr})
           </h2>
-          <p style="margin:0 0 12px 0;text-align:justify;">
-            Por medio del presente documento oficial se rinde informe detallado al <strong>Delegado de Gerencia</strong> sobre la gestión operativa, comercial y de ruta ejecutada en terreno por <strong>${asesorNombre}</strong> (<em>${asesorCargo}</em>) durante el periodo comprendido entre el <strong>${fechaInicioStr}</strong> y el <strong>${fechaFinStr}</strong>.
-          </p>
 
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11.5px;">
             <thead>
               <tr style="background:#002060;color:#ffffff;">
-                <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Turnos en Terreno</th>
-                <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Tiempo Total Ruta</th>
+                <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Días / Turnos Ruta</th>
+                <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Tiempo en Terreno</th>
                 <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Rutas Asignadas</th>
                 <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Paradas / Visitas</th>
                 <th style="border:1px solid #002060;padding:7px 8px;text-align:center;">Tiempo en Clientes</th>
@@ -7091,30 +7427,54 @@ class CampoController {
             </thead>
             <tbody>
               <tr style="background:#f8fafc;text-align:center;font-weight:800;">
-                <td style="border:1px solid #cbd5e1;padding:8px;">${kpisSemana.totalTurnos} turnos</td>
+                <td style="border:1px solid #cbd5e1;padding:8px;">${kpisSemana.totalTurnos} jornadas</td>
                 <td style="border:1px solid #cbd5e1;padding:8px;color:#0f766e;">${kpisSemana.tiempoTotalRutaTexto}</td>
                 <td style="border:1px solid #cbd5e1;padding:8px;color:#1e40af;">${kpisSemana.rutasFinalizadas}/${kpisSemana.totalRutasAsignadas} (${kpisSemana.cumplimientoRutasPct}%)</td>
                 <td style="border:1px solid #cbd5e1;padding:8px;color:#b45309;">${kpisSemana.totalParadas} paradas</td>
                 <td style="border:1px solid #cbd5e1;padding:8px;color:#0369a1;">${kpisSemana.tiempoTotalClientesTexto}</td>
-                <td style="border:1px solid #cbd5e1;padding:8px;">${kpisSemana.totalClientesNuevos} nuevos / ${kpisSemana.totalSeguimientos} seg.</td>
+                <td style="border:1px solid #cbd5e1;padding:8px;">${kpisSemana.totalClientesNuevos} clientes / ${kpisSemana.totalSeguimientos} seg.</td>
                 <td style="border:1px solid #cbd5e1;padding:8px;color:#047857;">${kpisSemana.totalVentas} ($${kpisSemana.montoVendido.toLocaleString('es-CO')})</td>
               </tr>
             </tbody>
           </table>
 
-          <h2 style="color:#002060;font-size:15px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
-            2. Control de Turnos y Asistencia en Ruta Semanal
+          <h2 style="color:#002060;font-size:14px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
+            2. Gráficas de Gestión Semanal en Terreno
+          </h2>
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;background:#ffffff;margin-bottom:16px;">
+            <div style="font-size:11px;font-weight:900;color:#002060;text-transform:uppercase;margin-bottom:8px;">
+              A) Curva Diaria de Paradas y Minutos Efectivos en Clientes (Lunes a Domingo)
+            </div>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:14px;">
+              <tbody>
+                <tr>${barrasDiariasHtml}</tr>
+              </tbody>
+            </table>
+
+            <div style="font-size:11px;font-weight:900;color:#002060;text-transform:uppercase;margin:10px 0 8px 0;">
+              B) Indicadores de Cumplimiento y Efectividad de Gestión Comercial
+            </div>
+            ${barrasIndicadoresHtml}
+
+            <div style="font-size:11px;font-weight:900;color:#002060;text-transform:uppercase;margin:12px 0 8px 0;">
+              C) Productividad en Terreno por Asesor Comercial
+            </div>
+            ${barrasAsesoresHtml}
+          </div>
+
+          <h2 style="color:#002060;font-size:14px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
+            3. Control de Jornadas y Recorridos en Ruta Semanal
           </h2>
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11px;">
             <thead>
               <tr style="background:#f1f5f9;color:#1e293b;text-transform:uppercase;">
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;width:36px;">#</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;width:32px;">#</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Fecha</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Hora Entrada</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Hora Salida</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Asesor</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Inicio Ruta</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Fin Ruta</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Duración</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Pausa Almuerzo</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Recorrido</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Almuerzo / Pausa</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Estado</th>
               </tr>
             </thead>
@@ -7123,18 +7483,19 @@ class CampoController {
             </tbody>
           </table>
 
-          <h2 style="color:#002060;font-size:15px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
-            3. Cumplimiento de Rutas Asignadas por el Delegado de Gerencia
+          <h2 style="color:#002060;font-size:14px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
+            4. Cumplimiento de Rutas Asignadas por el Delegado de Gerencia
           </h2>
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11px;">
             <thead>
               <tr style="background:#f1f5f9;color:#1e293b;text-transform:uppercase;">
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Código</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Fecha</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Asesor Asignado</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Ruta / Zona Asignada</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;">Paradas</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;">Avance Real</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Estado</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Observación de Cierre / Gestión</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Instrucciones / Observación de Cierre</th>
               </tr>
             </thead>
             <tbody>
@@ -7142,17 +7503,18 @@ class CampoController {
             </tbody>
           </table>
 
-          <h2 style="color:#002060;font-size:15px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
-            4. Bitácora Cronológica de Paradas y Clientes Visitados en la Semana
+          <h2 style="color:#002060;font-size:14px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
+            5. Bitácora Cronológica de Paradas y Clientes Visitados en la Semana (${paradasSemana.length})
           </h2>
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11px;">
             <thead>
               <tr style="background:#f1f5f9;color:#1e293b;text-transform:uppercase;">
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;width:34px;">#</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;width:32px;">#</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Fecha y Horario</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Asesor</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Cliente / Punto Visitado</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:center;">Estancia</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Actividades Realizadas y Compromisos</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Gestión Realizada y Observaciones</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Resultado</th>
               </tr>
             </thead>
@@ -7161,8 +7523,8 @@ class CampoController {
             </tbody>
           </table>
 
-          <h2 style="color:#002060;font-size:15px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
-            5. Resultados Comerciales: Ventas del Día, Cotizaciones y Nuevos Clientes
+          <h2 style="color:#002060;font-size:14px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
+            6. Seguimientos Obligatorios a Clientes, Cotizaciones y Ventas Cerradas
           </h2>
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:11px;">
             <thead>
@@ -7170,46 +7532,45 @@ class CampoController {
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Tipo de Gestión</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Fecha</th>
                 <th style="border:1px solid #cbd5e1;padding:6px 8px;">Cliente / Cuenta</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;">Valor / Fase</th>
-                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Detalle / Seguimiento</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right;">Estado / Valor</th>
+                <th style="border:1px solid #cbd5e1;padding:6px 8px;">Compromiso / Detalle de Seguimiento</th>
               </tr>
             </thead>
             <tbody>
               ${filasComercialHtml}
             </tbody>
           </table>
-
-          <h2 style="color:#002060;font-size:15px;font-weight:900;text-transform:uppercase;border-bottom:2px solid #002060;padding-bottom:4px;margin:18px 0 10px 0;">
-            6. Balance Cualitativo del Asesor, Novedades en Terreno y Plan Próxima Semana
-          </h2>
-          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;background:#f8fafc;margin-bottom:10px;">
-            <p style="margin:0 0 8px 0;"><strong>• Logros Principales y Negociaciones Destacadas:</strong> Se ejecutaron ${kpisSemana.totalParadas} paradas en terreno con una permanencia efectiva de ${kpisSemana.tiempoTotalClientesTexto} frente a clientes, logrando ${kpisSemana.totalVentas} ventas cerradas y ${kpisSemana.totalCotizaciones} propuestas comerciales.</p>
-            <p style="margin:0 0 8px 0;"><strong>• Compromisos de Seguimiento Obligatorio:</strong> Realizar seguimiento prioritario a las cuentas visitadas y cotizaciones abiertas registradas durante la semana.</p>
-            <p style="margin:0;"><strong>• Observaciones / Requerimientos para el Delegado de Gerencia:</strong> (Escriba aquí sus observaciones adicionales, novedades de zona o apoyos requeridos de gerencia...)</p>
-          </div>
         </div>
       `;
 
       res.json({
         success: true,
+        modoConsolidado,
         fechaInicio: fechaInicioStr,
         fechaFin: fechaFinStr,
+        asesoresDisponibles: asesoresCampo.map(a => ({
+          id: a.id,
+          nombre: formatUserName(a),
+          cargo: a.cargo || 'Asesor Comercial'
+        })),
         asesor: {
-          id: targetUserId,
+          id: modoConsolidado ? 'TODOS' : targetUserId,
           nombre: asesorNombre,
           cargo: asesorCargo,
-          telefono: asesor?.telefono || '',
-          correo: asesor?.correo || ''
+          telefono: asesorUnico?.telefono || '',
+          correo: asesorUnico?.correo || ''
         },
         kpisSemana,
+        graficasSemana,
         turnosSemana,
         rutasSemana,
         paradasSemana,
         clientesNuevos,
         cotizaciones,
         ventas,
-        seguimientos,
-        plantillaHtml
+        seguimientos: seguimientosConsolidados,
+        tablasDatosHtml,
+        plantillaHtml: tablasDatosHtml
       });
     } catch (err) {
       console.error('[getDatosSemanaInforme Error]:', err);
