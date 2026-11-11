@@ -39,6 +39,7 @@ const {
   INFORMES_CALENDAR_FIELDS,
   pick
 } = require('./security/permissions');
+const { parseDbWindowQuery, buildTransactionalWhere } = require('./utils/dbQueryWindow');
 
 // Fase 0 (seguridad): campos que jamás deben viajar en broadcasts de Socket.io
 const sanitizeDiffForBroadcast = (diff) => {
@@ -68,9 +69,11 @@ app.use(cookieParser());
 const rateLimit = require('express-rate-limit');
 const { setupCronJobs } = require('./cron/backup');
 
-// Iniciar tareas en segundo plano
-setupCronJobs();
-initCronJobs();
+// Iniciar tareas en segundo plano (desactivadas en entorno de pruebas)
+if (process.env.NODE_ENV !== 'test') {
+  setupCronJobs();
+  initCronJobs();
+}
 
 // Middleware de Autenticación Ultra-Resiliente (Bearer > Cookies > Fallback BD)
 const authenticateToken = async (req, res, next) => {
@@ -1795,25 +1798,139 @@ app.get('/api/db', authenticateToken, async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   try {
-    const users = await prisma.user.findMany({
-      where: {
-        id: { not: '1' },
-        user: { notIn: ['admin', 'ADMIN'] }
-      },
-      select: {
-        id: true, nombre: true, apellido: true, cedula: true, tipoDoc: true,
-        correo: true, cargo: true, telefono: true, observaciones: true,
-        user: true, roleId: true, meta_u: true, ejec_u: true, meta_p: true,
-        ejec_p: true, soundsEnabled: true, cumpleanos: true,
-        habeasDataAccepted: true, failedLoginAttempts: true, isLocked: true,
-        lastLogin: true, isOnline: true, foto: true, firma: true, lat: true, lng: true,
-        lastLocationUpdate: true, codigoAsesor: true,
-        esComercialCampo: true, esDelegadoGerencia: true
-      },
-      orderBy: { id: 'asc' }
-    });
-    const roles = await prisma.role.findMany({ orderBy: { id: 'asc' } });
-    const clientesRaw = await prisma.cliente.findMany({ orderBy: { id: 'asc' } });
+    const windowCfg = parseDbWindowQuery(req.query);
+
+    // Lote 1 (4 consultas): Catálogos maestros principales
+    const [users, roles, clientesRaw, inventarioRaw] = await Promise.all([
+      prisma.user.findMany({
+        where: {
+          id: { not: '1' },
+          user: { notIn: ['admin', 'ADMIN'] }
+        },
+        select: {
+          id: true, nombre: true, apellido: true, cedula: true, tipoDoc: true,
+          correo: true, cargo: true, telefono: true, observaciones: true,
+          user: true, roleId: true, meta_u: true, ejec_u: true, meta_p: true,
+          ejec_p: true, soundsEnabled: true, cumpleanos: true,
+          habeasDataAccepted: true, failedLoginAttempts: true, isLocked: true,
+          lastLogin: true, isOnline: true, foto: true, firma: true, lat: true, lng: true,
+          lastLocationUpdate: true, codigoAsesor: true,
+          esComercialCampo: true, esDelegadoGerencia: true
+        },
+        orderBy: { id: 'asc' }
+      }),
+      prisma.role.findMany({ orderBy: { id: 'asc' } }),
+      prisma.cliente.findMany({ orderBy: { id: 'asc' } }),
+      prisma.inventario.findMany({ orderBy: { id: 'asc' } })
+    ]);
+
+    // Lote 2 (4 consultas): Transaccionales comerciales y postventa
+    const [ventasDesc, cotizacionesDesc, pqrsDesc, serviciosDesc] = await Promise.all([
+      prisma.venta.findMany({
+        where: buildTransactionalWhere(windowCfg, { dateField: 'fecha' }),
+        include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      }),
+      prisma.cotizacion.findMany({
+        where: buildTransactionalWhere(windowCfg, { dateField: 'fecha' }),
+        include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      }),
+      prisma.pQR.findMany({
+        where: buildTransactionalWhere(windowCfg, {
+          dateField: 'fecha',
+          closedStates: ['Cerrado', 'Cerrada', 'Resuelto', 'Resuelta', 'Finalizado']
+        }),
+        include: { cliente: true, usuarioAsignado: true },
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      }),
+      prisma.servicio.findMany({
+        where: buildTransactionalWhere(windowCfg, {
+          dateField: 'fechaProg',
+          closedStates: ['Finalizado', 'Cerrado', 'Cancelado', 'Entregado']
+        }),
+        include: { cliente: true, tecnico: true },
+        orderBy: { fechaProg: 'desc' },
+        take: windowCfg.limit
+      })
+    ]);
+
+    // Lote 3 (4 consultas): Transaccionales de gestión humana y cuentas de cobro
+    const [solicitudesDesc, procesosDisciplinariosDesc, evaluacionesDesc, cuentasCobroDesc] = await Promise.all([
+      prisma.solicitud.findMany({
+        where: buildTransactionalWhere(windowCfg, {
+          dateField: 'fecha',
+          closedStates: ['Aprobado', 'Aprobada', 'Rechazado', 'Rechazada']
+        }),
+        include: { asesor: true },
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      }),
+      prisma.procesoDisciplinario.findMany({
+        where: buildTransactionalWhere(windowCfg, {
+          dateField: 'fecha',
+          stateField: 'etapa',
+          closedStates: [4]
+        }),
+        include: { asesor: true, jefe: true },
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      }),
+      prisma.evaluacion.findMany({
+        where: buildTransactionalWhere(windowCfg, { dateField: 'fecha' }),
+        include: { evaluador: true, evaluado: true },
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      }),
+      prisma.cuentasCobro.findMany({
+        where: buildTransactionalWhere(windowCfg, {
+          dateField: 'fecha',
+          closedStates: ['Pagada', 'Pagado', 'Rechazada', 'Anulada'], nullableState: true
+        }),
+        orderBy: { fecha: 'desc' },
+        take: windowCfg.limit
+      })
+    ]);
+
+    // Lote 4 (5 consultas): Comunicaciones, auditoría y notificaciones
+    const [anunciosRaw, chatGroupsRaw, chatDesc, auditoriaDesc, notificacionesDesc] = await Promise.all([
+      prisma.anuncio.findMany({ orderBy: { id: 'asc' } }),
+      prisma.chatGroup.findMany({ include: { createdBy: true }, orderBy: { fecha: 'asc' } }),
+      prisma.chat.findMany({ include: { sender: true, receiver: true }, orderBy: { timestamp: 'desc' }, take: 200 }),
+      prisma.auditoria.findMany({ include: { user: true }, orderBy: { id: 'desc' }, take: 200 }),
+      prisma.notificacion.findMany({ include: { para: true }, orderBy: { id: 'desc' }, take: 100 })
+    ]);
+
+    // Lote 5 (4 consultas): Comisionistas, configuraciones y capacitaciones
+    const [comisionistasRaw, config, informesConfig, capacitacionesRaw] = await Promise.all([
+      prisma.comisionista.findMany({ include: { owner: true }, orderBy: { id: 'asc' } }),
+      prisma.whatsappConfig.findFirst(),
+      prisma.informesConfig.findUnique({ where: { id: 1 } }),
+      prisma.capacitacion.findMany({ include: { creador: true }, orderBy: { fecha: 'desc' } })
+    ]);
+
+    // Lote 6 (3 consultas): Ventas externas de campo
+    const [cotizacionesExternasRaw, ventasExternasRaw, clientes_externos] = await Promise.all([
+      prisma.cotizacionExternaCampo.findMany({
+        include: { clienteExterno: true, comercial: true },
+        orderBy: { fecha: 'desc' },
+        take: 200
+      }),
+      prisma.ventaExternaCampo.findMany({
+        include: { clienteExterno: true, comercial: true, cotizacion: true },
+        orderBy: { fecha: 'desc' },
+        take: 200
+      }),
+      prisma.clienteExternoCampo.findMany({
+        include: { comercial: { select: { id: true, nombre: true, apellido: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 200
+      })
+    ]);
+
     const clientes = clientesRaw.map(c => {
       let dVal = '', mVal = '', aVal = '';
       if (c.fechaVinculacion) {
@@ -1857,7 +1974,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         asesorEmail
       };
     });
-    const inventarioRaw = await prisma.inventario.findMany({ orderBy: { id: 'asc' } });
     const inventario = inventarioRaw.map(inv => {
       const ext = (inv.datosExt && typeof inv.datosExt === 'object') ? inv.datosExt : {};
       const nonNullPhysical = Object.fromEntries(
@@ -1871,12 +1987,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     });
     
     // Mapear Ventas (incluyendo Cliente y Producto)
-    const ventasRaw = await prisma.venta.findMany({
-      take: 50,
-      include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
-      orderBy: { id: 'desc' }
-    });
-    ventasRaw.reverse();
+    const ventasRaw = [...ventasDesc].reverse();
     const ventas = ventasRaw.map(v => {
       const meta = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && v.equipos._meta) ? v.equipos._meta : {};
       const equiposList = (v.equipos && typeof v.equipos === 'object' && !Array.isArray(v.equipos) && Array.isArray(v.equipos.items)) ? v.equipos.items : (Array.isArray(v.equipos) ? v.equipos : []);
@@ -1972,10 +2083,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     });
 
     // Mapear PQRS
-    const pqrsRaw = await prisma.pQR.findMany({
-      include: { cliente: true, usuarioAsignado: true },
-      orderBy: { id: 'asc' }
-    });
+    const pqrsRaw = [...pqrsDesc].reverse();
     const pqrs = pqrsRaw.map(p => ({
       id: p.id,
       clienteId: p.clienteId,
@@ -2008,10 +2116,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     }));
 
     // Mapear Servicios Técnicos
-    const serviciosRaw = await prisma.servicio.findMany({
-      include: { cliente: true, tecnico: true },
-      orderBy: { id: 'asc' }
-    });
+    const serviciosRaw = [...serviciosDesc].reverse();
     const servicios = serviciosRaw.map(s => ({
       id: s.id,
       clienteId: s.clienteId,
@@ -2045,10 +2150,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       costoServicio: s.costoServicio
     }));
 
-    const solicitudesRaw = await prisma.solicitud.findMany({
-      include: { asesor: true },
-      orderBy: { id: 'asc' }
-    });
+    const solicitudesRaw = [...solicitudesDesc].reverse();
     const solicitudes = solicitudesRaw.map(s => ({
       id: s.id,
       fecha: s.fecha ? s.fecha.toISOString() : '',
@@ -2065,10 +2167,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : ''
     }));
 
-    const procesosDisciplinariosRaw = await prisma.procesoDisciplinario.findMany({
-      include: { asesor: true, jefe: true },
-      orderBy: { id: 'asc' }
-    });
+    const procesosDisciplinariosRaw = [...procesosDisciplinariosDesc].reverse();
     const procesosDisciplinarios = procesosDisciplinariosRaw.map(p => ({
       id: p.id,
       fecha: p.fecha ? p.fecha.toISOString() : '',
@@ -2090,10 +2189,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       evidencias: p.evidencias || []
     }));
 
-    const evaluacionesRaw = await prisma.evaluacion.findMany({
-      include: { evaluador: true, evaluado: true },
-      orderBy: { id: 'asc' }
-    });
+    const evaluacionesRaw = [...evaluacionesDesc].reverse();
     const evaluaciones = evaluacionesRaw.map(ev => ({
       id: ev.id,
       fecha: ev.fecha ? ev.fecha.toISOString() : '',
@@ -2114,7 +2210,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       scores: ev.scores || null
     }));
 
-    const anunciosRaw = await prisma.anuncio.findMany({ orderBy: { id: 'asc' } });
     const anuncios = anunciosRaw.map(a => ({
       id: a.id,
       fecha: a.fecha ? a.fecha.toISOString() : '',
@@ -2127,10 +2222,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     }));
 
     // Mapear Cotizaciones
-    const cotizacionesRaw = await prisma.cotizacion.findMany({
-      include: { cliente: true, items: { include: { producto: true } }, vendedor: true },
-      orderBy: { id: 'asc' }
-    });
+    const cotizacionesRaw = [...cotizacionesDesc].reverse();
     const cotizaciones = cotizacionesRaw.map(c => {
       const meta = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && c.equipos._meta) ? c.equipos._meta : {};
       const equiposList = (c.equipos && typeof c.equipos === 'object' && !Array.isArray(c.equipos) && Array.isArray(c.equipos.items)) ? c.equipos.items : (Array.isArray(c.equipos) ? c.equipos : []);
@@ -2221,17 +2313,13 @@ app.get('/api/db', authenticateToken, async (req, res) => {
           compraParcialDetalles: c.motivoSeguimiento || '',
           noCompraronMotivo: c.motivoNoCompra || '',
           noCompraronDetalle: c.noCompraronDetalle || '',
-          fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO') : null,
+          fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO', { timeZone: 'America/Bogota', day: '2-digit', month: '2-digit', year: 'numeric' }) : null,
           vendedor: c.vendedor?.user || ''
         },
         ...meta
       };
     });
 
-    const chatGroupsRaw = await prisma.chatGroup.findMany({ 
-      include: { createdBy: true },
-      orderBy: { fecha: 'asc' } 
-    });
     const chatGroups = chatGroupsRaw.map(g => ({
       id: g.id,
       nombre: g.nombre,
@@ -2243,12 +2331,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       integrantes: typeof g.integrantes === 'string' ? JSON.parse(g.integrantes) : (g.integrantes || [])
     }));
 
-    const chatDesc = await prisma.chat.findMany({ 
-      include: { sender: true, receiver: true },
-      orderBy: { timestamp: 'desc' }, 
-      take: 200 
-    });
-    const chat = chatDesc.reverse().map(c => ({
+    const chat = [...chatDesc].reverse().map(c => ({
       id: c.id,
       timestamp: c.timestamp ? new Date(c.timestamp).getTime() : Date.now(),
       fecha: c.fecha ? c.fecha.toISOString() : new Date().toISOString(),
@@ -2280,12 +2363,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       hiddenBy: c.hiddenBy || [],
       fileSize: c.fileSize || null
     }));
-    const auditoriaDesc = await prisma.auditoria.findMany({
-      include: { user: true },
-      orderBy: { id: 'desc' },
-      take: 200
-    });
-    const auditoria = auditoriaDesc.reverse().map(a => ({
+    const auditoria = [...auditoriaDesc].reverse().map(a => ({
       id: a.id,
       userId: a.userId,
       user: a.user?.user || a.user?.nombre || a.userId,
@@ -2297,12 +2375,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       hash: a.hash || null
     }));
 
-    const notificacionesDesc = await prisma.notificacion.findMany({
-      include: { para: true },
-      orderBy: { id: 'desc' },
-      take: 100
-    });
-    const notificaciones = notificacionesDesc.reverse().map(n => ({
+    const notificaciones = [...notificacionesDesc].reverse().map(n => ({
       id: n.id,
       paraId: n.paraId,
       para: n.para?.user || n.paraId,
@@ -2314,7 +2387,7 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       leida: !!n.leida,
       targetModule: n.targetModule || null
     }));
-    const cuentasCobroRaw = await prisma.cuentasCobro.findMany({ orderBy: { fecha: 'asc' } });
+    const cuentasCobroRaw = [...cuentasCobroDesc].reverse();
     const cuentasCobro = cuentasCobroRaw.map(c => ({
       id: c.id,
       ciudad: c.ciudad || '',
@@ -2339,10 +2412,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       notasSeguimiento: c.notasSeguimiento || ''
     }));
 
-    const comisionistasRaw = await prisma.comisionista.findMany({
-      include: { owner: true },
-      orderBy: { id: 'asc' }
-    });
     const comisionistas = comisionistasRaw.map(c => ({
       id: c.id,
       tipo: c.tipo || 'Técnico Participante',
@@ -2369,7 +2438,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     }));
 
     // WhatsApp Config (Línea oficial eliminada)
-    const config = await prisma.whatsappConfig.findFirst();
     let parsedTemplates = null;
     if (config && config.templates) {
       try {
@@ -2377,7 +2445,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       } catch (e) { parsedTemplates = null; }
     }
     const whatsappConfig = config && config.phone ? { phone: config.phone, status: config.status, templates: parsedTemplates } : null;
-    const informesConfig = await prisma.informesConfig.findUnique({ where: { id: 1 } });
     
     // Configuración general combinada
     const appConfig = {
@@ -2400,10 +2467,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       nombreEmpresa: 'IBRO'
     };
 
-    const capacitacionesRaw = await prisma.capacitacion.findMany({
-      include: { creador: true },
-      orderBy: { fecha: 'desc' }
-    });
     const capacitaciones = capacitacionesRaw.map(c => ({
       id: c.id,
       tipo: c.tipo || 'Capacitación',
@@ -2439,11 +2502,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     // Fase 0 (seguridad): los tokens de restablecimiento de contraseña NUNCA se exponen al cliente.
 
     // Cotizaciones Externas (Ventas Externas de Campo)
-    const cotizacionesExternasRaw = await prisma.cotizacionExternaCampo.findMany({
-      include: { clienteExterno: true, comercial: true },
-      orderBy: { fecha: 'desc' },
-      take: 200
-    });
     const cotizaciones_externas = cotizacionesExternasRaw.map(c => {
       const extMeta = (c.items && typeof c.items === 'object' && !Array.isArray(c.items) && c.items._meta) ? c.items._meta : {};
       const itemsList = Array.isArray(c.items) ? c.items : (Array.isArray(c.items?.items) ? c.items.items : []);
@@ -2502,11 +2560,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
     });
 
     // Pedidos Externos (Ventas Externas de Campo)
-    const ventasExternasRaw = await prisma.ventaExternaCampo.findMany({
-      include: { clienteExterno: true, comercial: true, cotizacion: true },
-      orderBy: { fecha: 'desc' },
-      take: 200
-    });
     const pedidos_externos = ventasExternasRaw.map(v => {
       const extMeta = (v.items && typeof v.items === 'object' && !Array.isArray(v.items) && v.items._meta) ? v.items._meta : {};
       const itemsList = Array.isArray(v.items) ? v.items : (Array.isArray(v.items?.items) ? v.items.items : []);
@@ -2567,12 +2620,6 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       };
     });
 
-    const clientes_externos = await prisma.clienteExternoCampo.findMany({
-      include: { comercial: { select: { id: true, nombre: true, apellido: true } } },
-      orderBy: { createdAt: 'desc' },
-      take: 200
-    });
-
     res.json({
       users,
       roles,
@@ -2598,7 +2645,13 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       whatsappConfig,
       cotizaciones_externas,
       pedidos_externos,
-      clientes_externos
+      clientes_externos,
+      _windowMeta: {
+        all: windowCfg.all,
+        months: windowCfg.months,
+        cutoffIso: windowCfg.cutoffIso,
+        limit: windowCfg.limit
+      }
     });
   } catch (error) {
     console.error('Error fetching database:', error);
@@ -3004,7 +3057,7 @@ app.get('/api/paginated/:model', authenticateToken, async (req, res) => {
             compraParcialDetalles: c.motivoSeguimiento || '',
             noCompraronMotivo: c.motivoNoCompra || '',
             noCompraronDetalle: '',
-            fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO') : null,
+            fechaSeguimiento: c.fechaSeguimiento ? new Date(c.fechaSeguimiento).toLocaleDateString('es-CO', { timeZone: 'America/Bogota', day: '2-digit', month: '2-digit', year: 'numeric' }) : null,
             vendedor: c.vendedor?.user || ''
           },
           ...meta
@@ -3494,9 +3547,11 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
   // 🛡️ RBAC: Verificación estricta de privilegios para mutaciones críticas
   // Fase 0: el rol se valida en servidor con la misma regla del front (rol 1 o módulo 'admin').
+  let accessCtx = null;
   let isMasterOrAdmin = false;
   try {
-    isMasterOrAdmin = await isAdminUser(req.user);
+    accessCtx = await getAccessContext(req.user);
+    isMasterOrAdmin = Boolean(accessCtx?.isAdmin);
   } catch (e) {
     isMasterOrAdmin = false;
   }
@@ -3510,6 +3565,43 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
     }
     if (diff.users && diff.users.deleted && diff.users.deleted.length > 0) {
       return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de Administrador para eliminar usuarios.' });
+    }
+    for (const [colKey, colPayload] of Object.entries(diff)) {
+      if (!colPayload || colKey === 'users' || colKey === 'roles' || colKey === 'pendingResets') continue;
+      if (colKey === 'config') {
+        const cfgInner = colPayload.value || colPayload;
+        if (cfgInner?.whatsapp) {
+          const wpCheck = canWriteCollection(accessCtx, 'whatsappConfig', 'upsert');
+          if (!wpCheck.allowed) {
+            return res.status(403).json({ error: `Acceso denegado para modificar 'whatsappConfig': ${wpCheck.reason || 'sin permisos'}.` });
+          }
+        }
+        if (cfgInner?.informes) {
+          const infCheck = canWriteCollection(accessCtx, 'informesConfig', 'upsert');
+          if (!infCheck.allowed) {
+            return res.status(403).json({ error: `Acceso denegado para modificar 'informesConfig': ${infCheck.reason || 'sin permisos'}.` });
+          }
+        }
+        continue;
+      }
+
+      const hasUpserts = Array.isArray(colPayload.upserted)
+        ? colPayload.upserted.length > 0
+        : (typeof colPayload === 'object' && Object.keys(colPayload).some(k => k !== 'upserted' && k !== 'deleted'));
+      const hasDeletes = Array.isArray(colPayload.deleted) && colPayload.deleted.length > 0;
+
+      if (hasUpserts) {
+        const checkUpsert = canWriteCollection(accessCtx, colKey, 'upsert');
+        if (!checkUpsert.allowed) {
+          return res.status(403).json({ error: `Acceso denegado para modificar '${colKey}': ${checkUpsert.reason || 'sin permisos'}.` });
+        }
+      }
+      if (hasDeletes) {
+        const checkDelete = canWriteCollection(accessCtx, colKey, 'delete');
+        if (!checkDelete.allowed) {
+          return res.status(403).json({ error: `Acceso denegado para eliminar en '${colKey}': ${checkDelete.reason || 'sin permisos'}.` });
+        }
+      }
     }
     // Un usuario no administrador NO puede crear usuarios, cambiar roles, bloqueos, username,
     // banderas operativas ni la contraseña de otra persona (antes: escalada total de privilegios).
@@ -5262,34 +5354,38 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  verifySmtpConnection();
-  // Ejecutar limpieza inicial y programar cada 2 minutos
-  reconcileOnlineStatus();
-  setInterval(reconcileOnlineStatus, 120000);
-});
-
-// Apagado ordenado (Graceful Shutdown) para SIGTERM y SIGINT
-const gracefulShutdown = async (signal) => {
-  console.log(`\n[Server] Recibida señal ${signal}. Cerrando servidor HTTP y conexiones...`);
-  server.close(async () => {
-    console.log('[Server] Servidor HTTP y Socket.io cerrados.');
-    try {
-      await prisma.$disconnect();
-      console.log('[Server] Conexión de Prisma desconectada exitosamente.');
-    } catch (e) {
-      console.error('[Server] Error al desconectar Prisma:', e.message);
-    }
-    process.exit(0);
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    verifySmtpConnection();
+    // Ejecutar limpieza inicial y programar cada 2 minutos
+    reconcileOnlineStatus();
+    setInterval(reconcileOnlineStatus, 120000);
   });
 
-  // Timeout de seguridad en caso de conexiones colgadas
-  setTimeout(() => {
-    console.error('[Server] Forzando cierre del proceso tras 10 segundos.');
-    process.exit(1);
-  }, 10000).unref();
-};
+  // Apagado ordenado (Graceful Shutdown) para SIGTERM y SIGINT
+  const gracefulShutdown = async (signal) => {
+    console.log(`\n[Server] Recibida señal ${signal}. Cerrando servidor HTTP y conexiones...`);
+    server.close(async () => {
+      console.log('[Server] Servidor HTTP y Socket.io cerrados.');
+      try {
+        await prisma.$disconnect();
+        console.log('[Server] Conexión de Prisma desconectada exitosamente.');
+      } catch (e) {
+        console.error('[Server] Error al desconectar Prisma:', e.message);
+      }
+      process.exit(0);
+    });
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    // Timeout de seguridad en caso de conexiones colgadas
+    setTimeout(() => {
+      console.error('[Server] Forzando cierre del proceso tras 10 segundos.');
+      process.exit(1);
+    }, 10000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
+
+module.exports = { app, server, prisma };
