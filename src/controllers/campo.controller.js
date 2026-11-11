@@ -3345,7 +3345,7 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const coti = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
       if (!coti) return res.status(404).json({ error: 'Cotización externa no encontrada.' });
-      if (!esDel && coti.usuarioId !== req.user.id) {
+      if (!esDel && coti.comercialId !== req.user.id) {
         return res.status(403).json({ error: 'No autorizado para modificar esta cotización externa.' });
       }
 
@@ -3365,7 +3365,7 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const coti = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
       if (!coti) return res.status(404).json({ error: 'Cotización externa no encontrada.' });
-      if (!esDel && coti.usuarioId !== req.user.id) {
+      if (!esDel && coti.comercialId !== req.user.id) {
         return res.status(403).json({ error: 'No autorizado para eliminar esta cotización externa.' });
       }
 
@@ -3398,9 +3398,18 @@ class CampoController {
 
   async cambiarEstadoCotizacion(req, res) {
     try {
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const coti = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
+      if (!coti) return res.status(404).json({ error: 'Cotización externa no encontrada.' });
+      if (!esDel && coti.comercialId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para cambiar el estado de esta cotización.' });
+      }
       const { nuevoEstado, nota } = req.body;
-      const data = await operacionExternaService.cambiarEstadoCotizacion(req.params.id, req.user.id, nuevoEstado, nota);
-      await this.registrarAuditoria(req.user.id, 'CAMBIO_ESTADO_COTIZACION', { id: req.params.id, nuevoEstado }, null, req);
+      const data = await operacionExternaService.cambiarEstadoCotizacion(id, req.user.id, nuevoEstado, nota);
+      await this.registrarAuditoria(req.user.id, 'CAMBIO_ESTADO_COTIZACION', { id, nuevoEstado }, null, req);
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_UPDATE', timestamp: Date.now() });
       res.json(data);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -3409,10 +3418,19 @@ class CampoController {
 
   async agregarSeguimientoCotizacion(req, res) {
     try {
-      const data = await operacionExternaService.agregarSeguimientoCotizacion(req.params.id, req.user.id, {
+      const { id } = req.params;
+      const esDel = this.esDelegado(req.user);
+      const coti = await prisma.cotizacionExternaCampo.findUnique({ where: { id } });
+      if (!coti) return res.status(404).json({ error: 'Cotización externa no encontrada.' });
+      if (!esDel && coti.comercialId !== req.user.id) {
+        return res.status(403).json({ error: 'No autorizado para registrar seguimiento en esta cotización.' });
+      }
+      const data = await operacionExternaService.agregarSeguimientoCotizacion(id, req.user.id, {
         ...req.body,
-        usuarioNombre: `${req.user.nombre} ${req.user.apellido}`
+        usuarioNombre: `${req.user.nombre || ''} ${req.user.apellido || ''}`.trim() || req.user.user
       });
+      const io = req.app?.get ? req.app.get('io') : null;
+      if (io) io.emit('db_update', { type: 'CAMPO_COTIZACION_EXTERNA_UPDATE', timestamp: Date.now() });
       res.json(data);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -3453,7 +3471,7 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const venta = await prisma.ventaExternaCampo.findUnique({ where: { id } });
       if (!venta) return res.status(404).json({ error: 'Venta externa no encontrada.' });
-      if (!esDel && venta.usuarioId !== req.user.id) {
+      if (!esDel && venta.comercialId !== req.user.id) {
         return res.status(403).json({ error: 'No autorizado para modificar esta venta externa.' });
       }
 
@@ -3473,7 +3491,7 @@ class CampoController {
       const esDel = this.esDelegado(req.user);
       const venta = await prisma.ventaExternaCampo.findUnique({ where: { id } });
       if (!venta) return res.status(404).json({ error: 'Venta externa no encontrada.' });
-      if (!esDel && venta.usuarioId !== req.user.id) {
+      if (!esDel && venta.comercialId !== req.user.id) {
         return res.status(403).json({ error: 'No autorizado para eliminar esta venta externa.' });
       }
 
