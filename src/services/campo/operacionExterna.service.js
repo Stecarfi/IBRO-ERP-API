@@ -178,8 +178,21 @@ class OperacionExternaService {
       const sinSeguimientoPostRegistro = totalSegsReales === 0 && totalVisitas === 0;
       const requiereSeguimientoObligatorio = sinSeguimientoPostRegistro || tieneSolicitudAccionPendiente || diasSinSeguimiento >= 3;
 
+      const limpiarTextoContacto = (val) => {
+        const s = String(val || '').trim();
+        if (!s) return '';
+        if (/^0+$/.test(s.replace(/[\s\-().]/g, ''))) return '';
+        if (/^(sin\s*tel[eé]fono|n\/a|na|ninguno|no\s*registra|pendiente)$/i.test(s)) return '';
+        return s;
+      };
+
+      const contactoLimpio = limpiarTextoContacto(c.contacto);
+      const telefonoLimpio = limpiarTextoContacto(c.telefono);
+
       return {
         ...c,
+        contacto: contactoLimpio || null,
+        telefono: telefonoLimpio || null,
         seguimientosRealesCount: totalSegsReales,
         sinSeguimientoPostRegistro,
         tieneSolicitudAccionPendiente,
@@ -187,14 +200,18 @@ class OperacionExternaService {
           id: solicitudDelegado.id,
           fecha: solicitudDelegado.fechaHora,
           instrucciones: solicitudDelegado.observaciones || solicitudDelegado.compromisos || 'Realizar seguimiento comercial inmediato al cliente.',
-          proximaActividad: solicitudDelegado.proximaActividad || 'Seguimiento Exigido por Delegado'
+          proximaActividad: solicitudDelegado.proximaActividad || 'Seguimiento solicitado por Gerencia'
         } : null,
         ultimaFechaGestion,
         diasSinSeguimiento,
         requiereSeguimientoObligatorio,
         estadoSeguimiento: tieneSolicitudAccionPendiente
-          ? 'Acción Exigida por Delegado'
-          : (sinSeguimientoPostRegistro ? 'Seguimiento Inicial Pendiente' : (diasSinSeguimiento >= 3 ? `Requiere Seguimiento (${diasSinSeguimiento}d)` : 'Al Día'))
+          ? 'Solicitado por Gerencia'
+          : (sinSeguimientoPostRegistro
+              ? 'Primer contacto pendiente'
+              : (diasSinSeguimiento >= 3
+                  ? `Sin contacto hace ${diasSinSeguimiento} ${diasSinSeguimiento === 1 ? 'día' : 'días'}`
+                  : 'Seguimiento al día'))
       };
     });
 

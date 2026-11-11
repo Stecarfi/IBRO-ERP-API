@@ -1939,7 +1939,7 @@ class CampoController {
       };
 
       if (this.esDelegado(req.user)) {
-        if (usuarioId) where.usuarioId = usuarioId;
+        if (usuarioId && usuarioId !== 'TODOS') where.usuarioId = usuarioId;
       } else {
         where.usuarioId = req.user.id;
       }
@@ -3640,10 +3640,10 @@ class CampoController {
 
       const userWhere = targetUserId
         ? { usuarioId: targetUserId }
-        : { usuarioId: { in: usuariosCampoIds } };
+        : {};
       const comWhere = targetUserId
         ? { comercialId: targetUserId }
-        : { comercialId: { in: usuariosCampoIds } };
+        : {};
 
       let asesorInfo = null;
       if (targetUserId && targetUserId !== 'TODOS') {
@@ -3845,33 +3845,108 @@ class CampoController {
       });
       const efectividadPct = totalVisitas > 0 ? Math.round((visitasEfectivas / totalVisitas) * 100) : 0;
 
-      // 4. Cotizaciones
-      const cotizaciones = await prisma.cotizacionExternaCampo.findMany({
-        where: {
-          ...comWhere,
-          ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
-        },
-        include: {
-          clienteExterno: { select: { id: true, nombre: true } },
-          comercial: { select: { id: true, nombre: true, apellido: true } }
-        },
-        orderBy: { fecha: 'desc' }
-      });
-      const totalCotizaciones = cotizaciones.length;
-      const montoCotizado = cotizaciones.reduce((acc, c) => acc + (c.total || 0), 0);
+      // 4. Cotizaciones (consolidando CotizacionExternaCampo + Cotizacion general del asesor sin duplicar)
+      const vendWhere = targetUserId
+        ? { vendedorId: targetUserId }
+        : {};
 
-      // 5. Ventas
-      const ventas = await prisma.ventaExternaCampo.findMany({
-        where: {
-          ...comWhere,
-          ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
-        },
-        include: {
-          clienteExterno: { select: { id: true, nombre: true } },
-          comercial: { select: { id: true, nombre: true, apellido: true } }
-        },
-        orderBy: { fecha: 'desc' }
-      });
+      const [cotizacionesExt, cotizacionesGen] = await Promise.all([
+        prisma.cotizacionExternaCampo.findMany({
+          where: {
+            ...comWhere,
+            ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+          },
+          include: {
+            clienteExterno: { select: { id: true, nombre: true } },
+            comercial: { select: { id: true, nombre: true, apellido: true } }
+          },
+          orderBy: { fecha: 'desc' }
+        }),
+        prisma.cotizacion.findMany({
+          where: {
+            ...vendWhere,
+            ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+          },
+          include: {
+            cliente: { select: { id: true, nom: true } },
+            vendedor: { select: { id: true, nombre: true, apellido: true } }
+          },
+          orderBy: { fecha: 'desc' }
+        }).catch(() => [])
+      ]);
+
+      const codigosCotSet = new Set(cotizacionesExt.map(c => String(c.codigo || '').trim()).filter(Boolean));
+      const cotizacionesGenNorm = (cotizacionesGen || [])
+        .filter(cg => {
+          const cod = String(cg.numCotizacion || cg.id || '').trim();
+          return !codigosCotSet.has(cod);
+        })
+        .map(cg => ({
+          id: cg.id,
+          codigo: cg.numCotizacion || cg.id,
+          fecha: cg.fecha,
+          createdAt: cg.fecha,
+          total: Number(cg.total || 0),
+          estado: cg.estado || 'Emitida',
+          comercialId: cg.vendedorId,
+          comercial: cg.vendedor || null,
+          clienteExterno: { id: cg.clienteId, nombre: cg.clienteNombre || cg.cliente?.nom || 'Cliente Comercial' }
+        }));
+
+      const cotizaciones = [...cotizacionesExt, ...cotizacionesGenNorm].sort(
+        (a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0)
+      );
+      const totalCotizaciones = cotizaciones.length;
+      const montoCotizado = cotizaciones.reduce((acc, c) => acc + (Number(c.total) || 0), 0);
+
+      // 5. Ventas (consolidando VentaExternaCampo + Venta/Pedidos del asesor sin duplicar)
+      const [ventasExt, ventasGen] = await Promise.all([
+        prisma.ventaExternaCampo.findMany({
+          where: {
+            ...comWhere,
+            ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+          },
+          include: {
+            clienteExterno: { select: { id: true, nombre: true } },
+            comercial: { select: { id: true, nombre: true, apellido: true } }
+          },
+          orderBy: { fecha: 'desc' }
+        }),
+        prisma.venta.findMany({
+          where: {
+            ...vendWhere,
+            ...(modoPeriodo !== 'todos' ? { fecha: { gte: inicio, lte: fin } } : {})
+          },
+          include: {
+            cliente: { select: { id: true, nom: true } },
+            vendedor: { select: { id: true, nombre: true, apellido: true } }
+          },
+          orderBy: { fecha: 'desc' }
+        }).catch(() => [])
+      ]);
+
+      const codigosVenSet = new Set(ventasExt.map(v => String(v.codigo || '').trim()).filter(Boolean));
+      const ventasGenNorm = (ventasGen || [])
+        .filter(vg => {
+          const cod = String(vg.numPedido || vg.id || '').trim();
+          return !codigosVenSet.has(cod);
+        })
+        .map(vg => ({
+          id: vg.id,
+          codigo: vg.numPedido || vg.id,
+          fecha: vg.fecha,
+          fechaVenta: vg.fecha,
+          createdAt: vg.fecha,
+          valorVendido: Number(vg.total || 0),
+          metodoPago: vg.metodoPago || 'Contado',
+          comercialId: vg.vendedorId,
+          comercial: vg.vendedor || null,
+          clienteExterno: { id: vg.clienteId, nombre: vg.clienteNombre || vg.cliente?.nom || 'Cliente Comercial' }
+        }));
+
+      const ventas = [...ventasExt, ...ventasGenNorm].sort(
+        (a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0)
+      );
       const totalVentas = ventas.length;
       const montoVendido = ventas.reduce((acc, v) => acc + (parseFloat(v.valorVendido) || 0), 0);
 
@@ -4259,6 +4334,13 @@ class CampoController {
         fechaFin: fin.toISOString(),
         usuarioId: targetUserId || 'TODOS',
         asesor: asesorInfo,
+        operadoresCampo: usuariosCampo.map(u => ({
+          id: u.id,
+          nombre: `${u.nombre || ''} ${u.apellido || ''}`.trim() || u.user,
+          user: u.user,
+          cargo: u.cargo || 'Asesor Comercial',
+          foto: u.foto || null
+        })),
         jornadaActiva: jornadaActivaHoy,
         estadoAsesores,
         eventosCronologicos,
