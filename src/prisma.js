@@ -14,7 +14,7 @@ if (databaseUrl) {
   }
   if (!databaseUrl.includes('connection_limit=')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
-    databaseUrl += `${separator}connection_limit=15`;
+    databaseUrl += `${separator}connection_limit=8`;
   }
   if (!databaseUrl.includes('pool_timeout=')) {
     const separator = databaseUrl.includes('?') ? '&' : '?';
