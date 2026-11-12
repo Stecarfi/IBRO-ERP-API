@@ -6171,8 +6171,8 @@ class CampoController {
           const fallbackMin = duracionMin > 1 ? duracionMin : 15;
           checkOutEfectivo = new Date(checkInDate.getTime() + fallbackMin * 60000);
           duracionMin = fallbackMin;
-        } else if (checkOutEfectivo && duracionMin <= 0) {
-          duracionMin = Math.min(480, Math.max(1, Math.round((checkOutEfectivo - checkInDate) / 60000)));
+        } else if (checkOutEfectivo) {
+          duracionMin = Math.min(720, Math.max(1, Math.round((checkOutEfectivo - checkInDate) / 60000)));
         } else if (!checkOutEfectivo) {
           // Si es de un día anterior y quedó sin checkOut, tratar como cerrada al final de esa visita (~20 min) para no mostrar falso "En Sitio" eterno
           if (fechaCol !== hoyColombia) {
