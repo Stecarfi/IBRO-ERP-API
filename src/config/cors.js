@@ -1,8 +1,8 @@
 /**
  * Política CORS centralizada (API REST + Socket.io).
  *
- * - Lista blanca desde ALLOWED_ORIGINS (separada por comas).
- * - Si no se define, se usan los orígenes de desarrollo + los dominios de producción conocidos.
+ * - Lista blanca combinando siempre DEFAULT_ALLOWED_ORIGINS con ALLOWED_ORIGINS y FRONTEND_URL.
+ * - Garantiza que https://g-ibro.onrender.com nunca quede excluido por variables parciales en Render.
  * - Las peticiones SIN cabecera Origin (apps móviles nativas, curl, server-to-server,
  *   navegación directa) se permiten: CORS solo protege a navegadores.
  * - Fuera de producción también se aceptan IPs de red local (pruebas desde el celular en LAN).
@@ -28,12 +28,16 @@ const PRIVATE_NETWORK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d+\.\d+
 
 const normalizeOrigin = (o) => String(o || '').trim().replace(/\/+$/, '').toLowerCase();
 
-function parseAllowedOrigins(raw = process.env.ALLOWED_ORIGINS) {
-  const list = String(raw || '')
-    .split(',')
-    .map(normalizeOrigin)
-    .filter(Boolean);
-  return list.length > 0 ? list : DEFAULT_ALLOWED_ORIGINS.map(normalizeOrigin);
+function parseAllowedOrigins(raw = process.env.ALLOWED_ORIGINS, frontendUrl = process.env.FRONTEND_URL) {
+  const merged = new Set(DEFAULT_ALLOWED_ORIGINS.map(normalizeOrigin));
+  for (const source of [raw, frontendUrl]) {
+    String(source || '')
+      .split(',')
+      .map(normalizeOrigin)
+      .filter(Boolean)
+      .forEach((origin) => merged.add(origin));
+  }
+  return Array.from(merged);
 }
 
 /**

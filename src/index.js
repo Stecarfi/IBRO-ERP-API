@@ -65,6 +65,39 @@ const path = require('path');
 const app = express();
 let io; // Instancia global de Socket.io
 app.set('trust proxy', 1); // Solución para error de express-rate-limit en Render (X-Forwarded-For)
+
+// 🔒 CORS centralizado al inicio absoluto del pipeline HTTP (antes de cookies, helmet, rate-limit y body-parser)
+// Garantiza que preflights OPTIONS y respuestas de error (401/403/413/429/500) siempre incluyan Access-Control-Allow-Origin.
+const corsOriginChecker = createOriginChecker();
+const DEFAULT_CORS_HEADERS = 'Content-Type, Authorization, Accept, Origin, X-Requested-With, x-user-id, x-user, x-client-role, x-module, x-modulo, x-refresh-token, x-role, Range, Cache-Control, Pragma, Expires';
+
+app.use((req, res, next) => {
+  const requestOrigin = req.headers.origin;
+  if (requestOrigin && corsOriginChecker.isAllowed(requestOrigin)) {
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.vary('Origin');
+  }
+  if (req.method === 'OPTIONS') {
+    if (requestOrigin && corsOriginChecker.isAllowed(requestOrigin)) {
+      const requestedHeaders = req.headers['access-control-request-headers'];
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+      res.setHeader('Access-Control-Allow-Headers', requestedHeaders || DEFAULT_CORS_HEADERS);
+      res.setHeader('Access-Control-Max-Age', '86400');
+      return res.status(204).end();
+    }
+    return res.status(204).end();
+  }
+  next();
+});
+
+app.use(cors({
+  origin: corsOriginChecker.origin,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  maxAge: 86400
+}));
+
 app.use(cookieParser());
 const rateLimit = require('express-rate-limit');
 const { setupCronJobs } = require('./cron/backup');
@@ -137,39 +170,14 @@ app.use(helmet({
     crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
 }));
 
-// 🔒 CORS: lista blanca desde ALLOWED_ORIGINS (ver src/config/cors.js)
-const corsOriginChecker = createOriginChecker();
-app.use(cors({
-    origin: corsOriginChecker.origin,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: [
-        'Content-Type',
-        'Authorization',
-        'Accept',
-        'Origin',
-        'X-Requested-With',
-        'x-user-id',
-        'x-user',
-        'x-client-role',
-        'x-module',
-        'x-refresh-token',
-        'x-role',
-        'Range',
-        'Cache-Control',
-        'Pragma',
-        'Expires'
-    ]
-}));
-
-// 🛡️ Rate Limiting Global (Anti-DDoS) - Excluye video streaming para evitar HTTP 429 durante la reproducción
+// 🛡️ Rate Limiting Global (Anti-DDoS) - Excluye preflights OPTIONS y video streaming
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: parseInt(process.env.API_RATE_LIMIT_MAX, 10) || 1000, // límite generoso por IP
+  max: parseInt(process.env.API_RATE_LIMIT_MAX, 10) || 1500, // límite generoso por IP
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiadas peticiones detectadas (Anti-DDoS). Intente más tarde.' },
-  skip: (req) => req.path.startsWith('/drive-stream/') || req.path.startsWith('/media/') || req.path === '/health'
+  skip: (req) => req.method === 'OPTIONS' || req.path.startsWith('/drive-stream/') || req.path.startsWith('/media/') || req.path === '/health'
 });
 app.use('/api/', apiLimiter);
 
@@ -5012,6 +5020,9 @@ app.use('/auditoria', auditoriaRoutes);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
+// Render / Cloudflare mantienen sockets keep-alive hasta 60s; evitar ECONNRESET (502 sin cabeceras CORS)
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
 io = new Server(server, {
   cors: {
     origin: corsOriginChecker.origin,
@@ -5352,6 +5363,25 @@ app.get('/api/health', async (req, res) => {
       error: 'Fallo al verificar conexión con la base de datos'
     });
   }
+});
+
+// Middleware global de errores HTTP: preserva siempre cabeceras CORS en errores 4xx/5xx
+app.use((err, req, res, next) => {
+  const requestOrigin = req.headers?.origin;
+  if (!res.headersSent && requestOrigin && corsOriginChecker.isAllowed(requestOrigin)) {
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.vary('Origin');
+  }
+  if (res.headersSent) {
+    return next(err);
+  }
+  const statusCode = Number(err?.status || err?.statusCode) || 500;
+  console.error('[Express Error Handler]', req.method, req.originalUrl, err?.message || err);
+  return res.status(statusCode).json({
+    error: err?.expose ? err.message : 'Error interno procesando la solicitud.',
+    code: err?.code || 'INTERNAL_ERROR'
+  });
 });
 
 if (require.main === module) {

@@ -148,8 +148,19 @@ const getColombiaDayBounds = (date = new Date()) => {
   return { startOfDay, endOfDay, colombiaStr };
 };
 
+let _lastAutoCierreTs = 0;
+const AUTO_CIERRE_THROTTLE_MS = 60000;
+const _movimientosDiaInFlight = new Map();
+const _movimientosDiaCache = new Map();
+const MOVIMIENTOS_DIA_CACHE_TTL_MS = 2500;
+
 const autoCerrarJornadasVencidas = async (prismaInstance) => {
   try {
+    const nowMs = Date.now();
+    if (process.env.NODE_ENV !== 'test' && (nowMs - _lastAutoCierreTs) < AUTO_CIERRE_THROTTLE_MS) {
+      return;
+    }
+    _lastAutoCierreTs = nowMs;
     const ahora = new Date();
     const { startOfDay } = getColombiaDayBounds(ahora);
 
@@ -208,6 +219,7 @@ class CampoController {
 
   // Helper de auditoría inmutable
   async registrarAuditoria(userId, action, recordDetails, shadowingData = null, req = null) {
+    _movimientosDiaCache.clear();
     try {
       const ip = req?.ip || req?.headers?.['x-forwarded-for'] || '127.0.0.1';
       await prisma.auditoria.create({
@@ -5529,12 +5541,26 @@ class CampoController {
 
   async getMovimientosDia(req, res) {
     try {
-      await autoCerrarJornadasVencidas(prisma);
-
       const { fecha, periodo, usuarioId, desde, hasta } = req.query || {};
       const esDel = this.esDelegado(req.user);
       const esGerencial = req.query?.modulo === 'control_gerencial' || req.headers?.['x-modulo'] === 'control_gerencial' || esDel;
       const targetUserId = esGerencial ? (usuarioId && usuarioId !== 'TODOS' ? usuarioId : null) : (usuarioId && usuarioId !== 'TODOS' ? usuarioId : req.user?.id);
+
+      const cacheKey = `${targetUserId || 'ALL'}|${periodo || ''}|${fecha || ''}|${desde || ''}|${hasta || ''}`;
+      const useCoalescing = process.env.NODE_ENV !== 'test';
+      if (useCoalescing) {
+        const cached = _movimientosDiaCache.get(cacheKey);
+        if (cached && (Date.now() - cached.ts) < MOVIMIENTOS_DIA_CACHE_TTL_MS) {
+          return res.json(cached.payload);
+        }
+        if (_movimientosDiaInFlight.has(cacheKey)) {
+          const sharedPayload = await _movimientosDiaInFlight.get(cacheKey);
+          return res.json(sharedPayload);
+        }
+      }
+
+      const computePayload = async () => {
+      await autoCerrarJornadasVencidas(prisma);
 
       const ahora = new Date();
       const hoyColombia = getFechaColombia(ahora);
@@ -5623,8 +5649,8 @@ class CampoController {
         where.usuarioId = targetUserId;
       }
 
-      // 2. Obtener todas las visitas REALES ejecutadas (con checkInHora real) en el filtro
-      const items = await prisma.visitaCampo.findMany({
+      // 2. Obtener las visitas REALES ejecutadas (con tope seguro de memoria cuando periodo=todos para evitar OOM/502 en Render)
+      const rawItems = await prisma.visitaCampo.findMany({
         where,
         include: {
           usuario: {
@@ -5634,11 +5660,12 @@ class CampoController {
           clienteExterno: true,
           prospecto: true
         },
-        orderBy: [
-          { checkInHora: 'asc' },
-          { createdAt: 'asc' }
-        ]
+        orderBy: modoPeriodo === 'todos'
+          ? [{ checkInHora: 'desc' }, { createdAt: 'desc' }]
+          : [{ checkInHora: 'asc' }, { createdAt: 'asc' }],
+        ...(modoPeriodo === 'todos' ? { take: 1000 } : {})
       });
+      const items = modoPeriodo === 'todos' ? rawItems.reverse() : rawItems;
 
       // 3. Asignar un color fijo/determinístico a cada operador
       const advisorColorMap = {};
@@ -5646,9 +5673,11 @@ class CampoController {
         advisorColorMap[u.id] = i % 8;
       });
 
-      // 4. Obtener jornadas de hoy, últimas jornadas históricas, pings GPS, rutas asignadas, pausas de almuerzo, ventas y clientes
+      // 4. Obtener datos complementarios en 2 lotes controlados (evita agotar el pool de conexiones de Prisma en Render)
       const { startOfDay: startOfToday, endOfDay: endOfToday } = getColombiaDayBounds(ahora);
-      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw, paradasRutaRaw, pausasRaw, visitasRealesParaRutas, ventasCampoRaw, clientesCampoRaw] = await Promise.all([
+      const usuariosSet = new Set(usuariosCampoIds);
+
+      const [jornadas, ultimasJornadasHist, ultimosPings, pingsHoy, rutasActividadRaw] = await Promise.all([
         prisma.jornadaLaboral.findMany({
           where: {
             usuarioId: targetUserId ? targetUserId : { in: usuariosCampoIds },
@@ -5701,7 +5730,10 @@ class CampoController {
           },
           orderBy: { createdAt: 'desc' },
           take: 50
-        }).catch(() => []),
+        }).catch(() => [])
+      ]);
+
+      const [paradasRutaRaw, pausasRaw, visitasRealesParaRutas, ventasCampoRaw, clientesCampoRaw] = await Promise.all([
         prisma.visitaCampo.findMany({
           where: {
             ...(targetUserId ? { usuarioId: targetUserId } : { usuarioId: { in: usuariosCampoIds } }),
@@ -5710,7 +5742,8 @@ class CampoController {
               { observaciones: { contains: '[Ruta RUT-' } }
             ]
           },
-          orderBy: { createdAt: 'asc' }
+          orderBy: { createdAt: 'asc' },
+          take: 500
         }).catch(() => []),
         prisma.pausaJornada.findMany({
           where: {
@@ -5729,14 +5762,16 @@ class CampoController {
           orderBy: { horaInicio: 'desc' },
           take: 100
         }).catch(() => []),
-        prisma.visitaCampo.findMany({
-          where: {
-            ...(targetUserId ? { usuarioId: targetUserId } : { usuarioId: { in: usuariosCampoIds } }),
-            checkInHora: { not: null }
-          },
-          orderBy: { checkInHora: 'asc' },
-          take: 500
-        }).catch(() => []),
+        modoPeriodo === 'todos'
+          ? Promise.resolve(items.filter((v) => targetUserId ? v.usuarioId === targetUserId : usuariosSet.has(v.usuarioId)))
+          : prisma.visitaCampo.findMany({
+              where: {
+                ...(targetUserId ? { usuarioId: targetUserId } : { usuarioId: { in: usuariosCampoIds } }),
+                checkInHora: { not: null }
+              },
+              orderBy: { checkInHora: 'asc' },
+              take: 500
+            }).catch(() => []),
         prisma.ventaExternaCampo.findMany({
           where: {
             ...(targetUserId ? { comercialId: targetUserId } : { comercialId: { in: usuariosCampoIds } })
@@ -6548,7 +6583,7 @@ class CampoController {
           clientesSinSeguimientoCount: clientesSinSegAsesor.length,
           clientesSinSeguimientoLista: clientesSinSegAsesor.slice(0, 10),
           recorridoHoy,
-          trazabilidad: [...uMovs].reverse()
+          trazabilidad: [...uMovs].reverse().map(({ evidencias, firmaCliente, usuarioFoto, ...restMov }) => restMov)
         };
       });
 
@@ -6655,7 +6690,7 @@ class CampoController {
         totalAnomalias: anomaliasGlobales.length
       };
 
-      res.json({
+      return {
         success: true,
         periodo: modoPeriodo,
         fecha: fechaStr,
@@ -6680,7 +6715,25 @@ class CampoController {
         clientesSinSeguimiento,
         asesores: asesoresDetalle,
         movimientos: movimientosDesc
-      });
+      };
+      };
+
+      let payloadPromise;
+      if (useCoalescing) {
+        payloadPromise = computePayload();
+        _movimientosDiaInFlight.set(cacheKey, payloadPromise);
+      }
+      try {
+        const responsePayload = payloadPromise ? await payloadPromise : await computePayload();
+        if (useCoalescing) {
+          _movimientosDiaCache.set(cacheKey, { ts: Date.now(), payload: responsePayload });
+        }
+        return res.json(responsePayload);
+      } finally {
+        if (useCoalescing) {
+          _movimientosDiaInFlight.delete(cacheKey);
+        }
+      }
     } catch (err) {
       console.error('[getMovimientosDia Error]', err);
       res.status(500).json({ error: err.message });
