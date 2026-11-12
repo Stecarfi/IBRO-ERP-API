@@ -1425,6 +1425,19 @@ app.all('/api/logout', async (req, res) => {
           }
         });
 
+        // Si ya no quedan sesiones activas para este usuario, desconectar sockets residuales de inmediato
+        if (activeTokens.length === 0 && io?.sockets?.sockets) {
+          for (const [, s] of io.sockets.sockets) {
+            if (String(s.data?.authUser?.id || '') === String(targetUserId)) {
+              onlineUsers.delete(s.id);
+              s.disconnect(true);
+            }
+          }
+          if (typeof broadcastOnlineUsers === 'function') {
+            broadcastOnlineUsers();
+          }
+        }
+
         // Registrar auditoría oficial y marcar sesión como DESCONECTADA
         await auditoriaService.registrarEvento(req, {
           userId: targetUserId,
@@ -5073,25 +5086,191 @@ function broadcastUpdate(type = 'DB_UPDATE', diff = null) {
 
 const onlineUsers = new Map(); // socket.id -> username
 
-function broadcastOnlineUsers() {
-    const uniqueUsers = Array.from(new Set(onlineUsers.values()));
-    io.emit('online_users', uniqueUsers);
+function parseSocketDevice(ua = '') {
+  if (!ua) return 'Web';
+  const isMobile = /mobile|android|iphone|ipod/i.test(ua);
+  const isTablet = /ipad|tablet/i.test(ua);
+  const tipo = isMobile ? 'Móvil' : (isTablet ? 'Tablet' : 'PC');
+  let nav = 'Navegador';
+  if (/edg\//i.test(ua)) nav = 'Edge';
+  else if (/opr\/|opera/i.test(ua)) nav = 'Opera';
+  else if (/chrome|crios/i.test(ua)) nav = 'Chrome';
+  else if (/firefox|fxios/i.test(ua)) nav = 'Firefox';
+  else if (/safari/i.test(ua)) nav = 'Safari';
+  return `${tipo} • ${nav}`;
 }
+
+// Obtiene únicamente sockets autenticados y con conexión TCP/WebSocket viva en este instante (0% datos simulados o fantasmas)
+function getLiveAuthenticatedUsersMap() {
+  const byUserLower = new Map();
+  const activeSockets = io?.sockets?.sockets;
+  if (!activeSockets) return byUserLower;
+
+  // Limpiar cualquier socket desconectado residual del Map clásico
+  for (const sid of Array.from(onlineUsers.keys())) {
+    const sock = activeSockets.get(sid);
+    if (!sock || !sock.connected || !sock.data?.authUser?.user) {
+      onlineUsers.delete(sid);
+    }
+  }
+
+  for (const [, sock] of activeSockets) {
+    if (!sock || !sock.connected || !sock.data?.authUser?.user || !sock.data?.authUser?.id) continue;
+    const uStr = String(sock.data.authUser.user).trim();
+    const uKey = uStr.toLowerCase();
+    onlineUsers.set(sock.id, uStr);
+
+    const connIso = sock.data.connectedAt || new Date().toISOString();
+    const lastSeen = sock.data.lastSeenAt || Date.now();
+    const tabStatus = sock.data.tabStatus === 'SEGUNDO_PLANO' ? 'SEGUNDO_PLANO' : 'ACTIVA';
+    const deviceLabel = parseSocketDevice(sock.data.userAgent || sock.handshake?.headers?.['user-agent'] || '');
+
+    if (!byUserLower.has(uKey)) {
+      byUserLower.set(uKey, {
+        id: String(sock.data.authUser.id),
+        user: uStr,
+        connectedAt: connIso,
+        lastSeenAt: new Date(lastSeen).toISOString(),
+        tabStatus,
+        activeConnections: 1,
+        dispositivo: deviceLabel
+      });
+    } else {
+      const prev = byUserLower.get(uKey);
+      prev.activeConnections += 1;
+      if (new Date(connIso) < new Date(prev.connectedAt)) {
+        prev.connectedAt = connIso;
+      }
+      if (new Date(lastSeen) > new Date(prev.lastSeenAt)) {
+        prev.lastSeenAt = new Date(lastSeen).toISOString();
+      }
+      if (tabStatus === 'ACTIVA') {
+        prev.tabStatus = 'ACTIVA';
+        prev.dispositivo = deviceLabel;
+      }
+    }
+  }
+
+  return byUserLower;
+}
+
+function getUniqueOnlineUsernames() {
+  return Array.from(getLiveAuthenticatedUsersMap().values()).map((u) => u.user);
+}
+
+function broadcastOnlineUsers() {
+  const uniqueUsers = getUniqueOnlineUsernames();
+  io.emit('online_users', uniqueUsers);
+}
+
+// GET /api/online-users: Lista 100% real en tiempo real verificada contra sockets WebSocket autenticados activos
+app.get('/api/online-users', authenticateToken, async (req, res) => {
+  try {
+    const liveMap = getLiveAuthenticatedUsersMap();
+    const liveEntries = Array.from(liveMap.values());
+    if (liveEntries.length === 0) {
+      return res.json({
+        success: true,
+        timestamp: new Date().toISOString(),
+        count: 0,
+        users: []
+      });
+    }
+
+    const userIds = Array.from(new Set(liveEntries.map((e) => e.id).filter(Boolean)));
+    const dbUsers = await prisma.user.findMany({
+      where: {
+        id: { in: userIds },
+        isLocked: false
+      },
+      select: {
+        id: true,
+        user: true,
+        nombre: true,
+        apellido: true,
+        cargo: true,
+        foto: true,
+        role: { select: { id: true, name: true } }
+      }
+    });
+
+    const dbById = new Map(dbUsers.map((u) => [String(u.id), u]));
+    const dbByUserLower = new Map(dbUsers.map((u) => [String(u.user || '').toLowerCase(), u]));
+
+    const verifiedUsers = liveEntries
+      .map((entry) => {
+        const dbU = dbById.get(entry.id) || dbByUserLower.get(entry.user.toLowerCase());
+        if (!dbU) return null; // Si el usuario fue eliminado o bloqueado, jamás mostrarlo
+        const fullName = `${dbU.nombre || ''} ${dbU.apellido || ''}`.trim() || dbU.user;
+        return {
+          id: dbU.id,
+          user: dbU.user,
+          nombre: fullName,
+          cargo: dbU.cargo || dbU.role?.name || 'Colaborador',
+          rol: dbU.role?.name || 'Usuario',
+          foto: dbU.foto || null,
+          connectedAt: entry.connectedAt,
+          lastSeenAt: entry.lastSeenAt,
+          tabStatus: entry.tabStatus,
+          activeConnections: entry.activeConnections,
+          dispositivo: entry.dispositivo
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      count: verifiedUsers.length,
+      users: verifiedUsers
+    });
+  } catch (err) {
+    console.error('[/api/online-users Error]', err?.message || err);
+    return res.status(500).json({ error: 'No se pudo consultar los usuarios conectados.' });
+  }
+});
 
 io.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
-  
-  // Enviar lista actual al nuevo cliente
-  socket.emit('online_users', Array.from(new Set(onlineUsers.values())));
+  const authU = socket.data?.authUser;
+  if (authU?.user) {
+    const uStr = String(authU.user).trim();
+    socket.data.connectedAt = new Date().toISOString();
+    socket.data.lastSeenAt = Date.now();
+    socket.data.tabStatus = 'ACTIVA';
+    socket.data.userAgent = socket.handshake?.headers?.['user-agent'] || '';
+    socket.join(uStr);
+    socket.join(uStr.toLowerCase());
+    onlineUsers.set(socket.id, uStr);
+    broadcastOnlineUsers();
+  } else {
+    socket.emit('online_users', getUniqueOnlineUsernames());
+  }
 
   socket.on('join_chat', async () => {
     // La sala personal es SIEMPRE la del usuario autenticado (se ignora el usuario enviado por el cliente)
     const uStr = socket.data.authUser.user.trim();
+    socket.data.lastSeenAt = Date.now();
     socket.join(uStr);
     socket.join(uStr.toLowerCase());
     onlineUsers.set(socket.id, uStr);
     broadcastOnlineUsers();
     console.log(`User ${uStr} joined personal room`);
+  });
+
+  socket.on('presence_state', (payload) => {
+    socket.data.lastSeenAt = Date.now();
+    if (payload && typeof payload.tabStatus === 'string') {
+      socket.data.tabStatus = payload.tabStatus === 'SEGUNDO_PLANO' ? 'SEGUNDO_PLANO' : 'ACTIVA';
+      broadcastOnlineUsers();
+    }
+  });
+
+  socket.on('leave_chat', () => {
+    onlineUsers.delete(socket.id);
+    broadcastOnlineUsers();
+    socket.disconnect(true);
   });
 
   socket.on('join_group', async (groupId) => {

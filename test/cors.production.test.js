@@ -155,4 +155,28 @@ describe('CORS en producción (https://g-ibro.onrender.com -> /api/campo/movimie
     assert.equal(errRes.status, 500);
     assert.equal(errRes.headers.get('access-control-allow-origin'), 'https://g-ibro.onrender.com');
   });
+
+  test('GET /api/online-users exige JWT y devuelve estrictamente conexiones reales sin datos simulados', async () => {
+    const unauth = await fetch(`${baseUrl}/api/online-users`, {
+      headers: { Origin: 'https://g-ibro.onrender.com' }
+    });
+    assert.equal(unauth.status, 401);
+
+    const token = jwt.sign(
+      { id: 'admin-1', user: 'admin', roleId: '1' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    const res = await fetch(`${baseUrl}/api/online-users`, {
+      headers: {
+        Origin: 'https://g-ibro.onrender.com',
+        Authorization: `Bearer ${token}`
+      }
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.count, 0);
+    assert.deepEqual(body.users, []);
+  });
 });
