@@ -508,9 +508,20 @@ app.post('/api/upload-course-material', authenticateToken, uploadCourseMaterial.
     }
 });
 
+const os = require('os');
+const videoDiskStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, os.tmpdir());
+    },
+    filename: function (req, file, cb) {
+        const safe = (file.originalname || 'video.mp4').replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `ibro_vid_${Date.now()}_${safe}`);
+    }
+});
+
 const uploadCourseVideo = multer({
-    storage: storage,
-    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+    storage: videoDiskStorage,
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB en disco sin saturar RAM
     fileFilter: function (req, file, cb) {
         if (file.mimetype.startsWith('video/') || file.originalname.match(/\.(mp4|mov|webm|mkv|avi|m4v)$/i)) {
             cb(null, true);
@@ -521,6 +532,7 @@ const uploadCourseVideo = multer({
 });
 
 app.post('/api/upload-course-video', authenticateToken, uploadCourseVideo.single('video'), async (req, res) => {
+    const tempFilePath = req.file?.path;
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No se envió ningún archivo de video.' });
@@ -534,18 +546,26 @@ app.post('/api/upload-course-video', authenticateToken, uploadCourseVideo.single
         const folderSegments = ['Capacitaciones', `curso_${courseId}`, 'Videos'];
 
         const fileResult = await driveService.uploadVideoFile(
-            req.file.buffer,
+            tempFilePath || req.file.buffer,
             req.file.originalname,
             req.file.mimetype || 'video/mp4',
             folderSegments
         );
 
-        // Guardar inmediatamente en caché local de video para streaming progresivo ultra-rápido (89 MB/s)
-        videoStreamService.saveToCache(fileResult.fileId, req.file.buffer, {
-            name: req.file.originalname,
-            mimeType: req.file.mimetype || 'video/mp4',
-            size: req.file.size
-        });
+        // Mover desde disco temporal a caché local de video (0 RAM) para streaming progresivo HTTP 206
+        if (tempFilePath) {
+            videoStreamService.saveFileToCache(fileResult.fileId, tempFilePath, {
+                name: req.file.originalname,
+                mimeType: req.file.mimetype || 'video/mp4',
+                size: req.file.size
+            });
+        } else if (req.file.buffer) {
+            videoStreamService.saveToCache(fileResult.fileId, req.file.buffer, {
+                name: req.file.originalname,
+                mimeType: req.file.mimetype || 'video/mp4',
+                size: req.file.size
+            });
+        }
 
         res.json({
             success: true,
@@ -559,6 +579,11 @@ app.post('/api/upload-course-video', authenticateToken, uploadCourseVideo.single
     } catch (error) {
         console.error('[UPLOAD-COURSE-VIDEO] Error:', error);
         res.status(500).json({ error: error.message || 'Error al subir el video a Google Drive' });
+    } finally {
+        // Garantizar limpieza del archivo temporal si no fue movido a caché
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            try { fs.unlinkSync(tempFilePath); } catch {}
+        }
     }
 });
 

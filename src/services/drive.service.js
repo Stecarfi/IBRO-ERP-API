@@ -1,4 +1,5 @@
 const { google } = require('googleapis');
+const fs = require('fs');
 const stream = require('stream');
 
 /**
@@ -339,7 +340,7 @@ class DriveService {
      * @param {string[]|null} folderSegments - Segmentos de carpetas (ej. ['Capacitaciones', 'curso_1', 'Videos'])
      * @returns {Promise<{fileId: string, webViewLink: string, streamUrl: string}>}
      */
-    async uploadVideoFile(buffer, originalName, mimeType = 'video/mp4', folderSegments = []) {
+    async uploadVideoFile(bufferOrPath, originalName, mimeType = 'video/mp4', folderSegments = []) {
         if (!this.drive) throw new Error('El servicio de Google Drive no está inicializado.');
 
         let targetFolderId = this.folderId;
@@ -351,15 +352,21 @@ class DriveService {
             }
         }
 
-        const bufferStream = new stream.PassThrough();
-        bufferStream.end(buffer);
+        let bodyStream;
+        if (typeof bufferOrPath === 'string') {
+            bodyStream = fs.createReadStream(bufferOrPath);
+        } else {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(bufferOrPath);
+            bodyStream = bufferStream;
+        }
 
         const safeName = `${Date.now()}-${originalName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         const fileMetadata = {
             name: safeName,
             ...(targetFolderId ? { parents: [targetFolderId] } : {})
         };
-        const media = { mimeType: mimeType || 'video/mp4', body: bufferStream };
+        const media = { mimeType: mimeType || 'video/mp4', body: bodyStream };
 
         try {
             console.log(`[DRIVE SERVICE] Subiendo video ${safeName} a Google Drive (carpeta: ${targetFolderId || 'root'})...`);

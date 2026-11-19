@@ -75,6 +75,39 @@ class VideoStreamService {
         }
     }
 
+    /**
+     * Copia o mueve un archivo de video desde disco a la caché local sin consumir RAM (ideal para contenedores con poca memoria).
+     */
+    saveFileToCache(fileId, sourcePath, meta = null) {
+        if (!fileId || !sourcePath || !fs.existsSync(sourcePath)) return false;
+        try {
+            const cachedFile = this.getCacheFilePath(fileId);
+            try {
+                fs.renameSync(sourcePath, cachedFile);
+            } catch {
+                fs.copyFileSync(sourcePath, cachedFile);
+                try { fs.unlinkSync(sourcePath); } catch {}
+            }
+            const stat = fs.statSync(cachedFile);
+            if (meta) {
+                this.metadataCache.set(fileId, {
+                    data: {
+                        id: fileId,
+                        name: meta.name || `video-${fileId}.mp4`,
+                        mimeType: meta.mimeType || 'video/mp4',
+                        size: meta.size || stat.size
+                    },
+                    timestamp: Date.now()
+                });
+            }
+            console.log(`[VIDEO-STREAM-CACHE] Video ${fileId} movido a caché local en disco (${stat.size} bytes, 0 RAM).`);
+            return true;
+        } catch (err) {
+            console.warn(`[VIDEO-STREAM-CACHE] No se pudo mover video ${fileId} a caché en disco:`, err.message);
+            return false;
+        }
+    }
+
     async getFileMetadata(fileId) {
         const cached = this.metadataCache.get(fileId);
         const now = Date.now();
