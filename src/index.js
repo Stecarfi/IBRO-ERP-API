@@ -1707,6 +1707,48 @@ app.post('/api/auth/recover', recoverLimiter, async (req, res) => {
   }
 });
 
+// PUT /api/admin/users/:id/password: Cambio directo y atómico de contraseña por un Administrador
+app.put('/api/admin/users/:id/password', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const targetId = String(req.params.id || '').trim();
+    const rawPass = req.body?.newPassword ?? req.body?.pass ?? '';
+    const cleanPass = String(rawPass).trim();
+
+    if (!targetId) {
+      return res.status(400).json({ error: 'ID de usuario inválido.' });
+    }
+    if (!cleanPass || cleanPass.length < 4 || cleanPass.length > 200) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 4 y 200 caracteres.' });
+    }
+
+    let targetUser = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!targetUser && req.body?.user) {
+      targetUser = await prisma.user.findFirst({
+        where: { user: { equals: String(req.body.user).trim(), mode: 'insensitive' } }
+      });
+    }
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado en la base de datos.' });
+    }
+
+    const hashedPassword = bcrypt.hashSync(cleanPass, 10);
+    await prisma.user.update({
+      where: { id: targetUser.id },
+      data: {
+        pass: hashedPassword,
+        isLocked: false,
+        failedLoginAttempts: 0,
+        refreshToken: null
+      }
+    });
+
+    return res.json({ success: true, message: 'Contraseña actualizada correctamente.' });
+  } catch (err) {
+    console.error('[PUT /api/admin/users/:id/password] Error:', err);
+    return res.status(500).json({ error: 'Error interno al actualizar la contraseña del usuario.' });
+  }
+});
+
 // POST /api/auth/reset-password: Validar código y cambiar contraseña
 app.post('/api/auth/reset-password', resetPasswordLimiter, async (req, res) => {
   const { user, token, newPassword } = req.body || {};
@@ -3929,7 +3971,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           const cleaned = sanitizeBackendForPrisma('user', rawItem);
           if (!cleaned.id) cleaned.id = Date.now().toString() + '_' + Math.random().toString(36).substr(2, 7);
 
-          if (cleaned.pass && !isBcryptHash(cleaned.pass)) {
+          const hasPlainNewPass = Boolean(cleaned.pass && !isBcryptHash(cleaned.pass));
+          if (hasPlainNewPass) {
             cleaned.pass = bcrypt.hashSync(cleaned.pass, 10);
           }
 
@@ -3937,6 +3980,9 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           delete updateData.id;
           if (!updateData.pass) {
             delete updateData.pass;
+          } else if (hasPlainNewPass) {
+            updateData.isLocked = false;
+            updateData.failedLoginAttempts = 0;
           }
           if (!updateData.firma) {
             delete updateData.firma;
