@@ -453,7 +453,7 @@ app.post('/api/upload', authenticateToken, upload.array('files', 5), async (req,
 
 const uploadCourseMaterial = multer({
     storage: storage,
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB máximo
+    limits: { fileSize: 150 * 1024 * 1024 }, // 150MB máximo
     fileFilter: function (req, file, cb) {
         if (file.mimetype.includes('pdf') ||
             file.mimetype.includes('powerpoint') ||
@@ -461,10 +461,13 @@ const uploadCourseMaterial = multer({
             file.mimetype.includes('document') ||
             file.mimetype.includes('msword') ||
             file.mimetype.includes('application/vnd') ||
-            file.mimetype.includes('application/pdf')) {
+            file.mimetype.includes('application/pdf') ||
+            file.mimetype.startsWith('image/') ||
+            file.mimetype.startsWith('video/') ||
+            /\.(pdf|ppt|pptx|pps|ppsx|doc|docx|xls|xlsx|png|jpe?g|webp|gif|svg|mp4|mov|webm|mkv|avi|m4v)$/i.test(file.originalname || '')) {
             cb(null, true);
         } else {
-            cb(new Error('Tipo de archivo no permitido. Solo se permiten documentos (PDF, Office, etc.).')); 
+            cb(new Error('Tipo de archivo no permitido. Se permiten documentos (PDF, Office), imágenes y videos (MP4, WebM, MOV).')); 
         }
     }
 });
