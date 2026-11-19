@@ -531,7 +531,17 @@ const uploadCourseVideo = multer({
     }
 });
 
-app.post('/api/upload-course-video', authenticateToken, uploadCourseVideo.single('video'), async (req, res) => {
+app.post('/api/upload-course-video', authenticateToken, (req, res, next) => {
+    req.setTimeout(10 * 60 * 1000);
+    res.setTimeout(10 * 60 * 1000);
+    uploadCourseVideo.single('video')(req, res, (err) => {
+        if (err) {
+            console.error('[UPLOAD-COURSE-VIDEO] Error de multer:', err.message);
+            return res.status(400).json({ error: err.message || 'Error al recibir el archivo de video.' });
+        }
+        next();
+    });
+}, async (req, res) => {
     const tempFilePath = req.file?.path;
     try {
         if (!req.file) {
