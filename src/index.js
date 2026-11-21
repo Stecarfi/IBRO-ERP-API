@@ -3733,11 +3733,18 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
     await prisma.$transaction(async (tx) => {
       // Caché local a la transacción para resolver usuarios y clientes sin peticiones duplicadas
       let cachedUsers = null;
+      let cachedUsersById = null;
       const getUsersCache = async () => {
         if (!cachedUsers) {
           cachedUsers = await tx.user.findMany({ select: { id: true, user: true, nombre: true, apellido: true } });
+          cachedUsersById = new Map(cachedUsers.map(u => [String(u.id), u]));
         }
         return cachedUsers;
+      };
+      const findUserByIdCached = async (id) => {
+        if (!id) return null;
+        await getUsersCache();
+        return cachedUsersById.get(String(id)) || null;
       };
 
       // Resuelve un ID de usuario a partir de ID, username o nombre, con fallback seguro
@@ -4053,6 +4060,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             update: updateData,
             create: createData,
           });
+          cachedUsers = null;
+          cachedUsersById = null;
         }
       }
 
@@ -4320,7 +4329,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           
           let asigId = null;
           if (item.usuarioAsignadoId) {
-            const userById = await tx.user.findUnique({ where: { id: String(item.usuarioAsignadoId) } });
+            const userById = await findUserByIdCached(item.usuarioAsignadoId);
             if (userById) asigId = userById.id;
           }
           if (!asigId && item.usuarioAsignado) {
@@ -4436,7 +4445,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         for (const item of diff.solicitudes.upserted || []) {
           let asId = null;
           if (item.asesorId) {
-            const userById = await tx.user.findUnique({ where: { id: String(item.asesorId) } });
+            const userById = await findUserByIdCached(item.asesorId);
             if (userById) asId = userById.id;
           }
           if (!asId && item.asesor) {
@@ -4474,7 +4483,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           // Resolución robusta de asesorId
           let asId = null;
           if (item.asesorId) {
-            const u = await tx.user.findUnique({ where: { id: String(item.asesorId) } });
+            const u = await findUserByIdCached(item.asesorId);
             if (u) asId = u.id;
           }
           if (!asId && item.asesor) {
@@ -4494,7 +4503,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           // Resolución de jefeId
           let jId = null;
           if (item.jefeId) {
-            const uj = await tx.user.findUnique({ where: { id: String(item.jefeId) } });
+            const uj = await findUserByIdCached(item.jefeId);
             if (uj) jId = uj.id;
           }
           if (!jId && item.jefe && item.jefe !== 'Admin') {
@@ -4525,7 +4534,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         for (const item of diff.evaluaciones.upserted || []) {
           let evdrId = null;
           if (item.evaluadorId) {
-            const u = await tx.user.findUnique({ where: { id: String(item.evaluadorId) } });
+            const u = await findUserByIdCached(item.evaluadorId);
             if (u) evdrId = u.id;
           }
           if (!evdrId && item.evaluador) {
@@ -4545,7 +4554,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           let evdoId = null;
           let targetNombre = item.evaluadoNombre || null;
           if (item.evaluadoId) {
-            const u = await tx.user.findUnique({ where: { id: String(item.evaluadoId) } });
+            const u = await findUserByIdCached(item.evaluadoId);
             if (u) {
               evdoId = u.id;
               if (!targetNombre) targetNombre = `${u.nombre} ${u.apellido || ''}`.trim();
@@ -4687,7 +4696,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         for (const item of diff.comisionistas.upserted || []) {
           let owId = null;
           if (item.ownerId) {
-            const userById = await tx.user.findUnique({ where: { id: String(item.ownerId) } });
+            const userById = await findUserByIdCached(item.ownerId);
             if (userById) owId = userById.id;
           }
           if (!owId && item.owner) {
@@ -4725,7 +4734,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           // Resolución robusta de creadorId
           let crId = null;
           if (item.creadorId) {
-            const u = await tx.user.findUnique({ where: { id: String(item.creadorId) } });
+            const u = await findUserByIdCached(item.creadorId);
             if (u) crId = u.id;
           }
           if (!crId && item.creador) {
@@ -5045,7 +5054,8 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
     // Fin de la transacción
     }, {
-      timeout: 30000 // 30s timeout para sincronizaciones grandes
+      maxWait: 15000, // Hasta 15s esperando conexión del pool
+      timeout: 60000  // 60s timeout para sincronizaciones grandes en PostgreSQL
     });
 
     // Determinar si SOLO se actualizó el chat (para evitar bloqueos en el frontend)
