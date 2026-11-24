@@ -8086,6 +8086,163 @@ class CampoController {
       res.status(500).json({ error: err.message });
     }
   }
+
+  /**
+   * Helper interno para ejecutar controladores existentes y capturar su JSON
+   * sin duplicar lógica de negocio ni permisos.
+   */
+  async invokeInternal(handlerFn, baseReq, queryOverride = {}) {
+    return new Promise((resolve) => {
+      let statusCode = 200;
+      let resolved = false;
+      const finish = (val) => {
+        if (resolved) return;
+        resolved = true;
+        resolve(statusCode >= 200 && statusCode < 300 ? val : null);
+      };
+      const fakeReq = {
+        user: baseReq.user,
+        headers: baseReq.headers,
+        params: {},
+        body: {},
+        query: { ...queryOverride },
+        app: baseReq.app
+      };
+      const fakeRes = {
+        status(code) {
+          statusCode = code;
+          return this;
+        },
+        json(payload) {
+          finish(payload);
+          return this;
+        },
+        send(payload) {
+          finish(payload);
+          return this;
+        }
+      };
+      Promise.resolve()
+        .then(() => handlerFn.call(this, fakeReq, fakeRes))
+        .catch(() => finish(null));
+    });
+  }
+
+  /**
+   * GET /api/campo/bootstrap
+   * Consolida en una sola petición los 12 bloques de datos de ComercialCampo.jsx
+   * respetando exactamente el contrato esperado por el frontend.
+   */
+  async getBootstrapComercial(req, res) {
+    try {
+      const usuarioId = req.query.usuarioId || '';
+      const fechaVisitas = req.query.fechaVisitas || 'TODAS';
+      const fechaRuta = req.query.fechaRuta || 'TODOS';
+      const periodo = req.query.periodo || 'hoy';
+      const uidQuery = usuarioId ? { usuarioId } : {};
+
+      const [
+        jornada,
+        clientes,
+        visitas,
+        seguimientos,
+        rutas,
+        actividades,
+        clasificaciones,
+        movimientos,
+        movimientoActivo,
+        panelGerencial,
+        resumenPeriodo,
+        ventas
+      ] = await Promise.all([
+        this.invokeInternal(this.getJornadaActiva, req, {}),
+        this.invokeInternal(this.getClientesExternos, req, uidQuery),
+        this.invokeInternal(this.getAgenda, req, { fecha: fechaVisitas, ...uidQuery }),
+        this.invokeInternal(this.getSeguimientos, req, uidQuery),
+        this.invokeInternal(this.getRutasAsignadas, req, uidQuery),
+        this.invokeInternal(this.getActividades, req, uidQuery),
+        this.invokeInternal(this.getClasificaciones, req, {}),
+        this.invokeInternal(this.getMovimientosDia, req, { fecha: fechaRuta, ...uidQuery }),
+        this.invokeInternal(this.getMovimientoActivo, req, {}),
+        this.invokeInternal(this.getPanelGerencialMovimientos, req, { fecha: fechaRuta }),
+        this.invokeInternal(this.getResumenPeriodoComercial, req, { periodo, ...uidQuery }),
+        this.invokeInternal(this.getVentasExternas, req, uidQuery)
+      ]);
+
+      return res.json({
+        success: true,
+        jornada,
+        clientes,
+        visitas,
+        seguimientos,
+        rutas,
+        actividades,
+        clasificaciones,
+        movimientos,
+        movimientoActivo,
+        panelGerencial,
+        resumenPeriodo,
+        ventas
+      });
+    } catch (err) {
+      console.error('[getBootstrapComercial Error]:', err);
+      return res.status(500).json({ error: err.message || 'Error en bootstrap comercial.' });
+    }
+  }
+
+  /**
+   * GET /api/campo/bootstrap-gerencial
+   * Consolida en una sola petición los 11 bloques de datos de ControlGerencial.jsx
+   * respetando exactamente el contrato esperado por el frontend.
+   */
+  async getBootstrapGerencial(req, res) {
+    try {
+      const fecha = req.query.fecha || '';
+      const [
+        comerciales,
+        tracking,
+        panel,
+        actividades,
+        rutas,
+        visitas,
+        historialVisitas,
+        cotizaciones,
+        ventas,
+        clientes,
+        novedades
+      ] = await Promise.all([
+        this.invokeInternal(this.getComercialesEnCampo, req, {}),
+        this.invokeInternal(this.getUltimasUbicaciones, req, {}),
+        this.invokeInternal(this.getPanelOperativo, req, {}),
+        this.invokeInternal(this.getActividades, req, {}),
+        this.invokeInternal(this.getRutasAsignadas, req, {}),
+        this.invokeInternal(this.getAgenda, req, fecha ? { fecha } : {}),
+        this.invokeInternal(this.getHistorialVisitas, req, {}),
+        this.invokeInternal(this.getCotizacionesExternas, req, {}),
+        this.invokeInternal(this.getVentasExternas, req, {}),
+        this.invokeInternal(this.getClientesExternos, req, {}),
+        this.invokeInternal(this.getNovedadesComercial, req, {})
+      ]);
+
+      return res.json({
+        success: true,
+        comerciales,
+        tracking,
+        panel,
+        actividades,
+        rutas,
+        visitas,
+        historialVisitas,
+        cotizaciones,
+        ventas,
+        clientes,
+        novedades
+      });
+    } catch (err) {
+      console.error('[getBootstrapGerencial Error]:', err);
+      return res.status(500).json({ error: err.message || 'Error en bootstrap gerencial.' });
+    }
+  }
 }
 
 module.exports = new CampoController();

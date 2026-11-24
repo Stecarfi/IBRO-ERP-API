@@ -6,6 +6,10 @@ const authenticateToken = require('../middlewares/auth.middleware');
 // Todas las rutas de operaciones de campo requieren sesión activa
 router.use(authenticateToken);
 
+// 0. Bootstrap consolidado (reduce 11-12 peticiones paralelas a 1 sola por módulo)
+router.get('/bootstrap', (req, res) => campoController.getBootstrapComercial(req, res));
+router.get('/bootstrap-gerencial', (req, res) => campoController.getBootstrapGerencial(req, res));
+
 // 1. Jornadas
 router.post('/jornada/iniciar', (req, res) => campoController.iniciarJornada(req, res));
 router.post('/jornada/pausa', (req, res) => campoController.iniciarPausa(req, res));
