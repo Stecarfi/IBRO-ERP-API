@@ -711,7 +711,7 @@ app.post('/api/capacitaciones/:id/reset-user', authenticateToken, async (req, re
             include: { role: true }
         });
 
-        const isAdmin = callerDb?.roleId === '1' || callerDb?.user === 'admin' || callerDb?.user === 'stecarfi05' || callerDb?.role?.name?.toLowerCase().includes('admin') || callerDb?.role?.name?.toLowerCase().includes('gerente');
+        const isAdmin = String(callerDb?.roleId) === '1' || roleHasModule(callerDb?.role, 'admin') || /admin|gerent|director/i.test(String(callerDb?.role?.name || callerDb?.cargo || ''));
         if (!isAdmin) {
             return res.status(403).json({ error: 'No tienes permisos de administrador para reiniciar capacitaciones' });
         }
@@ -903,7 +903,7 @@ app.delete('/api/capacitaciones/:id', authenticateToken, async (req, res) => {
             include: { role: true }
         });
 
-        const isAdmin = callerDb?.roleId === '1' || callerDb?.user === 'admin' || callerDb?.user === 'stecarfi05' || callerDb?.role?.name?.toLowerCase().includes('admin') || callerDb?.role?.name?.toLowerCase().includes('gerente');
+        const isAdmin = String(callerDb?.roleId) === '1' || roleHasModule(callerDb?.role, 'admin') || /admin|gerent|director/i.test(String(callerDb?.role?.name || callerDb?.cargo || ''));
         if (!isAdmin) {
             return res.status(403).json({ error: 'No tienes permisos de administrador para eliminar capacitaciones' });
         }
@@ -5124,6 +5124,13 @@ app.use('/campo', campoRoutes);
 const auditoriaRoutes = require('./routes/auditoria.routes');
 app.use('/api/auditoria', auditoriaRoutes);
 app.use('/auditoria', auditoriaRoutes);
+
+// ==========================================
+// 👥 MÓDULO: CLIENTES REST PUNTUAL (FASE 3 - SIN /api/db/sync MONOLÍTICO)
+// ==========================================
+const clientesRoutes = require('./routes/clientes.routes');
+app.use('/api/clientes', clientesRoutes);
+app.use('/clientes', clientesRoutes);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);

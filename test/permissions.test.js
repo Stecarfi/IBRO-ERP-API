@@ -4,7 +4,8 @@ const {
   sanitizeUser,
   sanitizeOtherUser,
   roleHasModule,
-  canWriteCollection
+  canWriteCollection,
+  isSupervisorOrDelegado
 } = require('../src/security/permissions');
 
 test('sanitizeUser elimina contraseña y refreshToken', () => {
@@ -51,4 +52,18 @@ test('roleHasModule valida permisos JSON y superadmin', () => {
   assert.equal(roleHasModule(regularRole, 'clientes'), true);
   assert.equal(roleHasModule(regularRole, 'inventario'), false);
   assert.equal(roleHasModule(regularRole, 'auditoria'), false);
+});
+
+test('isSupervisorOrDelegado evalúa rol, bandera y cargo sin usuarios quemados', () => {
+  assert.equal(isSupervisorOrDelegado({ id: '1', roleId: '1', user: 'cualquiera' }), true);
+  assert.equal(isSupervisorOrDelegado({ id: '2', roleId: '5', esDelegadoGerencia: true, user: 'x' }), true);
+  assert.equal(isSupervisorOrDelegado({ id: '3', roleId: '5', cargo: 'Directora Jurídica', user: 'x' }), true);
+  assert.equal(isSupervisorOrDelegado({ id: '4', roleId: '5', cargo: 'Asesor Comercial', user: 'x' }), false);
+  assert.equal(
+    isSupervisorOrDelegado(
+      { id: '5', roleId: '5', cargo: 'Asesor', user: 'x' },
+      { permissions: { control_gerencial: ['view'] } }
+    ),
+    true
+  );
 });

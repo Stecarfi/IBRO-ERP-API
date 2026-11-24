@@ -193,6 +193,29 @@ function canWriteCollection(ctx, collection, op = 'upsert') {
   return { allowed: false, reason: `el rol no tiene acceso a los módulos [${modules.join(', ')}]` };
 }
 
+const SUPERVISOR_TITLE_REGEX = /delegad|gerent|director|directora|coordinador|supervisor|master|administrador/i;
+
+/**
+ * Fuente única de verdad para determinar si un usuario tiene rol de Supervisión / Delegado / Gerencia.
+ * Evalúa estrictamente atributos de BD, rol y cargo — sin nombres de usuario quemados.
+ */
+function isSupervisorOrDelegado(user, role = null) {
+  if (!user || typeof user !== 'object') return false;
+  if (isTruthyFlag(user.esDelegadoGerencia)) return true;
+  const resolvedRole = role || (user.role && typeof user.role === 'object' ? user.role : null);
+  const roleId = String(user.roleId || resolvedRole?.id || '');
+  if (roleId === '1') return true;
+  if (resolvedRole && (roleHasModule(resolvedRole, 'admin') || roleHasModule(resolvedRole, 'control_gerencial'))) {
+    return true;
+  }
+  const cargo = String(user.cargo || '');
+  const roleName = String(resolvedRole?.name || user.roleName || (typeof user.role === 'string' ? user.role : '') || '');
+  if (SUPERVISOR_TITLE_REGEX.test(cargo) || SUPERVISOR_TITLE_REGEX.test(roleName)) {
+    return true;
+  }
+  return false;
+}
+
 const pick = (obj, fields) => {
   const out = {};
   if (!obj || typeof obj !== 'object') return out;
@@ -210,6 +233,7 @@ module.exports = {
   roleHasModule,
   roleHasAction,
   buildAccessContext,
+  isSupervisorOrDelegado,
   COLLECTION_MODULES,
   OPEN_COLLECTIONS,
   ADMIN_ONLY_COLLECTIONS,

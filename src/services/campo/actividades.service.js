@@ -1,4 +1,5 @@
 const prisma = require('../../prisma');
+const { isSupervisorOrDelegado } = require('../../security/permissions');
 
 class ActividadesService {
   /**
@@ -7,20 +8,9 @@ class ActividadesService {
   async listarActividades(usuarioId, query = {}, userRole = '', userObject = null) {
     const { estado, fecha, personalId } = query;
 
-    // Normalizar role a string de forma segura
-    let roleStr = '';
-    if (typeof userRole === 'string') {
-      roleStr = userRole.toLowerCase();
-    } else if (userRole && typeof userRole === 'object') {
-      roleStr = (userRole.name || userRole.nombre || userRole.cargo || '').toLowerCase();
-    }
-    const cargoStr = String(userObject?.cargo || '').toLowerCase();
-    const esDelegado = Boolean(userObject?.esDelegadoGerencia);
-    const roleId = String(userObject?.roleId || userObject?.role?.id || '');
-    const userName = String(userObject?.user || '').toLowerCase();
-
-    const isAdminOrSupervisor = esDelegado || roleId === '1' || ['admin', 'asiadm', 'stecarfi05', 'dircomercial'].includes(userName) || ['admin', '1', 'director', 'directora', 'gerent', 'coordinador', 'supervisor', 'delegad'].some(r =>
-      roleStr.includes(r) || cargoStr.includes(r)
+    const isAdminOrSupervisor = isSupervisorOrDelegado(
+      userObject || { role: userRole },
+      typeof userRole === 'object' ? userRole : userObject?.role
     );
 
     const where = {
