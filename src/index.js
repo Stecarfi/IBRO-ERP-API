@@ -23,7 +23,7 @@ const cookieParser = require('cookie-parser');
 const { z } = require('zod');
 const { validateSyncPayload, sanitizeBackendForPrisma, safeDate, safeJson } = require('./validators');
 const { askGemini, geminiLogs } = require('./geminiService');
-const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail } = require('./emailService');
+const { sendRecoveryEmail, verifySmtpConnection, sendLockoutEmail, sendNewSolicitudAlertEmail } = require('./emailService');
 const driveService = require('./services/drive.service');
 const videoStreamService = require('./services/video-stream.service');
 const pushNotificationService = require('./services/pushNotification.service');
@@ -34,6 +34,8 @@ const {
   sanitizeUser,
   sanitizeOtherUser,
   canWriteCollection,
+  roleHasAction,
+  roleHasModule,
   PROTECTED_USER_FIELDS,
   BUDGET_USER_FIELDS,
   INFORMES_CALENDAR_FIELDS,
@@ -4452,6 +4454,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         if ((diff.solicitudes.deleted || []).length > 0 && canDeleteSolicitudes) {
           await flatDelete('solicitud', diff.solicitudes.deleted || []);
         }
+        const newlyCreatedSolicitudes = [];
         for (const item of diff.solicitudes.upserted || []) {
           let asId = null;
           if (item.asesorId) {
@@ -4480,8 +4483,12 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           const { id: idToUpsert, ...updateData } = solData;
           const targetId = idToUpsert || item.id;
 
+          const existing = await tx.solicitud.findUnique({
+            where: { id: targetId },
+            select: { id: true, asesorId: true, estado: true, comentario: true }
+          });
+
           if (!canTramitarSolicitudes) {
-            const existing = await tx.solicitud.findUnique({ where: { id: targetId } });
             if (existing) {
               if (String(existing.asesorId) !== String(accessCtx?.userId || '')) {
                 continue; // Sin permiso 'tramitar', no puede modificar ni responder solicitudes de otros
@@ -4499,6 +4506,53 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             where: { id: targetId },
             update: updateData,
             create: { id: targetId, ...updateData },
+          });
+
+          if (!existing) {
+            newlyCreatedSolicitudes.push({ id: targetId, ...updateData });
+          }
+        }
+
+        // Notificar por correo del aplicativo a quienes tengan permiso 'tramitar' y al Master Admin
+        if (newlyCreatedSolicitudes.length > 0) {
+          setImmediate(async () => {
+            try {
+              const allUsers = await prisma.user.findMany({ include: { role: true } });
+              const alertRecipients = Array.from(new Set(
+                allUsers
+                  .filter(u => (
+                    String(u.roleId) === '1' ||
+                    roleHasModule(u.role, 'admin') ||
+                    roleHasAction(u.role, 'solicitudes', 'tramitar')
+                  ))
+                  .map(u => String(u.correo || '').trim().toLowerCase())
+                  .filter(e => e && e.includes('@'))
+              ));
+
+              if (alertRecipients.length === 0) return;
+
+              for (const createdSol of newlyCreatedSolicitudes) {
+                const asesorObj = allUsers.find(u => String(u.id) === String(createdSol.asesorId)) || null;
+                const colaboradorName = createdSol.nombreAsesor || (asesorObj ? `${asesorObj.nombre || ''} ${asesorObj.apellido || ''}`.trim() : '') || 'Un colaborador';
+                await sendNewSolicitudAlertEmail({
+                  recipients: alertRecipients,
+                  solicitud: {
+                    ...createdSol,
+                    asesor: asesorObj ? {
+                      id: asesorObj.id,
+                      user: asesorObj.user,
+                      nombre: asesorObj.nombre,
+                      apellido: asesorObj.apellido,
+                      correo: asesorObj.correo,
+                      cargo: asesorObj.cargo
+                    } : null
+                  },
+                  colaboradorName
+                });
+              }
+            } catch (notifyErr) {
+              console.error('[SOLICITUDES EMAIL ALERT] Error enviando notificación a tramitadores/master:', notifyErr.message);
+            }
           });
         }
       }

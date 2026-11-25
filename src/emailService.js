@@ -1023,12 +1023,44 @@ async function sendSolicitudesEmail({
   };
 }
 
+async function sendNewSolicitudAlertEmail({
+  recipients = [],
+  solicitud,
+  colaboradorName = 'Un colaborador'
+}) {
+  if (!solicitud) return { success: false, sentCount: 0, totalRecipients: 0 };
+  const validRecipients = Array.from(new Set(
+    (Array.isArray(recipients) ? recipients : [])
+      .map(e => String(e || '').trim().toLowerCase())
+      .filter(e => e && e.includes('@'))
+  ));
+  if (validRecipients.length === 0) {
+    return { success: false, sentCount: 0, totalRecipients: 0 };
+  }
+
+  const tipo = solicitud.tipo || 'Solicitud Laboral';
+  const diasText = solicitud.diasIncapacidad ? ` (${solicitud.diasIncapacidad} ${Number(solicitud.diasIncapacidad) === 1 ? 'día' : 'días'})` : '';
+  const subject = `Nueva Solicitud Laboral por Atender: ${tipo}${diasText} - ${colaboradorName}`;
+  const customMessage = `Hay una nueva solicitud laboral de ${colaboradorName} pendiente por atender.\n\nPor favor ingrese al aplicativo IBRO ERP → módulo Solicitudes Laborales para revisarla y dar respuesta.`;
+
+  return sendSolicitudesEmail({
+    recipients: validRecipients,
+    solicitudes: [solicitud],
+    subject,
+    customMessage,
+    includeCsv: false,
+    senderName: 'IBRO ERP · Notificación Automática',
+    filterLabel: 'Nueva solicitud por atender'
+  });
+}
+
 module.exports = {
   sendRecoveryEmail,
   sendLockoutEmail,
   verifySmtpConnection,
   sendDailyLoginReportEmail,
   sendSolicitudesEmail,
+  sendNewSolicitudAlertEmail,
   buildSolicitudesCsv,
   escapeHtml
 };
