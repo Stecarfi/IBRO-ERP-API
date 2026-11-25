@@ -4529,12 +4529,16 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
                   .filter(e => e && e.includes('@'))
               ));
 
-              if (alertRecipients.length === 0) return;
+              if (alertRecipients.length === 0) {
+                console.warn('[SOLICITUDES EMAIL ALERT] No se encontraron correos de tramitadores ni Master Admin para notificar.');
+                return;
+              }
 
               for (const createdSol of newlyCreatedSolicitudes) {
                 const asesorObj = allUsers.find(u => String(u.id) === String(createdSol.asesorId)) || null;
                 const colaboradorName = createdSol.nombreAsesor || (asesorObj ? `${asesorObj.nombre || ''} ${asesorObj.apellido || ''}`.trim() : '') || 'Un colaborador';
-                await sendNewSolicitudAlertEmail({
+                console.log(`[SOLICITUDES EMAIL ALERT] Notificando nueva solicitud (${createdSol.tipo}) de ${colaboradorName} a: ${alertRecipients.join(', ')}`);
+                const mailResult = await sendNewSolicitudAlertEmail({
                   recipients: alertRecipients,
                   solicitud: {
                     ...createdSol,
@@ -4549,6 +4553,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
                   },
                   colaboradorName
                 });
+                console.log(`[SOLICITUDES EMAIL ALERT] Resultado envío: sentCount=${mailResult?.sentCount || 0}/${mailResult?.totalRecipients || 0}`);
               }
             } catch (notifyErr) {
               console.error('[SOLICITUDES EMAIL ALERT] Error enviando notificación a tramitadores/master:', notifyErr.message);
