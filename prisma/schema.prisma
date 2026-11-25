@@ -435,8 +435,9 @@ model Solicitud {
   lockedBy     String?
 
   // Campos de React
-  comentario    String?   @db.Text
-  fechaRadicado DateTime?
+  comentario      String?   @db.Text
+  fechaRadicado   DateTime?
+  diasIncapacidad Int?
 }
 
 // 9. Procesos Disciplinarios

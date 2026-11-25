@@ -168,7 +168,7 @@ const PRISMA_ALLOWED_FIELDS = {
 
   solicitud: [
     'id', 'fecha', 'asesorId', 'nombreAsesor', 'tipo', 'detalle', 'evidencia',
-    'fileUrl', 'estado', 'lockedBy', 'comentario', 'fechaRadicado'
+    'fileUrl', 'estado', 'lockedBy', 'comentario', 'fechaRadicado', 'diasIncapacidad'
   ],
 
   procesoDisciplinario: [
@@ -717,6 +717,12 @@ function sanitizeBackendForPrisma(tableName, item) {
     cleaned.comentario = cleaned.comentario ? String(cleaned.comentario) : null;
     cleaned.evidencia = cleaned.evidencia ? String(cleaned.evidencia) : null;
     cleaned.fileUrl = cleaned.fileUrl || cleaned.fileData || null;
+    if (cleaned.diasIncapacidad !== undefined && cleaned.diasIncapacidad !== null && cleaned.diasIncapacidad !== '') {
+      const parsedDays = parseInt(cleaned.diasIncapacidad, 10);
+      cleaned.diasIncapacidad = Number.isFinite(parsedDays) && parsedDays > 0 ? parsedDays : null;
+    } else {
+      cleaned.diasIncapacidad = null;
+    }
     delete cleaned.asesor;
   } else if (modelKey === 'procesoDisciplinario') {
     cleaned.fecha = safeDate(cleaned.fecha, new Date());

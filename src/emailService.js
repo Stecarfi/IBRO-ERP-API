@@ -643,6 +643,7 @@ function buildSolicitudesCsv(solicitudes = []) {
     'Correo Colaborador',
     'Cargo',
     'Tipo de Solicitud',
+    'Días de Incapacidad',
     'Estado',
     'Fecha Radicado',
     'Fecha Requerida',
@@ -663,6 +664,7 @@ function buildSolicitudesCsv(solicitudes = []) {
       correo,
       cargo,
       s.tipo || '',
+      s.diasIncapacidad ? String(s.diasIncapacidad) : '',
       s.estado || '',
       s.fechaRadicado ? formatColombiaDateTime(s.fechaRadicado) : '',
       formatSolicitudDate(s.fecha),
@@ -765,6 +767,12 @@ async function sendSolicitudesEmail({
               <td style="padding: 8px 0; color: #64748b; font-weight: 700;">Fecha Requerida / Uso:</td>
               <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${escapeHtml(formatSolicitudDate(s.fecha))}</td>
             </tr>
+            ${s.diasIncapacidad ? `
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; font-weight: 700;">Días de Incapacidad:</td>
+              <td style="padding: 8px 0; color: #0A2F8F; font-weight: 800;">${escapeHtml(s.diasIncapacidad)} ${Number(s.diasIncapacidad) === 1 ? 'día' : 'días'}</td>
+            </tr>
+            ` : ''}
             <tr>
               <td style="padding: 8px 0; color: #64748b; font-weight: 700;">Evidencia Documental:</td>
               <td style="padding: 8px 0; color: #334155;">${evidenciaHtml}</td>
@@ -802,7 +810,10 @@ async function sendSolicitudesEmail({
             ${escapeHtml(colaborador)}
             ${s.asesor && s.asesor.correo ? `<div style="font-size: 10px; font-weight: normal; color: #64748b;">${escapeHtml(s.asesor.correo)}</div>` : ''}
           </td>
-          <td style="padding: 10px 10px; color: #002060; font-weight: 700; font-size: 12px;">${escapeHtml(s.tipo || '')}</td>
+          <td style="padding: 10px 10px; color: #002060; font-weight: 700; font-size: 12px;">
+            ${escapeHtml(s.tipo || '')}
+            ${s.diasIncapacidad ? `<div style="font-size: 10px; font-weight: 700; color: #6C4DFF;">${escapeHtml(s.diasIncapacidad)} ${Number(s.diasIncapacidad) === 1 ? 'día' : 'días'}</div>` : ''}
+          </td>
           <td style="padding: 10px 10px; color: #334155; font-size: 11px; white-space: nowrap;">
             <div><strong>Uso:</strong> ${escapeHtml(formatSolicitudDate(s.fecha))}</div>
             <div style="color: #64748b;"><strong>Rad:</strong> ${escapeHtml(formatSolicitudDate(s.fechaRadicado || s.fecha))}</div>

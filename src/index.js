@@ -2265,7 +2265,8 @@ app.get('/api/db', authenticateToken, async (req, res) => {
       estado: s.estado,
       lockedBy: s.lockedBy || null,
       comentario: s.comentario || '',
-      fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : ''
+      fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : '',
+      diasIncapacidad: s.diasIncapacidad ?? null
     }));
 
     const procesosDisciplinariosRaw = [...procesosDisciplinariosDesc].reverse();
@@ -3357,7 +3358,8 @@ app.get('/api/paginated/:model', authenticateToken, async (req, res) => {
         estado: s.estado,
         lockedBy: s.lockedBy || null,
         comentario: s.comentario || '',
-        fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : ''
+        fechaRadicado: s.fechaRadicado ? s.fechaRadicado.toISOString() : '',
+        diasIncapacidad: s.diasIncapacidad ?? null
       }));
     } else if (model === 'capacitaciones') {
       const capRows = await prisma.capacitacion.findMany({

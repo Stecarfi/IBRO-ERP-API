@@ -123,7 +123,8 @@ router.post('/enviar-correo', async (req, res) => {
           fileUrl: solicitudData.fileUrl ? String(solicitudData.fileUrl).slice(0, 1000) : null,
           estado: VALID_ESTADOS.includes(String(solicitudData.estado)) ? String(solicitudData.estado) : 'Pendiente',
           fecha: solicitudData.fecha || new Date().toISOString(),
-          fechaRadicado: solicitudData.fechaRadicado || new Date().toISOString()
+          fechaRadicado: solicitudData.fechaRadicado || new Date().toISOString(),
+          diasIncapacidad: solicitudData.diasIncapacidad ? (parseInt(solicitudData.diasIncapacidad, 10) || null) : null
         }];
       }
     }
