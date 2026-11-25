@@ -4441,7 +4441,15 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
       // 9. Solicitudes Laborales
       if (diff.solicitudes) {
-        await flatDelete('solicitud', diff.solicitudes.deleted || []);
+        const canTramitarSolicitudes = Boolean(accessCtx?.isAdmin || accessCtx?.hasAction?.('solicitudes', 'tramitar'));
+        const canDeleteSolicitudes = Boolean(
+          accessCtx?.isAdmin ||
+          accessCtx?.hasAction?.('solicitudes', 'delete') ||
+          accessCtx?.hasAction?.('solicitudes', 'deleteAll')
+        );
+        if ((diff.solicitudes.deleted || []).length > 0 && canDeleteSolicitudes) {
+          await flatDelete('solicitud', diff.solicitudes.deleted || []);
+        }
         for (const item of diff.solicitudes.upserted || []) {
           let asId = null;
           if (item.asesorId) {
@@ -4468,10 +4476,27 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
           const solData = sanitizeBackendForPrisma('solicitud', { ...item, asesorId: asId });
           const { id: idToUpsert, ...updateData } = solData;
+          const targetId = idToUpsert || item.id;
+
+          if (!canTramitarSolicitudes) {
+            const existing = await tx.solicitud.findUnique({ where: { id: targetId } });
+            if (existing) {
+              if (String(existing.asesorId) !== String(accessCtx?.userId || '')) {
+                continue; // Sin permiso 'tramitar', no puede modificar ni responder solicitudes de otros
+              }
+              updateData.estado = existing.estado;
+              updateData.comentario = existing.comentario;
+            } else {
+              updateData.estado = 'Pendiente';
+              updateData.comentario = '';
+              if (accessCtx?.userId) updateData.asesorId = String(accessCtx.userId);
+            }
+          }
+
           await tx.solicitud.upsert({
-            where: { id: idToUpsert || item.id },
+            where: { id: targetId },
             update: updateData,
-            create: { id: idToUpsert || item.id, ...updateData },
+            create: { id: targetId, ...updateData },
           });
         }
       }
@@ -5131,6 +5156,13 @@ app.use('/auditoria', auditoriaRoutes);
 const clientesRoutes = require('./routes/clientes.routes');
 app.use('/api/clientes', clientesRoutes);
 app.use('/clientes', clientesRoutes);
+
+// ==========================================
+// 📩 MÓDULO: SOLICITUDES LABORALES (ENVÍO POR CORREO ELECTRÓNICO)
+// ==========================================
+const solicitudesRoutes = require('./routes/solicitudes.routes');
+app.use('/api/solicitudes', solicitudesRoutes);
+app.use('/solicitudes', solicitudesRoutes);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);

@@ -606,9 +606,418 @@ async function sendDailyLoginReportEmail(optsOrEmails, activeUsersArg, inactiveU
   return { success: true, sentCount, totalRecipients: adminEmails.length };
 }
 
+function escapeHtml(val) {
+  if (val === null || val === undefined) return '';
+  return String(val)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatSolicitudDate(dateVal) {
+  if (!dateVal) return 'Sin fecha';
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return String(dateVal);
+  return new Intl.DateTimeFormat('es-CO', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+}
+
+function csvCell(val) {
+  const str = val === null || val === undefined ? '' : String(val);
+  // Neutralizar fórmulas de Excel (CSV injection)
+  const safe = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+  return `"${safe.replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+}
+
+function buildSolicitudesCsv(solicitudes = []) {
+  const headers = [
+    'ID',
+    'Colaborador',
+    'Usuario',
+    'Correo Colaborador',
+    'Cargo',
+    'Tipo de Solicitud',
+    'Estado',
+    'Fecha Radicado',
+    'Fecha Requerida',
+    'Justificación',
+    'Resolución / Observaciones',
+    'Evidencia'
+  ];
+
+  const rows = solicitudes.map((s) => {
+    const colaborador = s.nombreAsesor || (s.asesor ? `${s.asesor.nombre || ''} ${s.asesor.apellido || ''}`.trim() : '') || s.asesorUser || 'Colaborador';
+    const usuario = (s.asesor && s.asesor.user) || s.asesorUser || '';
+    const correo = (s.asesor && s.asesor.correo) || '';
+    const cargo = (s.asesor && s.asesor.cargo) || '';
+    return [
+      s.id || '',
+      colaborador,
+      usuario,
+      correo,
+      cargo,
+      s.tipo || '',
+      s.estado || '',
+      s.fechaRadicado ? formatColombiaDateTime(s.fechaRadicado) : '',
+      formatSolicitudDate(s.fecha),
+      s.detalle || '',
+      s.comentario || '',
+      s.fileUrl || s.evidencia || ''
+    ].map(csvCell).join(',');
+  });
+
+  return '\uFEFF' + [headers.map(csvCell).join(','), ...rows].join('\r\n');
+}
+
+function getEstadoBadgeStyle(estado) {
+  switch (estado) {
+    case 'Aprobado':
+      return { bg: '#d1fae5', color: '#065f46', border: '#a7f3d0', label: 'APROBADO' };
+    case 'Rechazado':
+      return { bg: '#ffe4e6', color: '#9f1239', border: '#fecdd3', label: 'RECHAZADO' };
+    case 'Pendiente':
+      return { bg: '#ffedd5', color: '#9a3412', border: '#fed7aa', label: 'PENDIENTE' };
+    default:
+      return { bg: '#e0f2fe', color: '#075985', border: '#bae6fd', label: String(estado || 'REGISTRADA').toUpperCase() };
+  }
+}
+
+async function sendSolicitudesEmail({
+  recipients = [],
+  solicitudes = [],
+  subject = '',
+  customMessage = '',
+  includeCsv = true,
+  senderName = 'Talento Humano G-IBRO',
+  filterLabel = 'Todas'
+}) {
+  const validRecipients = Array.from(new Set(
+    (Array.isArray(recipients) ? recipients : [])
+      .map(e => String(e || '').trim().toLowerCase())
+      .filter(Boolean)
+  ));
+
+  if (validRecipients.length === 0) {
+    throw new Error('Debe indicar al menos un correo destinatario válido.');
+  }
+  if (!Array.isArray(solicitudes) || solicitudes.length === 0) {
+    throw new Error('No hay registros de solicitudes laborales para enviar.');
+  }
+
+  const now = new Date();
+  const fechaGeneracion = formatColombiaDateTime(now);
+  const dateSlug = now.toISOString().slice(0, 10);
+  const isSingle = solicitudes.length === 1;
+
+  const finalSubject = (subject && String(subject).trim()) || (
+    isSingle
+      ? `Registro de Solicitud Laboral: ${solicitudes[0].tipo || 'Laboral'} (${solicitudes[0].estado || 'Pendiente'}) - G-IBRO`
+      : `Reporte de Solicitudes Laborales (${solicitudes.length} registros) - ${dateSlug} - G-IBRO`
+  );
+
+  const customNoteHtml = customMessage && String(customMessage).trim()
+    ? `
+      <div style="margin-bottom: 22px; padding: 14px 18px; background-color: #eff6ff; border-left: 4px solid #1E88FF; border-radius: 8px; color: #1e3a8a; font-size: 13px; line-height: 1.6;">
+        <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #0A2F8F; margin-bottom: 4px;">Mensaje adjunto</div>
+        <div style="white-space: pre-wrap;">${escapeHtml(customMessage.trim())}</div>
+      </div>
+    `
+    : '';
+
+  let bodyContentHtml = '';
+
+  if (isSingle) {
+    const s = solicitudes[0];
+    const badge = getEstadoBadgeStyle(s.estado);
+    const colaborador = s.nombreAsesor || (s.asesor ? `${s.asesor.nombre || ''} ${s.asesor.apellido || ''}`.trim() : '') || s.asesorUser || 'Colaborador';
+    const cargo = (s.asesor && s.asesor.cargo) ? ` · ${s.asesor.cargo}` : '';
+    const correoColab = (s.asesor && s.asesor.correo) || 'No registrado';
+    const evidenciaHtml = s.fileUrl
+      ? `<a href="${escapeHtml(s.fileUrl)}" style="color: #1E88FF; font-weight: 700; text-decoration: none;">📎 ${escapeHtml(s.evidencia || 'Ver soporte adjunto')}</a>`
+      : (s.evidencia ? escapeHtml(s.evidencia) : '<span style="color: #9ca3af;">Sin adjunto</span>');
+
+    bodyContentHtml = `
+      <div style="border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; margin-bottom: 20px;">
+        <div style="background-color: #f8fafc; padding: 16px 20px; border-bottom: 1px solid #e5e7eb;">
+          <span style="display: inline-block; background-color: ${badge.bg}; color: ${badge.color}; border: 1px solid ${badge.border}; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 9999px; letter-spacing: 0.5px;">
+            ${escapeHtml(badge.label)}
+          </span>
+          <h2 style="margin: 10px 0 4px 0; font-size: 20px; color: #002060;">${escapeHtml(s.tipo || 'Solicitud Laboral')}</h2>
+          <div style="font-size: 12px; color: #64748b;">Radicada el ${escapeHtml(s.fechaRadicado ? formatColombiaDateTime(s.fechaRadicado) : formatSolicitudDate(s.fecha))}</div>
+        </div>
+        <div style="padding: 20px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 18px;">
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; width: 35%; font-weight: 700;">Colaborador:</td>
+              <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${escapeHtml(colaborador)}${escapeHtml(cargo)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; font-weight: 700;">Correo del Colaborador:</td>
+              <td style="padding: 8px 0; color: #334155;">${escapeHtml(correoColab)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; font-weight: 700;">Fecha Requerida / Uso:</td>
+              <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${escapeHtml(formatSolicitudDate(s.fecha))}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; font-weight: 700;">Evidencia Documental:</td>
+              <td style="padding: 8px 0; color: #334155;">${evidenciaHtml}</td>
+            </tr>
+          </table>
+
+          <div style="margin-bottom: 16px;">
+            <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #475569; margin-bottom: 6px;">Justificación del Colaborador</div>
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; color: #1e293b; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(s.detalle || 'Sin detalle registrado.')}</div>
+          </div>
+
+          ${s.comentario ? `
+            <div>
+              <div style="font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: #0A2F8F; margin-bottom: 6px;">Resolución / Observaciones de Talento Humano</div>
+              <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px; color: #14532d; font-size: 13px; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(s.comentario)}</div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  } else {
+    const total = solicitudes.length;
+    const pendientes = solicitudes.filter(s => s.estado === 'Pendiente').length;
+    const aprobadas = solicitudes.filter(s => s.estado === 'Aprobado').length;
+    const rechazadas = solicitudes.filter(s => s.estado === 'Rechazado').length;
+
+    const rowsHtml = solicitudes.map((s, idx) => {
+      const badge = getEstadoBadgeStyle(s.estado);
+      const colaborador = s.nombreAsesor || (s.asesor ? `${s.asesor.nombre || ''} ${s.asesor.apellido || ''}`.trim() : '') || s.asesorUser || 'Colaborador';
+      const detalleShort = s.detalle && s.detalle.length > 140 ? `${s.detalle.slice(0, 137)}...` : (s.detalle || '—');
+      const obsShort = s.comentario && s.comentario.length > 120 ? `${s.comentario.slice(0, 117)}...` : (s.comentario || '—');
+      return `
+        <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}; border-bottom: 1px solid #e5e7eb;">
+          <td style="padding: 10px 10px; font-weight: 700; color: #0f172a; font-size: 12px;">
+            ${escapeHtml(colaborador)}
+            ${s.asesor && s.asesor.correo ? `<div style="font-size: 10px; font-weight: normal; color: #64748b;">${escapeHtml(s.asesor.correo)}</div>` : ''}
+          </td>
+          <td style="padding: 10px 10px; color: #002060; font-weight: 700; font-size: 12px;">${escapeHtml(s.tipo || '')}</td>
+          <td style="padding: 10px 10px; color: #334155; font-size: 11px; white-space: nowrap;">
+            <div><strong>Uso:</strong> ${escapeHtml(formatSolicitudDate(s.fecha))}</div>
+            <div style="color: #64748b;"><strong>Rad:</strong> ${escapeHtml(formatSolicitudDate(s.fechaRadicado || s.fecha))}</div>
+          </td>
+          <td style="padding: 10px 10px; text-align: center;">
+            <span style="display: inline-block; background-color: ${badge.bg}; color: ${badge.color}; border: 1px solid ${badge.border}; font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 9999px;">
+              ${escapeHtml(badge.label)}
+            </span>
+          </td>
+          <td style="padding: 10px 10px; color: #334155; font-size: 11px; line-height: 1.4;">${escapeHtml(detalleShort)}</td>
+          <td style="padding: 10px 10px; color: #475569; font-size: 11px; line-height: 1.4;">${escapeHtml(obsShort)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    bodyContentHtml = `
+      <table style="width: 100%; border-collapse: separate; border-spacing: 8px; margin-bottom: 20px;">
+        <tr>
+          <td style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px; text-align: center; width: 25%;">
+            <div style="font-size: 22px; font-weight: 800; color: #0A2F8F;">${total}</div>
+            <div style="font-size: 10px; font-weight: 700; color: #1e40af; text-transform: uppercase;">Total</div>
+          </td>
+          <td style="background-color: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px; text-align: center; width: 25%;">
+            <div style="font-size: 22px; font-weight: 800; color: #9a3412;">${pendientes}</div>
+            <div style="font-size: 10px; font-weight: 700; color: #c2410c; text-transform: uppercase;">Pendientes</div>
+          </td>
+          <td style="background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: 12px; text-align: center; width: 25%;">
+            <div style="font-size: 22px; font-weight: 800; color: #065f46;">${aprobadas}</div>
+            <div style="font-size: 10px; font-weight: 700; color: #047857; text-transform: uppercase;">Aprobadas</div>
+          </td>
+          <td style="background-color: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 12px; text-align: center; width: 25%;">
+            <div style="font-size: 22px; font-weight: 800; color: #9f1239;">${rechazadas}</div>
+            <div style="font-size: 10px; font-weight: 700; color: #be123c; text-transform: uppercase;">Rechazadas</div>
+          </td>
+        </tr>
+      </table>
+
+      <div style="margin-bottom: 10px; font-size: 12px; color: #475569;">
+        <strong>Filtro aplicado:</strong> ${escapeHtml(filterLabel)} · <strong>Registros incluidos:</strong> ${total}
+      </div>
+
+      <table style="width: 100%; border-collapse: collapse; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+        <thead>
+          <tr style="background-color: #002060; color: #ffffff; text-transform: uppercase; font-size: 10px; font-weight: 700; text-align: left;">
+            <th style="padding: 10px;">Colaborador</th>
+            <th style="padding: 10px;">Tipo</th>
+            <th style="padding: 10px;">Fechas</th>
+            <th style="padding: 10px; text-align: center;">Estado</th>
+            <th style="padding: 10px;">Justificación</th>
+            <th style="padding: 10px;">Resolución</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    `;
+  }
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${escapeHtml(finalSubject)}</title>
+    </head>
+    <body style="margin: 0; padding: 20px; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
+      <div style="max-width: 820px; margin: 0 auto; background-color: #ffffff; border-radius: 14px; overflow: hidden; box-shadow: 0 4px 16px rgba(0, 32, 96, 0.08); border: 1px solid #e2e8f0;">
+        <div style="background: linear-gradient(135deg, #002060 0%, #0A2F8F 60%, #1E88FF 100%); color: #ffffff; padding: 24px 28px;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.3px;">G-IBRO · SOLICITUDES LABORALES</h1>
+          <p style="margin: 6px 0 0 0; font-size: 13px; color: #dbeafe;">
+            ${isSingle ? 'Registro Individual de Solicitud Laboral' : `Reporte Consolidado de Solicitudes Laborales (${solicitudes.length} registros)`}
+          </p>
+          <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 11px; color: #e0f2fe;">
+            Enviado por: <strong>${escapeHtml(senderName)}</strong> · Fecha de envío: <strong>${escapeHtml(fechaGeneracion)}</strong>
+          </div>
+        </div>
+
+        <div style="padding: 26px 28px;">
+          ${customNoteHtml}
+          ${bodyContentHtml}
+          ${includeCsv ? `
+            <div style="margin-top: 18px; padding: 12px 14px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 12px; color: #475569;">
+              📎 Se adjunta el archivo <strong>solicitudes_laborales_${dateSlug}.csv</strong> (compatible con Microsoft Excel) con el detalle completo de los registros.
+            </div>
+          ` : ''}
+        </div>
+
+        <div style="background-color: #f8fafc; padding: 14px 28px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8;">
+          IBRO ERP SaaS · Talento Humano y Gestión de Colaboradores
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const csvFilename = `solicitudes_laborales_${dateSlug}.csv`;
+  const csvBuffer = includeCsv ? Buffer.from(buildSolicitudesCsv(solicitudes), 'utf-8') : null;
+
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+  const hasResend = Boolean(process.env.RESEND_API_KEY);
+  const hasBrevo = Boolean(process.env.BREVO_API_KEY);
+
+  if (!smtpUser && !hasResend && !hasBrevo) {
+    console.warn(`[EMAIL SERVICE MOCK] Solicitudes (${solicitudes.length}) -> ${validRecipients.join(', ')} (sin credenciales de correo configuradas).`);
+    return {
+      success: true,
+      sentCount: 0,
+      failedRecipients: [],
+      totalRecipients: validRecipients.length,
+      mockMode: true
+    };
+  }
+
+  let sentCount = 0;
+  const failedRecipients = [];
+
+  for (const email of validRecipients) {
+    let delivered = false;
+    let lastErr = null;
+
+    if (smtpUser && smtpPass) {
+      try {
+        const transporter = getTransporter();
+        const mailOptions = {
+          from: `"Talento Humano G-IBRO" <${smtpUser}>`,
+          to: email,
+          subject: finalSubject,
+          html,
+          ...(csvBuffer ? { attachments: [{ filename: csvFilename, content: csvBuffer, contentType: 'text/csv; charset=utf-8' }] } : {})
+        };
+        await transporter.sendMail(mailOptions);
+        console.log(`[EMAIL SERVICE] Solicitudes laborales enviadas vía SMTP a: ${email}`);
+        delivered = true;
+      } catch (err) {
+        lastErr = err;
+        console.error(`[EMAIL SERVICE] Error SMTP enviando solicitudes a ${email}:`, err.message);
+      }
+    }
+
+    if (!delivered && hasResend) {
+      try {
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        const fromEmail = process.env.EMAIL_FROM || 'Talento Humano G-IBRO <onboarding@resend.dev>';
+        const payload = {
+          from: fromEmail,
+          to: [email],
+          subject: finalSubject,
+          html,
+          ...(csvBuffer ? { attachments: [{ filename: csvFilename, content: csvBuffer }] } : {})
+        };
+        const { error } = await resend.emails.send(payload);
+        if (error) throw new Error(error.message || 'Resend error');
+        console.log(`[EMAIL SERVICE] Solicitudes laborales enviadas vía Resend a: ${email}`);
+        delivered = true;
+      } catch (err) {
+        lastErr = err;
+        console.error(`[EMAIL SERVICE] Error Resend enviando solicitudes a ${email}:`, err.message);
+      }
+    }
+
+    if (!delivered && hasBrevo) {
+      try {
+        const fromEmail = process.env.EMAIL_FROM || 'talento-humano@ibrosas.com';
+        const bodyPayload = {
+          sender: { name: 'Talento Humano G-IBRO', email: fromEmail },
+          to: [{ email }],
+          subject: finalSubject,
+          htmlContent: html,
+          ...(csvBuffer ? { attachment: [{ name: csvFilename, content: csvBuffer.toString('base64') }] } : {})
+        };
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'api-key': process.env.BREVO_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(bodyPayload)
+        });
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Brevo ${response.status}: ${errText}`);
+        }
+        console.log(`[EMAIL SERVICE] Solicitudes laborales enviadas vía Brevo a: ${email}`);
+        delivered = true;
+      } catch (err) {
+        lastErr = err;
+        console.error(`[EMAIL SERVICE] Error Brevo enviando solicitudes a ${email}:`, err.message);
+      }
+    }
+
+    if (delivered) {
+      sentCount++;
+    } else {
+      failedRecipients.push({ email, error: lastErr ? lastErr.message : 'No se pudo enviar el correo' });
+    }
+  }
+
+  return {
+    success: sentCount > 0,
+    sentCount,
+    failedRecipients,
+    totalRecipients: validRecipients.length,
+    mockMode: false
+  };
+}
+
 module.exports = {
   sendRecoveryEmail,
   sendLockoutEmail,
   verifySmtpConnection,
-  sendDailyLoginReportEmail
+  sendDailyLoginReportEmail,
+  sendSolicitudesEmail,
+  buildSolicitudesCsv,
+  escapeHtml
 };
