@@ -2339,12 +2339,13 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         vendedor: c.vendedor?.user || c.vendedorNombre || '',
         vendedorNombre: c.vendedorNombre || (c.vendedor ? `${c.vendedor.nombre} ${c.vendedor.apellido || ''}`.trim() : ''),
         vendedorId: c.vendedorId,
-        clienteId: c.clienteId,
-        docCli: c.cliente?.doc || c.clienteNit || meta.clienteNit || '',
-        cliente: c.cliente?.nom || c.clienteNombre || meta.clienteNombre || '',
+        clienteId: meta.clienteSinRegistro ? null : c.clienteId,
+        clienteSinRegistro: Boolean(meta.clienteSinRegistro),
+        docCli: c.clienteNit || meta.clienteNit || (meta.clienteSinRegistro ? '' : (c.cliente?.doc || '')),
+        cliente: c.clienteNombre || meta.clienteNombre || c.cliente?.nom || '',
         clienteNombre: c.clienteNombre || meta.clienteNombre || c.cliente?.nom || '',
-        clienteDireccion: c.clienteDireccion || meta.clienteDireccion || c.cliente?.direccion || '',
-        clienteCiudadDpto: c.clienteCiudadDpto || meta.clienteCiudadDpto || (c.cliente?.ciudad ? (c.cliente.ciudad + (c.cliente.departamento ? ' / ' + c.cliente.departamento : '')) : ''),
+        clienteDireccion: c.clienteDireccion || meta.clienteDireccion || (meta.clienteSinRegistro ? '' : (c.cliente?.direccion || '')),
+        clienteCiudadDpto: c.clienteCiudadDpto || meta.clienteCiudadDpto || (meta.clienteSinRegistro ? '' : (c.cliente?.ciudad ? (c.cliente.ciudad + (c.cliente.departamento ? ' / ' + c.cliente.departamento : '')) : '')),
         clientePais: c.clientePais || meta.clientePais || 'Colombia',
         clienteTelefono: c.clienteTelefono || meta.clienteTelefono || c.cliente?.tel || '',
         clienteMovil: c.clienteMovil || meta.clienteMovil || c.cliente?.celularContacto || c.cliente?.tel || '',
@@ -2625,16 +2626,20 @@ app.get('/api/db', authenticateToken, async (req, res) => {
         vendedor: c.comercial?.user || '',
         vendedorId: c.comercialId,
         vendedorNombre: `${c.comercial?.nombre || ''} ${c.comercial?.apellido || ''}`.trim(),
-        clienteId: c.clienteExternoId,
-        clienteExternoId: c.clienteExternoId,
-        docCli: c.clienteExterno?.nitDoc || '',
-        cliente: c.clienteExterno?.nombre || '',
-        clienteNombre: c.clienteExterno?.nombre || '',
-        clienteDireccion: c.clienteExterno?.direccion || '',
-        clienteCiudadDpto: c.clienteExterno?.ciudad || '',
-        clienteTelefono: c.clienteExterno?.telefono || '',
-        clienteEmail: c.clienteExterno?.correo || '',
-        contacto: c.clienteExterno?.contacto || '',
+        clienteId: extMeta.clienteSinRegistro ? null : c.clienteExternoId,
+        clienteExternoId: extMeta.clienteSinRegistro ? null : c.clienteExternoId,
+        clienteSinRegistro: Boolean(extMeta.clienteSinRegistro),
+        docCli: extMeta.clienteNit || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.nitDoc || '')),
+        cliente: extMeta.clienteNombre || c.clienteExterno?.nombre || '',
+        clienteNombre: extMeta.clienteNombre || c.clienteExterno?.nombre || '',
+        clienteNit: extMeta.clienteNit || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.nitDoc || '')),
+        clienteDireccion: extMeta.clienteDireccion || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.direccion || '')),
+        clienteCiudadDpto: extMeta.clienteCiudadDpto || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.ciudad || '')),
+        clientePais: extMeta.clientePais || 'Colombia',
+        clienteTelefono: extMeta.clienteTelefono || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.telefono || '')),
+        clienteMovil: extMeta.clienteMovil || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.telefono || '')),
+        clienteEmail: extMeta.clienteEmail || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.correo || '')),
+        contacto: extMeta.contacto || (extMeta.clienteSinRegistro ? '' : (c.clienteExterno?.contacto || '')),
         vendedorCargo: c.comercial?.cargo || extMeta.vendedorCargo || '',
         vendedorEmail: c.comercial?.correo || extMeta.vendedorEmail || '',
         vendedorMovil: c.comercial?.telefono || extMeta.vendedorMovil || '',
@@ -4213,19 +4218,23 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
         }
 
         for (const item of diff.cotizaciones.upserted || []) {
-          const client = await resolveClient(item.docCli, item.clienteId, item.cliente || item.clienteNombre);
+          const isUnregisteredClient = Boolean(item.clienteSinRegistro);
+          const client = isUnregisteredClient
+            ? await resolveClient(null, null, null)
+            : await resolveClient(item.docCli, item.clienteId, item.cliente || item.clienteNombre);
           const sellerId = await resolveUser(item.vendedorId || item.vendedor);
 
           const metaFields = {
             numCotizacion: item.numCotizacion,
-            clienteNombre: item.clienteNombre || item.cliente || (client ? client.nom : undefined),
-            clienteDireccion: item.clienteDireccion || (client ? client.direccion : undefined),
-            clienteCiudadDpto: item.clienteCiudadDpto || (client ? client.ciudad : undefined),
+            clienteSinRegistro: isUnregisteredClient,
+            clienteNombre: item.clienteNombre || item.cliente || (!isUnregisteredClient && client ? client.nom : undefined),
+            clienteDireccion: item.clienteDireccion !== undefined ? item.clienteDireccion : (!isUnregisteredClient && client ? client.direccion : undefined),
+            clienteCiudadDpto: item.clienteCiudadDpto !== undefined ? item.clienteCiudadDpto : (!isUnregisteredClient && client ? client.ciudad : undefined),
             clientePais: item.clientePais,
-            clienteTelefono: item.clienteTelefono || (client ? client.tel : undefined),
+            clienteTelefono: item.clienteTelefono !== undefined ? item.clienteTelefono : (!isUnregisteredClient && client ? client.tel : undefined),
             clienteMovil: item.clienteMovil,
-            clienteEmail: item.clienteEmail || (client ? client.correo : undefined),
-            clienteNit: item.clienteNit || item.docCli || (client ? client.doc : undefined),
+            clienteEmail: item.clienteEmail !== undefined ? item.clienteEmail : (!isUnregisteredClient && client ? client.correo : undefined),
+            clienteNit: item.clienteNit !== undefined ? item.clienteNit : (item.docCli || (!isUnregisteredClient && client ? client.doc : undefined)),
             contacto: item.contacto,
             condiciones: item.condiciones,
             detallePagoMixto: item.detallePagoMixto,
@@ -4259,14 +4268,14 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             ...item,
             clienteId: client.id,
             vendedorId: sellerId,
-            clienteNombre: item.clienteNombre || item.cliente || (client ? client.nom : undefined),
-            clienteDireccion: item.clienteDireccion || (client ? client.direccion : undefined),
-            clienteCiudadDpto: item.clienteCiudadDpto || (client ? client.ciudad : undefined),
+            clienteNombre: item.clienteNombre || item.cliente || (!isUnregisteredClient && client ? client.nom : undefined),
+            clienteDireccion: item.clienteDireccion !== undefined ? item.clienteDireccion : (!isUnregisteredClient && client ? client.direccion : undefined),
+            clienteCiudadDpto: item.clienteCiudadDpto !== undefined ? item.clienteCiudadDpto : (!isUnregisteredClient && client ? client.ciudad : undefined),
             clientePais: item.clientePais || 'Colombia',
-            clienteTelefono: item.clienteTelefono || (client ? client.tel : undefined),
-            clienteMovil: item.clienteMovil || (client ? client.celularContacto || client.tel : undefined),
-            clienteEmail: item.clienteEmail || (client ? client.correo : undefined),
-            clienteNit: item.clienteNit || item.docCli || (client ? client.doc : undefined),
+            clienteTelefono: item.clienteTelefono !== undefined ? item.clienteTelefono : (!isUnregisteredClient && client ? client.tel : undefined),
+            clienteMovil: item.clienteMovil !== undefined ? item.clienteMovil : (!isUnregisteredClient && client ? client.celularContacto || client.tel : undefined),
+            clienteEmail: item.clienteEmail !== undefined ? item.clienteEmail : (!isUnregisteredClient && client ? client.correo : undefined),
+            clienteNit: item.clienteNit !== undefined ? item.clienteNit : (item.docCli || (!isUnregisteredClient && client ? client.doc : undefined)),
             equipos: finalEquipos,
             cuentas: typeof item.cuentasBancarias === 'string' ? item.cuentasBancarias : (item.cuentasBancarias ? JSON.stringify(item.cuentasBancarias) : item.cuentas),
             estadoSeguimiento: item.seguimiento?.estado || item.estadoSeguimiento,
@@ -4308,6 +4317,9 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
           }
 
           for (const i of itemsRaw) {
+            if (i.equipoSinRegistro || (!i.productoId && !i.idProd)) {
+              continue; // Equipo manual (sin registro en inventario): se conserva íntegro en Cotizacion.equipos
+            }
             const prod = await resolveProduct(i.productoId || i.idProd, i.producto);
             if (prod) {
               await tx.cotizacionItem.create({
@@ -4893,7 +4905,15 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
 
         for (const item of diff.cotizaciones_externas.upserted || []) {
           const comercialId = await resolveUser(item.vendedorId || item.vendedor, true);
-          const client = await findOrCreateClienteExterno(item, comercialId);
+          const isUnregisteredExtClient = Boolean(item.clienteSinRegistro);
+          let client = null;
+          if (isUnregisteredExtClient) {
+            // Reutilizar un cliente externo existente para la FK sin contaminar el directorio de clientes
+            client = await tx.clienteExternoCampo.findFirst({ orderBy: { id: 'asc' } });
+          }
+          if (!client) {
+            client = await findOrCreateClienteExterno(item, comercialId);
+          }
           const total = parseFloat(item.total) || 0;
           const codigo = item.numCotizacion || item.codigo || `EXT-COT-${String(item.id).slice(-4)}`;
 
@@ -4902,6 +4922,7 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
             equipos: item.equipos || [],
             materiales: item.materiales || [],
             _meta: {
+              clienteSinRegistro: isUnregisteredExtClient,
               condiciones: item.condiciones || '',
               tiempoEntrega: item.tiempoEntrega || '',
               direccionEntrega: item.direccionEntrega || '',
@@ -4915,15 +4936,15 @@ app.post('/api/db/sync', authenticateToken, async (req, res) => {
               priceTier: item.priceTier || '',
               ivaTipo: item.ivaTipo || '',
               cuentasBancarias: item.cuentasBancarias || '',
-              clienteNombre: item.clienteNombre || item.cliente || client.nombre,
-              clienteNit: item.clienteNit || item.docCli || client.nitDoc,
-              clienteTelefono: item.clienteTelefono || client.telefono,
-              clienteMovil: item.clienteMovil || client.telefono,
-              clienteEmail: item.clienteEmail || client.correo,
-              clienteDireccion: item.clienteDireccion || client.direccion,
-              clienteCiudadDpto: item.clienteCiudadDpto || client.ciudad,
+              clienteNombre: item.clienteNombre || item.cliente || (!isUnregisteredExtClient ? client.nombre : ''),
+              clienteNit: item.clienteNit !== undefined ? item.clienteNit : (item.docCli || (!isUnregisteredExtClient ? client.nitDoc : '')),
+              clienteTelefono: item.clienteTelefono !== undefined ? item.clienteTelefono : (!isUnregisteredExtClient ? client.telefono : ''),
+              clienteMovil: item.clienteMovil !== undefined ? item.clienteMovil : (!isUnregisteredExtClient ? client.telefono : ''),
+              clienteEmail: item.clienteEmail !== undefined ? item.clienteEmail : (!isUnregisteredExtClient ? client.correo : ''),
+              clienteDireccion: item.clienteDireccion !== undefined ? item.clienteDireccion : (!isUnregisteredExtClient ? client.direccion : ''),
+              clienteCiudadDpto: item.clienteCiudadDpto !== undefined ? item.clienteCiudadDpto : (!isUnregisteredExtClient ? client.ciudad : ''),
               clientePais: item.clientePais || 'Colombia',
-              contacto: item.contacto || client.contacto,
+              contacto: item.contacto !== undefined ? item.contacto : (!isUnregisteredExtClient ? client.contacto : ''),
               detallePagoMixto: item.detallePagoMixto || '',
               vendedorNombre: item.vendedorNombre || '',
               vendedorCargo: item.vendedorCargo || '',
