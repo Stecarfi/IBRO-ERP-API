@@ -9,7 +9,7 @@ router.use(authenticateToken);
 router.use(requireModuleAccess('solicitudes'));
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const VALID_ESTADOS = ['Pendiente', 'Aprobado', 'Rechazado'];
+const VALID_ESTADOS = ['Pendiente', 'Aprobado', 'Rechazado', 'Pospuesto', 'Reprogramado'];
 
 function parseRecipients(raw) {
   let list = [];

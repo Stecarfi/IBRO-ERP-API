@@ -683,6 +683,10 @@ function getEstadoBadgeStyle(estado) {
       return { bg: '#d1fae5', color: '#065f46', border: '#a7f3d0', label: 'APROBADO' };
     case 'Rechazado':
       return { bg: '#ffe4e6', color: '#9f1239', border: '#fecdd3', label: 'RECHAZADO' };
+    case 'Pospuesto':
+      return { bg: '#fef3c7', color: '#92400e', border: '#fde68a', label: 'POSPUESTO' };
+    case 'Reprogramado':
+      return { bg: '#ede9fe', color: '#5b21b6', border: '#ddd6fe', label: 'REPROGRAMADO' };
     case 'Pendiente':
       return { bg: '#ffedd5', color: '#9a3412', border: '#fed7aa', label: 'PENDIENTE' };
     default:
